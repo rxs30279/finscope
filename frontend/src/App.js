@@ -5,7 +5,7 @@ import {
   Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ReferenceLine
 } from 'recharts';
 
-const API = 'http://localhost:8000/api';
+const API = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
 
 const fmt = (v, type = 'number') => {
   if (v === null || v === undefined || (typeof v === 'number' && isNaN(v))) return '—';
