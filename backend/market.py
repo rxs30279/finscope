@@ -21,23 +21,23 @@ def _cached(key: str, fn):
 # ── Ticker constants ───────────────────────────────────────────────────────────
 BENCHMARK_TICKERS = {
     "FTSE 100":  "^FTSE",
-    "FTSE 250":  "^FT2MI",
-    "All-Share":  "^VUKE",
+    "FTSE 250":  "^FTMC",
+    "All-Share":  "^FTAS",
 }
 
 # 2 representative stocks per ICB sector — basket average used as sector proxy
 SECTOR_TICKERS = {
-    "Energy":                 ["SHEL.L", "BP.L"],
-    "Financials":             ["HSBA.L", "LLOY.L"],
-    "Industrials":            ["RR.L",   "BAE.L"],
-    "Materials":              ["RIO.L",  "AAL.L"],
-    "Consumer Discretionary": ["TSCO.L", "MKS.L"],
-    "Consumer Staples":       ["ULVR.L", "DGE.L"],
-    "Health Care":            ["AZN.L",  "GSK.L"],
-    "Technology":             ["SAGE.L", "AUTO.L"],
-    "Telecommunications":     ["VOD.L",  "BT-A.L"],
-    "Utilities":              ["NG.L",   "SSE.L"],
-    "Real Estate":            ["LAND.L", "SGRO.L"],
+    "Energy":                 ["SHEL.L", "BP.L", "HBR.L"],
+    "Financials":             ["HSBA.L", "LLOY.L", "BARC.L", "NWG.L", "LSEG.L"],
+    "Industrials":            ["RR.L",   "BA.L",  "AHT.L",  "IAG.L"],
+    "Materials":              ["RIO.L",  "GLEN.L","AAL.L",  "ANTO.L","FRES.L"],
+    "Consumer Discretionary": ["CPG.L",  "NXT.L", "IHG.L",  "GAW.L", "KGF.L"],
+    "Consumer Staples":       ["BATS.L", "ULVR.L","RKT.L",  "TSCO.L","DGE.L", "IMB.L"],
+    "Health Care":            ["AZN.L",  "GSK.L", "HLN.L",  "SN.L",  "HIK.L"],
+    "Technology":             ["REL.L",  "HLMA.L","SGE.L",  "AUTO.L","RMV.L"],
+    "Telecommunications":     ["VOD.L",  "BT-A.L","AAF.L"],
+    "Utilities":              ["NG.L",   "SSE.L", "CNA.L",  "SVT.L", "UU.L"],
+    "Real Estate":            ["LAND.L", "SGRO.L", "BLND.L", "BBOX.L", "DELN.L", "GPE.L"],
 }
 
 CROSS_ASSET_TICKERS = {
@@ -48,10 +48,13 @@ CROSS_ASSET_TICKERS = {
     "vftse":    "^VFTSE",
 }
 
+VIX_TICKER = "^VIX"
+
 ALL_PROXY_TICKERS = (
     list(BENCHMARK_TICKERS.values()) +
     [t for tickers in SECTOR_TICKERS.values() for t in tickers] +
-    list(CROSS_ASSET_TICKERS.values())
+    list(CROSS_ASSET_TICKERS.values()) +
+    [VIX_TICKER]
 )
 
 # ── Shared price fetch (all proxy tickers, 1 year history, cached) ────────────
@@ -93,6 +96,35 @@ PHASE_GUIDANCE = {
 
 # ── In-memory signal log ──────────────────────────────────────────────────────
 _signal_log: list = []
+
+# ── Fear & Greed helpers ──────────────────────────────────────────────────────
+def _zscore_to_score(series, current_val):
+    """Map current_val to 0-100 using z-score over series. Returns 50 on insufficient data."""
+    if len(series) < 20:
+        return 50
+    mean = float(series.mean())
+    std = float(series.std())
+    if std == 0:
+        return 50
+    z = (current_val - mean) / std
+    z = max(-2.0, min(2.0, z))
+    return round((z + 2) / 4 * 100)
+
+def _suggest_phase(score, trend):
+    """Map F&G score + trend to a suggested cycle phase string."""
+    if trend == "unknown":
+        return "no_change"
+    if 45 <= score <= 55:
+        return "no_change"
+    if score < 45 and trend == "falling":
+        return "Contraction"
+    if score < 45 and trend == "rising":
+        return "Recovery"
+    if score > 55 and trend == "rising":
+        return "Expansion"
+    if score > 55 and trend == "falling":
+        return "Slowdown"
+    return "no_change"
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 def _pct_change_today(prices, ticker):
@@ -202,9 +234,12 @@ def sidebar():
         top_rs = rotation[0]["sector"] if rotation else None
         breadth_values = [r["breadth"] for r in rotation if r["breadth"] is not None]
         avg_breadth = round(float(np.mean(breadth_values)), 4) if breadth_values else None
+        vix_col = prices[VIX_TICKER].dropna() if VIX_TICKER in prices.columns else None
+        vix_level = round(float(vix_col.iloc[-1]), 2) if vix_col is not None and len(vix_col) else None
         return {
             "benchmarks": benchmarks,
             "sectors": sectors,
+            "vix": vix_level,
             "signal_summary": {
                 "cycle_phase": _cycle["phase"],
                 "top_rs_sector": top_rs,
@@ -212,3 +247,219 @@ def sidebar():
             },
         }
     return _cached("sidebar", compute)
+
+@router.get("/rotation")
+def rotation():
+    return _cached("rotation", _compute_rotation)
+
+def _compute_breadth():
+    prices = _get_prices()
+    all_basket_tickers = [t for tickers in SECTOR_TICKERS.values() for t in tickers]
+
+    above_50 = 0
+    total = 0
+    new_highs = 0
+    new_lows = 0
+
+    for t in all_basket_tickers:
+        if t not in prices.columns:
+            continue
+        col = prices[t].dropna()
+        if len(col) < 51:
+            continue
+        total += 1
+        current = float(col.iloc[-1])
+        ma50 = float(col.iloc[-51:-1].mean())
+        if current > ma50:
+            above_50 += 1
+        if len(col) >= 252:
+            high_52 = float(col.iloc[-252:].max())
+            low_52 = float(col.iloc[-252:].min())
+            if current >= high_52 * 0.99:
+                new_highs += 1
+            if current <= low_52 * 1.01:
+                new_lows += 1
+
+    pct_above = round(above_50 / total, 4) if total else None
+
+    # A/D line: 20 trading days, advancing = basket stocks with positive return on that day
+    ad_line = []
+    cumulative = 0
+    if len(prices) >= 21:
+        for i in range(-20, 0):
+            adv = dec = unch = 0
+            for t in all_basket_tickers:
+                if t not in prices.columns:
+                    continue
+                col = prices[t].dropna()
+                if len(col) < abs(i) + 1:
+                    continue
+                chg = float(col.iloc[i]) - float(col.iloc[i - 1])
+                if chg > 0:
+                    adv += 1
+                elif chg < 0:
+                    dec += 1
+                else:
+                    unch += 1
+            cumulative += (adv - dec)
+            ad_line.append({
+                "date": prices.index[i].strftime("%Y-%m-%d"),
+                "value": cumulative,
+                "advances": adv,
+                "declines": dec,
+            })
+
+    # Today's advances/declines
+    today_adv = today_dec = today_unch = 0
+    for t in all_basket_tickers:
+        if t not in prices.columns:
+            continue
+        col = prices[t].dropna()
+        if len(col) < 2:
+            continue
+        chg = float(col.iloc[-1]) - float(col.iloc[-2])
+        if chg > 0:
+            today_adv += 1
+        elif chg < 0:
+            today_dec += 1
+        else:
+            today_unch += 1
+
+    return {
+        "pct_above_50ma": pct_above,
+        "advances": today_adv,
+        "declines": today_dec,
+        "unchanged": today_unch,
+        "new_highs": new_highs,
+        "new_lows": new_lows,
+        "hl_ratio": round(new_highs / new_lows, 2) if new_lows else None,
+        "ad_line": ad_line,
+    }
+
+@router.get("/breadth")
+def breadth():
+    return _cached("breadth", _compute_breadth)
+
+def _cross_asset_item(prices, ticker):
+    if ticker not in prices.columns:
+        return {"value": None, "pct_change": None, "bias": None}
+    col = prices[ticker].dropna()
+    if len(col) < 2:
+        return {"value": None, "pct_change": None, "bias": None}
+    value = round(float(col.iloc[-1]), 4)
+    pct_change = round(float((col.iloc[-1] / col.iloc[-2]) - 1), 6)
+    return {"value": value, "pct_change": pct_change}
+
+def _gilt_vs_utilities_zscore(prices):
+    """Z-score of (gilt yield - utilities basket price change) over 252 days.
+    Negative z-score = gilts expensive vs utilities (bearish for utilities)."""
+    gilt_ticker = CROSS_ASSET_TICKERS["gilt_10y"]
+    util_tickers = SECTOR_TICKERS["Utilities"]
+    if gilt_ticker not in prices.columns:
+        return None
+    gilt = prices[gilt_ticker].dropna()
+    util_cols = [prices[t].dropna() for t in util_tickers if t in prices.columns]
+    if not util_cols or len(gilt) < 252:
+        return None
+    min_len = min(len(gilt), min(len(u) for u in util_cols))
+    window = min(252, min_len)
+    gilt_w = gilt.iloc[-window:]
+    util_avg = np.mean([u.iloc[-window:].values for u in util_cols], axis=0)
+    spread = gilt_w.values - util_avg
+    if spread.std() == 0:
+        return None
+    zscore = round(float((spread[-1] - spread.mean()) / spread.std()), 2)
+    return zscore
+
+def _compute_cross_asset():
+    prices = _get_prices()
+    t = CROSS_ASSET_TICKERS
+    gbpusd = _cross_asset_item(prices, t["gbpusd"])
+    gilt   = _cross_asset_item(prices, t["gilt_10y"])
+    brent  = _cross_asset_item(prices, t["brent"])
+    gold   = _cross_asset_item(prices, t["gold"])
+    vftse  = _cross_asset_item(prices, t["vftse"])
+    zscore = _gilt_vs_utilities_zscore(prices)
+
+    # Simple bias labels
+    if vftse.get("value") is not None:
+        vftse["bias"] = "Low Vol — Risk-On" if vftse["value"] < 20 else ("High Vol — Risk-Off" if vftse["value"] > 30 else "Neutral")
+    else:
+        vftse["bias"] = None
+
+    if gilt.get("pct_change") is not None:
+        gilt["bias"] = "Bearish (yields rising)" if gilt["pct_change"] > 0 else "Bullish (yields falling)"
+    else:
+        gilt["bias"] = None
+
+    return {
+        "gbpusd":            gbpusd,
+        "gilt_10y":          gilt,
+        "brent":             brent,
+        "gold":              gold,
+        "vftse":             vftse,
+        "gilt_vs_utilities": {"zscore": zscore, "bias": "Gilts expensive vs Utilities" if zscore is not None and zscore < -1 else None},
+    }
+
+@router.get("/cross-asset")
+def cross_asset():
+    return _cached("cross_asset", _compute_cross_asset)
+
+from fastapi import Body
+
+def _compute_signals():
+    """Generate signal log by running rotation + breadth and checking thresholds."""
+    rotation_data = _compute_rotation()
+    breadth_data  = _compute_breadth()
+    now = datetime.now().strftime("%d %b %H:%M")
+    signals = list(_signal_log)  # include manually added signals (e.g. phase changes)
+
+    breadth_val = breadth_data.get("pct_above_50ma")
+    if breadth_val is not None:
+        if breadth_val > 0.65:
+            signals.append({"timestamp": now, "type": "ALERT",
+                            "message": f"Breadth at {breadth_val*100:.0f}% — bullish threshold crossed"})
+        elif breadth_val < 0.40:
+            signals.append({"timestamp": now, "type": "ALERT",
+                            "message": f"Breadth at {breadth_val*100:.0f}% — bearish threshold crossed"})
+
+    for s in rotation_data:
+        if s["signal"] == "BUY":
+            signals.append({"timestamp": now, "type": "BUY",
+                            "message": f"{s['sector']} RS {s['rs_score']:.2f} rising — momentum breakout"})
+        elif s["signal"] == "AVOID":
+            signals.append({"timestamp": now, "type": "AVOID",
+                            "message": f"{s['sector']} RS {s['rs_score']:.2f} falling — underperforming market"})
+
+    # newest first (manual log entries are already ordered)
+    return signals[:50]  # cap at 50 entries
+
+@router.get("/signals")
+def signals():
+    return _cached("signals", _compute_signals)
+
+@router.get("/cycle")
+def get_cycle():
+    return {
+        "phase": _cycle["phase"],
+        "set_at": _cycle["set_at"],
+        "guidance": PHASE_GUIDANCE.get(_cycle["phase"], {}),
+    }
+
+@router.post("/cycle")
+def set_cycle(body: dict = Body(...)):
+    phase = body.get("phase")
+    if phase not in PHASE_GUIDANCE:
+        from fastapi import HTTPException
+        raise HTTPException(400, f"phase must be one of {list(PHASE_GUIDANCE.keys())}")
+    _cycle["phase"] = phase
+    _cycle["set_at"] = datetime.now().isoformat()
+    _signal_log.insert(0, {
+        "timestamp": datetime.now().strftime("%d %b %H:%M"),
+        "type": "INFO",
+        "message": f"Cycle phase set to {phase} — manual override",
+    })
+    # clear signal cache so next fetch reflects new phase
+    _cache.pop("signals", None)
+    _cache.pop("sidebar", None)
+    return _cycle
