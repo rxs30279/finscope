@@ -368,10 +368,17 @@ def sidebar():
         avg_breadth = round(float(np.mean(breadth_values)), 4) if breadth_values else None
         vix_col = prices[VIX_TICKER].dropna() if VIX_TICKER in prices.columns else None
         vix_level = round(float(vix_col.iloc[-1]), 2) if vix_col is not None and len(vix_col) else None
+        fg = _cached("fear_greed", _compute_fear_greed)
         return {
             "benchmarks": benchmarks,
             "sectors": sectors,
             "vix": vix_level,
+            "fear_greed": {
+                "score":           fg["score"],
+                "sentiment":       fg["sentiment"],
+                "trend":           fg["trend"],
+                "suggested_phase": fg["suggested_phase"],
+            },
             "signal_summary": {
                 "cycle_phase": _cycle["phase"],
                 "top_rs_sector": top_rs,

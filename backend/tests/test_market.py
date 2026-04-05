@@ -52,6 +52,18 @@ def test_sidebar_sectors_all_present(client):
     for name in SECTOR_TICKERS:
         assert name in sector_names
 
+def test_sidebar_includes_fear_greed(client):
+    from market import ALL_PROXY_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    with _patch_prices(fake):
+        r = client.get("/api/market/sidebar")
+    data = r.json()
+    assert "fear_greed" in data, "sidebar missing fear_greed key"
+    fg = data["fear_greed"]
+    assert "score" in fg
+    assert "sentiment" in fg
+    assert "trend" in fg
+
 
 # ── rotation tests ────────────────────────────────────────────────────────────
 def test_rotation_returns_11_sectors(client):
