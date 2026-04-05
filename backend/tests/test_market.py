@@ -226,3 +226,56 @@ def test_suggest_phase_high_rising():
 def test_suggest_phase_high_falling():
     import market
     assert market._suggest_phase(70, "falling") == "Slowdown"
+
+
+# ── fear & greed endpoint tests ───────────────────────────────────────────────
+def test_fear_greed_compute_returns_expected_keys(client):
+    from market import ALL_PROXY_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    with _patch_prices(fake):
+        r = client.get("/api/market/fear-greed")
+    assert r.status_code == 200
+    data = r.json()
+    for key in ["score", "sentiment", "trend", "suggested_phase", "confirmed", "components"]:
+        assert key in data, f"Missing key: {key}"
+
+def test_fear_greed_score_in_range(client):
+    from market import ALL_PROXY_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    with _patch_prices(fake):
+        r = client.get("/api/market/fear-greed")
+    score = r.json()["score"]
+    assert 0 <= score <= 100
+
+def test_fear_greed_components_all_present(client):
+    from market import ALL_PROXY_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    with _patch_prices(fake):
+        r = client.get("/api/market/fear-greed")
+    components = r.json()["components"]
+    for key in ["momentum", "breadth", "vix", "safe_haven", "hl_ratio"]:
+        assert key in components, f"Missing component: {key}"
+
+def test_fear_greed_component_scores_in_range(client):
+    from market import ALL_PROXY_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    with _patch_prices(fake):
+        r = client.get("/api/market/fear-greed")
+    for name, comp in r.json()["components"].items():
+        assert 0 <= comp["score"] <= 100, f"{name} score out of range: {comp['score']}"
+
+def test_fear_greed_sentiment_is_valid(client):
+    from market import ALL_PROXY_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    with _patch_prices(fake):
+        r = client.get("/api/market/fear-greed")
+    assert r.json()["sentiment"] in (
+        "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
+    )
+
+def test_fear_greed_trend_is_valid(client):
+    from market import ALL_PROXY_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    with _patch_prices(fake):
+        r = client.get("/api/market/fear-greed")
+    assert r.json()["trend"] in ("rising", "falling", "unknown")

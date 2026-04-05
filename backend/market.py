@@ -126,6 +126,138 @@ def _suggest_phase(score, trend):
         return "Slowdown"
     return "no_change"
 
+# ── Fear & Greed state ────────────────────────────────────────────────────────
+_fg_history: list = []  # last 4 readings: [{score, suggested_phase, timestamp}, ...]
+
+def _compute_fear_greed():
+    """Compute 5-component UK Fear & Greed score (0-100), update history, auto-set cycle phase."""
+    prices = _get_prices()
+    components = {}
+
+    # 1. FTSE Momentum — FTSE 100 vs rolling 125-day MA
+    ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
+    if ftse_ticker in prices.columns:
+        ftse = prices[ftse_ticker].dropna()
+        if len(ftse) >= 126:
+            roll_ma125 = ftse.rolling(125).mean()
+            momentum_series = ((ftse - roll_ma125) / roll_ma125).dropna()
+            if len(momentum_series) >= 20:
+                current_momentum = float(momentum_series.iloc[-1])
+                components["momentum"] = {
+                    "score": _zscore_to_score(momentum_series, current_momentum),
+                    "label": "FTSE Momentum",
+                    "value": round(current_momentum * 100, 2),
+                }
+    if "momentum" not in components:
+        components["momentum"] = {"score": 50, "label": "FTSE Momentum", "value": None}
+
+    # 2. Market Breadth — % basket stocks above 50-day MA
+    breadth_data = _compute_breadth()
+    breadth_pct = breadth_data.get("pct_above_50ma")
+    if breadth_pct is not None:
+        components["breadth"] = {
+            "score": round(breadth_pct * 100),
+            "label": "Market Breadth",
+            "value": round(breadth_pct * 100, 1),
+        }
+    else:
+        components["breadth"] = {"score": 50, "label": "Market Breadth", "value": None}
+
+    # 3. VIX — inverted (high VIX = fear = low score)
+    if VIX_TICKER in prices.columns:
+        vix = prices[VIX_TICKER].dropna()
+        if len(vix) >= 20:
+            current_vix = float(vix.iloc[-1])
+            components["vix"] = {
+                "score": _zscore_to_score(-vix, -current_vix),
+                "label": "VIX",
+                "value": round(current_vix, 2),
+            }
+    if "vix" not in components:
+        components["vix"] = {"score": 50, "label": "VIX", "value": None}
+
+    # 4. Safe Haven Demand — 20-day return spread: FTSE 100 vs UK gilt
+    gilt_ticker = CROSS_ASSET_TICKERS["gilt_10y"]
+    if ftse_ticker in prices.columns and gilt_ticker in prices.columns:
+        ftse = prices[ftse_ticker].dropna()
+        gilt = prices[gilt_ticker].dropna()
+        if len(ftse) >= 21 and len(gilt) >= 21:
+            spread = (ftse.pct_change(20) - gilt.pct_change(20)).dropna()
+            if len(spread) >= 20:
+                current_spread = float(spread.iloc[-1])
+                components["safe_haven"] = {
+                    "score": _zscore_to_score(spread, current_spread),
+                    "label": "Safe Haven Demand",
+                    "value": round(current_spread * 100, 2),
+                }
+    if "safe_haven" not in components:
+        components["safe_haven"] = {"score": 50, "label": "Safe Haven Demand", "value": None}
+
+    # 5. New Highs / Lows ratio from basket
+    new_highs = breadth_data.get("new_highs", 0)
+    new_lows = breadth_data.get("new_lows", 0)
+    total_hl = new_highs + new_lows
+    components["hl_ratio"] = {
+        "score": round(new_highs / total_hl * 100) if total_hl > 0 else 50,
+        "label": "New Highs / Lows",
+        "value": f"{new_highs}/{new_lows}",
+    }
+
+    # Overall score = simple average
+    scores = [c["score"] for c in components.values()]
+    overall = round(sum(scores) / len(scores)) if scores else 50
+
+    # Sentiment label
+    if overall >= 75:   sentiment = "Extreme Greed"
+    elif overall >= 55: sentiment = "Greed"
+    elif overall >= 45: sentiment = "Neutral"
+    elif overall >= 25: sentiment = "Fear"
+    else:               sentiment = "Extreme Fear"
+
+    # Trend: compare current score vs reading 3 cycles ago (before appending)
+    if len(_fg_history) >= 3:
+        trend = "rising" if overall > _fg_history[-3]["score"] else "falling"
+    else:
+        trend = "unknown"
+
+    # Suggested phase from score + trend
+    suggested_phase = _suggest_phase(overall, trend)
+
+    # Update history (keep last 4)
+    _fg_history.append({
+        "score": overall,
+        "suggested_phase": suggested_phase,
+        "timestamp": datetime.now().isoformat(),
+    })
+    if len(_fg_history) > 4:
+        _fg_history.pop(0)
+
+    # Auto-update cycle if last 2 readings confirm same phase
+    confirmed = False
+    if len(_fg_history) >= 2 and suggested_phase != "no_change":
+        last_two = _fg_history[-2:]
+        if last_two[0]["suggested_phase"] == last_two[1]["suggested_phase"] == suggested_phase:
+            confirmed = True
+            if suggested_phase != _cycle["phase"]:
+                _cycle["phase"] = suggested_phase
+                _cycle["set_at"] = datetime.now().isoformat()
+                _signal_log.insert(0, {
+                    "timestamp": datetime.now().strftime("%d %b %H:%M"),
+                    "type": "INFO",
+                    "message": f"Cycle phase auto-updated to {suggested_phase} by Fear & Greed index (score: {overall})",
+                })
+                _cache.pop("signals", None)
+                _cache.pop("sidebar", None)
+
+    return {
+        "score": overall,
+        "sentiment": sentiment,
+        "trend": trend,
+        "suggested_phase": suggested_phase,
+        "confirmed": confirmed,
+        "components": components,
+    }
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 def _pct_change_today(prices, ticker):
     """Return today's % change for a single ticker. Returns None if insufficient data."""
@@ -404,6 +536,10 @@ def _compute_cross_asset():
 @router.get("/cross-asset")
 def cross_asset():
     return _cached("cross_asset", _compute_cross_asset)
+
+@router.get("/fear-greed")
+def fear_greed():
+    return _cached("fear_greed", _compute_fear_greed)
 
 from fastapi import Body
 
