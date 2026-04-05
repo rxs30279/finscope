@@ -2,28 +2,47 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from typing import Optional
+from dotenv import load_dotenv
 import os
+from market import router as market_router
+
+load_dotenv()
 
 app = FastAPI(title="Finance API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+app.include_router(market_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
     "user": os.environ.get("DB_USER", "postgres"),
-    "password": os.environ.get("DB_PASSWORD", "w-5qJPA%hDr78SA"),
-    "host": os.environ.get("DB_HOST", "db.pmkxcmuuspctxuqpzqsh.supabase.co"),
+    "password": os.environ.get("DB_PASSWORD", ""),
+    "host": os.environ.get("DB_HOST", ""),
     "port": os.environ.get("DB_PORT", "5432"),
     "sslmode": "require"
 }
 
+_pool = None
+
+def get_pool():
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **DB_CONFIG)
+    return _pool
+
 def query(sql, params=None):
-    conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(sql, params)
-    rows = cur.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        pool.putconn(conn)
 
 @app.get("/api/search")
 def search(q: str = Query(..., min_length=1)):
