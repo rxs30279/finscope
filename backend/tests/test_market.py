@@ -196,6 +196,12 @@ def test_zscore_to_score_insufficient_data():
     short = pd.Series([1.0, 2.0])
     assert market._zscore_to_score(short, 1.5) == 50
 
+def test_zscore_to_score_constant_series():
+    import market
+    import pandas as pd
+    constant = pd.Series([5.0] * 25)  # 25 identical values → std = 0
+    assert market._zscore_to_score(constant, 5.0) == 50
+
 def test_suggest_phase_unknown_trend():
     import market
     assert market._suggest_phase(30, "unknown") == "no_change"
