@@ -57,15 +57,21 @@ ALL_PROXY_TICKERS = (
 # ── Shared price fetch (all proxy tickers, 1 year history, cached) ────────────
 def _get_prices():
     def fetch():
-        df = yf.download(
-            ALL_PROXY_TICKERS, period="1y",
-            progress=False, auto_adjust=True, threads=True
-        )["Close"]
-        # yf.download returns MultiIndex columns when multiple tickers;
-        # single ticker returns a Series — normalise to DataFrame
-        if hasattr(df, "columns") and not isinstance(df.columns, str):
-            return df
-        return df.to_frame()
+        try:
+            import pandas as pd
+            df = yf.download(
+                ALL_PROXY_TICKERS, period="1y",
+                progress=False, auto_adjust=True, threads=True
+            )["Close"]
+            # yf.download returns MultiIndex columns when multiple tickers;
+            # single ticker returns a Series — normalise to DataFrame
+            if hasattr(df, "columns") and not isinstance(df.columns, str):
+                return df
+            return df.to_frame()
+        except Exception as e:
+            import pandas as pd
+            print(f"[market] yfinance download failed: {e}")
+            return pd.DataFrame()
     return _cached("prices", fetch)
 
 # ── Cycle phase state (in-memory, manually set) ───────────────────────────────
