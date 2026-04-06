@@ -1,98 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   LineChart, Line, BarChart, Bar, AreaChart, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadarChart,
-  Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ReferenceLine
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
+import { API, fmt, gc } from './utils';
+import Sidebar from './components/Sidebar';
+import RotationTab from './components/RotationTab';
+import BreadthTab from './components/BreadthTab';
+import CrossAssetTab from './components/CrossAssetTab';
+import SignalsTab from './components/SignalsTab';
 
-const API = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api';
-
-const fmt = (v, type = 'number') => {
-  if (v === null || v === undefined || (typeof v === 'number' && isNaN(v))) return '—';
-  if (type === 'currency') {
-    const abs = Math.abs(v);
-    const neg = v < 0 ? '-' : '';
-    if (abs >= 1e12) return neg + '\u00A3' + (abs/1e12).toFixed(2) + 'T';
-    if (abs >= 1e9)  return neg + '\u00A3' + (abs/1e9).toFixed(2) + 'B';
-    if (abs >= 1e6)  return neg + '\u00A3' + (abs/1e6).toFixed(2) + 'M';
-    return neg + '\u00A3' + abs.toLocaleString();
-  }
-  if (type === 'pct') return `${(v*100).toFixed(1)}%`;
-  if (type === 'pct_direct') return `${v.toFixed(1)}%`;
-  if (type === 'x')   return `${v.toFixed(2)}x`;
-  if (type === 'ratio') return v.toFixed(2);
-  return v.toLocaleString();
-};
-
-const gc = (v) => {
-  if (v === null || v === undefined) return '#94a3b8';
-  return v >= 0 ? '#10b981' : '#ef4444';
-};
-
-// ── Snowflake Score ───────────────────────────────────────────────────────────
-function scoreCompany(snap) {
-  if (!snap) return { value:0, future:0, past:0, health:0, dividend:0, management:0 };
-  const clamp = (v,min,max) => Math.max(min, Math.min(max, v));
-  const norm  = (v, good, bad) => v == null ? 2.5 : clamp(((v-bad)/(good-bad))*5, 0, 5);
-
-  const value      = (norm(snap.price_to_earnings,10,40) + norm(snap.price_to_book,1,5) + norm(snap.price_to_sales,1,8)) / 3 * 5;
-  const future     = (norm(snap.revenue_growth,0.2,-0.1) + norm(snap.eps_diluted_growth,0.2,-0.1) + norm(snap.fcf_growth,0.2,-0.1)) / 3 * 5;
-  const past       = (norm(snap.roe,0.2,0) + norm(snap.roic,0.15,0) + norm(snap.gross_margin,0.5,0.1) + norm(snap.net_income_margin,0.15,-0.05)) / 4 * 5;
-  const health     = (norm(snap.current_ratio,2,0.5) + (5 - norm(snap.debt_to_equity,0,2)) + norm(snap.equity_to_assets||0,0.6,0.1)) / 3 * 5;
-  const dividend   = snap.payout_ratio > 0 ? norm(snap.payout_ratio,0.3,0.8)*5 : 1;
-  const management = (norm(snap.roic,0.2,0) + norm(snap.roa,0.1,0) + norm(snap.roce||0,0.15,0)) / 3 * 5;
-
-  return {
-    value:      Math.round(clamp(value,0,5)*10)/10,
-    future:     Math.round(clamp(future,0,5)*10)/10,
-    past:       Math.round(clamp(past,0,5)*10)/10,
-    health:     Math.round(clamp(health,0,5)*10)/10,
-    dividend:   Math.round(clamp(dividend,0,5)*10)/10,
-    management: Math.round(clamp(management,0,5)*10)/10,
-  };
-}
-
-function SnowflakeChart({ scores }) {
-  const data = [
-    { axis:'Value',      score: scores.value },
-    { axis:'Future',     score: scores.future },
-    { axis:'Past',       score: scores.past },
-    { axis:'Health',     score: scores.health },
-    { axis:'Dividend',   score: scores.dividend },
-    { axis:'Management', score: scores.management },
-  ];
-  const total = Object.values(scores).reduce((a,b)=>a+b,0);
-  return (
-    <div style={{ textAlign:'center' }}>
-      <div style={{ fontSize:13, color:'#64748b', marginBottom:4 }}>Overall Score</div>
-      <div style={{ fontSize:38, fontFamily:'DM Serif Display,serif', color:'#0f172a', lineHeight:1 }}>
-        {total.toFixed(1)}<span style={{ fontSize:18, color:'#94a3b8' }}>/30</span>
-      </div>
-      <ResponsiveContainer width="100%" height={240}>
-        <RadarChart data={data} margin={{ top:10,right:20,bottom:10,left:20 }}>
-          <PolarGrid stroke="#e2e8f0" />
-          <PolarAngleAxis dataKey="axis" tick={{ fontSize:12, fill:'#475569' }} />
-          <PolarRadiusAxis angle={90} domain={[0,5]} tick={false} axisLine={false} />
-          <Radar dataKey="score" stroke="#6366f1" fill="#6366f1" fillOpacity={0.25} strokeWidth={2} />
-        </RadarChart>
-      </ResponsiveContainer>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginTop:8 }}>
-        {data.map(d => (
-          <div key={d.axis} style={{ background:'#f8fafc', borderRadius:8, padding:'6px 10px' }}>
-            <div style={{ fontSize:11, color:'#94a3b8' }}>{d.axis}</div>
-            <div style={{ fontSize:16, fontFamily:'DM Serif Display,serif', color:'#0f172a' }}>{d.score}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function MetricCard({ label, value, color }) {
   return (
-    <div style={{ background:'#fff', borderRadius:12, padding:'14px 18px', border:'1px solid #e2e8f0' }}>
-      <div style={{ fontSize:11, color:'#94a3b8', marginBottom:4, textTransform:'uppercase', letterSpacing:0.5 }}>{label}</div>
-      <div style={{ fontSize:20, fontFamily:'DM Serif Display,serif', color: color||'#0f172a' }}>{value}</div>
+    <div style={{ background:'#141414', borderRadius:2, padding:'14px 18px', border:'1px solid #2a2a2a' }}>
+      <div style={{ fontSize:10, color:'#666', marginBottom:6, textTransform:'uppercase', letterSpacing:1, fontFamily:'monospace' }}>{label}</div>
+      <div style={{ fontSize:18, fontFamily:'monospace', fontWeight:700, color: color||'#e5e5e5' }}>{value}</div>
     </div>
   );
 }
@@ -124,8 +47,6 @@ function CompanyDetail({ symbol, onBack }) {
 
   if (loading) return <div style={S.loading}>Loading {symbol}…</div>;
   if (!snap)   return <div style={S.loading}>No data for {symbol}</div>;
-
-  const scores = scoreCompany(snap);
 
   const annualChart = annual.map(r => ({
     year:           r.period_end_date?.slice(0,4),
@@ -165,7 +86,7 @@ function CompanyDetail({ symbol, onBack }) {
               {symbol.replace('.L','').slice(0,4)}
             </div>
             <div>
-              <h1 style={{ margin:0, fontFamily:'DM Serif Display,serif', fontSize:26, color:'#0f172a' }}>{meta?.name || symbol}</h1>
+              <h1 style={{ margin:0, fontFamily:'DM Serif Display,serif', fontSize:26, color:'#f1f5f9' }}>{meta?.name || symbol}</h1>
               <div style={{ display:'flex', gap:6, marginTop:5, flexWrap:'wrap' }}>
                 {[symbol, meta?.exchange, meta?.sector, meta?.country, meta?.ftse_index].filter(Boolean).map(t => (
                   <span key={t} style={S.badge}>{t}</span>
@@ -174,20 +95,20 @@ function CompanyDetail({ symbol, onBack }) {
             </div>
           </div>
           {meta?.description && (
-            <p style={{ color:'#64748b', fontSize:13, maxWidth:680, lineHeight:1.7, margin:0 }}>
+            <p style={{ color:'#94a3b8', fontSize:13, maxWidth:680, lineHeight:1.7, margin:0 }}>
               {meta.description.slice(0,300)}{meta.description.length>300?'…':''}
             </p>
           )}
         </div>
         <div style={{ textAlign:'right' }}>
-          <div style={{ fontSize:30, fontFamily:'DM Serif Display,serif', color:'#0f172a' }}>{fmt(snap.market_cap,'currency')}</div>
-          <div style={{ fontSize:12, color:'#94a3b8' }}>Market Cap</div>
-          {snap.enterprise_value && <div style={{ fontSize:13, color:'#64748b', marginTop:2 }}>EV: {fmt(snap.enterprise_value,'currency')}</div>}
+          <div style={{ fontSize:30, fontFamily:'DM Serif Display,serif', color:'#f1f5f9' }}>{fmt(snap.market_cap,'currency')}</div>
+          <div style={{ fontSize:12, color:'#64748b' }}>Market Cap</div>
+          {snap.enterprise_value && <div style={{ fontSize:13, color:'#94a3b8', marginTop:2 }}>EV: {fmt(snap.enterprise_value,'currency')}</div>}
         </div>
       </div>
 
       {/* Tabs */}
-      <div style={{ display:'flex', gap:2, borderBottom:'1px solid #e2e8f0', marginBottom:24 }}>
+      <div style={{ display:'flex', gap:2, borderBottom:'1px solid #334155', marginBottom:24 }}>
         {tabs.map(t => (
           <button key={t} onClick={()=>setTab(t)} style={{ ...S.tab, ...(tab===t?S.tabActive:{}) }}>
             {t.charAt(0).toUpperCase()+t.slice(1)}
@@ -197,39 +118,33 @@ function CompanyDetail({ symbol, onBack }) {
 
       {/* OVERVIEW */}
       {tab==='overview' && (
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 300px', gap:24 }}>
-          <div>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:10, marginBottom:20 }}>
-              <MetricCard label="Revenue"       value={fmt(snap.revenue,'currency')} />
-              <MetricCard label="Net Income"    value={fmt(snap.net_income,'currency')} color={snap.net_income>0?'#10b981':'#ef4444'} />
-              <MetricCard label="EBITDA"        value={fmt(snap.ebitda,'currency')} />
-              <MetricCard label="Free Cash Flow"value={fmt(snap.fcf,'currency')} color={snap.fcf>0?'#10b981':'#ef4444'} />
-              <MetricCard label="P/E"           value={fmt(snap.price_to_earnings,'ratio')} />
-              <MetricCard label="P/B"           value={fmt(snap.price_to_book,'ratio')} />
-              <MetricCard label="ROE"           value={fmt(snap.roe,'pct')} color={gc(snap.roe)} />
-              <MetricCard label="ROIC"          value={fmt(snap.roic,'pct')} color={gc(snap.roic)} />
-              <MetricCard label="Gross Margin"  value={fmt(snap.gross_margin,'pct')} />
-              <MetricCard label="Net Margin"    value={fmt(snap.net_income_margin,'pct')} color={gc(snap.net_income_margin)} />
-              <MetricCard label="Debt/Equity"   value={fmt(snap.debt_to_equity,'ratio')} color={snap.debt_to_equity>2?'#ef4444':'#0f172a'} />
-              <MetricCard label="Current Ratio" value={fmt(snap.current_ratio,'ratio')} />
-            </div>
-            <div style={S.card}>
-              <h3 style={S.cardTitle}>Revenue & Net Income (Annual £B)</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="year" tick={{ fontSize:11 }} />
-                  <YAxis tick={{ fontSize:11 }} />
-                  <Tooltip formatter={v=>'£'+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
-                  <Bar dataKey="revenue"    fill="#6366f1" radius={[4,4,0,0]} name="Revenue" />
-                  <Bar dataKey="net_income" fill="#10b981" radius={[4,4,0,0]} name="Net Income" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:10 }}>
+            <MetricCard label="Revenue"       value={fmt(snap.revenue,'currency')} />
+            <MetricCard label="Net Income"    value={fmt(snap.net_income,'currency')} color={snap.net_income>0?'#10b981':'#ef4444'} />
+            <MetricCard label="EBITDA"        value={fmt(snap.ebitda,'currency')} />
+            <MetricCard label="Free Cash Flow"value={fmt(snap.fcf,'currency')} color={snap.fcf>0?'#10b981':'#ef4444'} />
+            <MetricCard label="P/E"           value={fmt(snap.price_to_earnings,'ratio')} />
+            <MetricCard label="P/B"           value={fmt(snap.price_to_book,'ratio')} />
+            <MetricCard label="ROE"           value={fmt(snap.roe,'pct')} color={gc(snap.roe)} />
+            <MetricCard label="ROIC"          value={fmt(snap.roic,'pct')} color={gc(snap.roic)} />
+            <MetricCard label="Gross Margin"  value={fmt(snap.gross_margin,'pct')} />
+            <MetricCard label="Net Margin"    value={fmt(snap.net_income_margin,'pct')} color={gc(snap.net_income_margin)} />
+            <MetricCard label="Debt/Equity"   value={fmt(snap.debt_to_equity,'ratio')} color={snap.debt_to_equity>2?'#ef4444':'#e5e5e5'} />
+            <MetricCard label="Current Ratio" value={fmt(snap.current_ratio,'ratio')} />
           </div>
           <div style={S.card}>
-            <h3 style={S.cardTitle}>Health Scorecard</h3>
-            <SnowflakeChart scores={scores} />
+            <h3 style={S.cardTitle}>Revenue & Net Income (Annual £B)</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
+                <XAxis dataKey="year" tick={{ fontSize:11, fill:'#666', fontFamily:'monospace' }} />
+                <YAxis tick={{ fontSize:11, fill:'#666', fontFamily:'monospace' }} />
+                <Tooltip formatter={v=>'£'+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
+                <Bar dataKey="revenue"    fill="#f97316" radius={[2,2,0,0]} name="Revenue" />
+                <Bar dataKey="net_income" fill="#10b981" radius={[2,2,0,0]} name="Net Income" />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       )}
@@ -245,7 +160,7 @@ function CompanyDetail({ symbol, onBack }) {
                   <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/><stop offset="95%" stopColor="#6366f1" stopOpacity={0}/></linearGradient>
                   <linearGradient id="gE" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10b981" stopOpacity={0.25}/><stop offset="95%" stopColor="#10b981" stopOpacity={0}/></linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                 <XAxis dataKey="year" tick={{ fontSize:11 }} />
                 <YAxis tick={{ fontSize:11 }} />
                 <Tooltip formatter={v=>'£'+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
@@ -260,7 +175,7 @@ function CompanyDetail({ symbol, onBack }) {
               <h3 style={S.cardTitle}>Quarterly Revenue (£B)</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={qChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="q" tick={{ fontSize:10 }} />
                   <YAxis tick={{ fontSize:11 }} />
                   <Tooltip formatter={v=>'£'+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
@@ -272,11 +187,11 @@ function CompanyDetail({ symbol, onBack }) {
               <h3 style={S.cardTitle}>EPS Diluted (Annual)</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize:11 }} />
                   <YAxis tick={{ fontSize:11 }} />
                   <Tooltip formatter={v=>'£'+(v?.toFixed(2))} contentStyle={S.tooltip} />
-                  <ReferenceLine y={0} stroke="#e2e8f0" />
+                  <ReferenceLine y={0} stroke="#334155" />
                   <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={{ r:4, fill:'#6366f1' }} name="EPS" />
                 </LineChart>
               </ResponsiveContainer>
@@ -289,15 +204,15 @@ function CompanyDetail({ symbol, onBack }) {
                 <thead>
                   <tr>
                     <th style={S.th}>Metric</th>
-                    {annual.slice(-5).map(r=><th key={r.id} style={S.th}>{r.period_end_date?.slice(0,4)}</th>)}
+                    {annual.slice(-5).map(r=><th key={r.period_end_date} style={S.th}>{r.period_end_date?.slice(0,4)}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {[['Revenue','revenue'],['Gross Profit','gross_profit'],['Operating Income','operating_income'],['EBITDA','ebitda'],['Net Income','net_income'],['FCF','fcf']].map(([l,k])=>(
-                    <tr key={k} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                    <tr key={k} style={{ borderBottom:'1px solid #334155' }}>
                       <td style={S.td}>{l}</td>
                       {annual.slice(-5).map(r=>(
-                        <td key={r.id} style={{ ...S.tdNum, color: r[k]<0?'#ef4444':'inherit' }}>
+                        <td key={r.period_end_date} style={{ ...S.tdNum, color: r[k]<0?'#ef4444':'inherit' }}>
                           {r[k] ? '£'+(r[k]/1e9).toFixed(2)+'B' : '—'}
                         </td>
                       ))}
@@ -324,11 +239,11 @@ function CompanyDetail({ symbol, onBack }) {
               <h3 style={S.cardTitle}>EPS History</h3>
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize:11 }} />
                   <YAxis tick={{ fontSize:11 }} />
                   <Tooltip contentStyle={S.tooltip} />
-                  <ReferenceLine y={0} stroke="#e2e8f0" />
+                  <ReferenceLine y={0} stroke="#334155" />
                   <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={{ r:3 }} name="EPS" />
                 </LineChart>
               </ResponsiveContainer>
@@ -337,11 +252,11 @@ function CompanyDetail({ symbol, onBack }) {
               <h3 style={S.cardTitle}>Return on Capital (%)</h3>
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize:11 }} />
                   <YAxis tick={{ fontSize:11 }} unit="%" />
                   <Tooltip formatter={v=>`${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
-                  <ReferenceLine y={0} stroke="#e2e8f0" />
+                  <ReferenceLine y={0} stroke="#334155" />
                   <Line type="monotone" dataKey="roe"  stroke="#6366f1" strokeWidth={2} dot={false} name="ROE" />
                   <Line type="monotone" dataKey="roic" stroke="#10b981" strokeWidth={2} dot={false} name="ROIC" />
                   <Line type="monotone" dataKey="roa"  stroke="#f59e0b" strokeWidth={2} dot={false} name="ROA" />
@@ -368,7 +283,7 @@ function CompanyDetail({ symbol, onBack }) {
               <ResponsiveContainer width="100%" height={210}>
                 <AreaChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
                   <defs><linearGradient id="gD" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/><stop offset="95%" stopColor="#ef4444" stopOpacity={0}/></linearGradient></defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize:11 }} />
                   <YAxis tick={{ fontSize:11 }} />
                   <Tooltip contentStyle={S.tooltip} />
@@ -380,7 +295,7 @@ function CompanyDetail({ symbol, onBack }) {
               <h3 style={S.cardTitle}>Current Ratio History</h3>
               <ResponsiveContainer width="100%" height={210}>
                 <LineChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize:11 }} />
                   <YAxis tick={{ fontSize:11 }} />
                   <Tooltip contentStyle={S.tooltip} />
@@ -407,11 +322,11 @@ function CompanyDetail({ symbol, onBack }) {
             <h3 style={S.cardTitle}>Profit Margins History (%)</h3>
             <ResponsiveContainer width="100%" height={250}>
               <LineChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                 <XAxis dataKey="year" tick={{ fontSize:11 }} />
                 <YAxis tick={{ fontSize:11 }} unit="%" />
                 <Tooltip formatter={v=>`${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
-                <ReferenceLine y={0} stroke="#e2e8f0" />
+                <ReferenceLine y={0} stroke="#334155" />
                 <Line type="monotone" dataKey="gross_margin" stroke="#6366f1" strokeWidth={2} dot={false} name="Gross Margin" />
                 <Line type="monotone" dataKey="op_margin"    stroke="#10b981" strokeWidth={2} dot={false} name="Op. Margin" />
                 <Line type="monotone" dataKey="net_margin"   stroke="#f59e0b" strokeWidth={2} dot={false} name="Net Margin" />
@@ -442,13 +357,15 @@ function Screener({ onSelect }) {
     if (f.sector)            p.set('sector', f.sector);
     if (f.country)           p.set('country', f.country);
     if (f.ftse_index)        p.set('ftse_index', f.ftse_index);
-    if (f.min_market_cap)    p.set('min_market_cap', f.min_market_cap);
-    if (f.max_pe)            p.set('max_pe', f.max_pe);
-    if (f.min_roe)           p.set('min_roe', f.min_roe);
+    if (f.min_market_cap)      p.set('min_market_cap', f.min_market_cap);
+    if (f.max_pe)              p.set('max_pe', f.max_pe);
+    if (f.min_roe)             p.set('min_roe', f.min_roe);
+    if (f.min_revenue_growth)  p.set('min_revenue_growth', f.min_revenue_growth);
     p.set('limit', 350);
     fetch(`${API}/screener?${p}`)
       .then(r=>r.json())
-      .then(d=>{ setResults(Array.isArray(d)?d:[]); setLoading(false); });
+      .then(d=>{ setResults(Array.isArray(d)?d:[]); setLoading(false); })
+      .catch(()=>setLoading(false));
   }, []);
 
   const update = (k,v) => {
@@ -459,8 +376,11 @@ function Screener({ onSelect }) {
 
   return (
     <div>
-      <h2 style={{ fontFamily:'DM Serif Display,serif', fontSize:26, color:'#0f172a', marginBottom:4 }}>Stock Screener</h2>
-      <div style={{ fontSize:13, color:'#94a3b8', marginBottom:20 }}>FTSE 350 — {results.length} companies</div>
+      <h2 style={{ fontFamily:'DM Serif Display,serif', fontSize:26, color:'#f1f5f9', marginBottom:4 }}>Stock Screener</h2>
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+        <div style={{ fontSize:13, color:'#64748b' }}>{filters.ftse_index || 'All indices'}{filters.sector ? ` · ${filters.sector}` : ''}</div>
+        <div style={{ background:'#334155', color:'#cbd5e1', borderRadius:20, padding:'2px 12px', fontSize:13, fontWeight:600 }}>{results.length} companies</div>
+      </div>
 
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:20 }}>
         <select style={S.select} onChange={e=>update('sector',e.target.value)}>
@@ -492,6 +412,12 @@ function Screener({ onSelect }) {
           <option value="0.15">ROE &gt; 15%</option>
           <option value="0.2">ROE &gt; 20%</option>
         </select>
+        <select style={S.select} onChange={e=>update('min_revenue_growth',e.target.value)}>
+          <option value="">Any Rev Growth</option>
+          <option value="0.05">Rev Growth &gt; 5%</option>
+          <option value="0.1">Rev Growth &gt; 10%</option>
+          <option value="0.2">Rev Growth &gt; 20%</option>
+        </select>
       </div>
 
       {loading ? <div style={S.loading}>Screening…</div> : (
@@ -499,18 +425,18 @@ function Screener({ onSelect }) {
           <table style={S.table}>
             <thead>
               <tr>
-                {['Symbol','Name','Sector','Index','Mkt Cap','Rev','P/E','P/B','ROE','ROIC','Gross Margin','Rev Growth','D/E'].map(h=>(
-                  <th key={h} style={S.th}>{h}</th>
+                {[['Symbol',false],['Name',false],['Sector',false],['Index',false],['Mkt Cap',true],['Rev',true],['P/E',true],['P/B',true],['ROE',true],['ROIC',true],['Gross Margin',true],['Rev Growth',true],['D/E',true]].map(([h,num])=>(
+                  <th key={h} style={{ ...S.th, textAlign: num?'right':'left' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {results.map((r,i) => (
                 <tr key={r.symbol} onClick={()=>onSelect(r.symbol)}
-                  style={{ background: i%2===0?'#fff':'#fafafa', cursor:'pointer' }}
-                  onMouseEnter={e=>e.currentTarget.style.background='#f1f5f9'}
-                  onMouseLeave={e=>e.currentTarget.style.background=i%2===0?'#fff':'#fafafa'}>
-                  <td style={{ ...S.td, fontFamily:'monospace', fontWeight:700, color:'#6366f1' }}>{r.symbol.replace('.L','')}</td>
+                  style={{ background: i%2===0?'#1e293b':'#162032', cursor:'pointer' }}
+                  onMouseEnter={e=>e.currentTarget.style.background='#334155'}
+                  onMouseLeave={e=>e.currentTarget.style.background=i%2===0?'#1e293b':'#162032'}>
+                  <td style={{ ...S.td, fontFamily:'monospace', fontWeight:700, color:'#818cf8' }}>{r.symbol.replace('.L','')}</td>
                   <td style={S.td}>{r.name?.slice(0,26)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.sector?.slice(0,18)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.ftse_index?.replace('FTSE ','')}</td>
@@ -535,11 +461,13 @@ function Screener({ onSelect }) {
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage]           = useState('screener');
+  const [page, setPage]           = useState('screener'); // screener | rotation | breadth | cross-asset | signals | company
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [searchQ, setSearchQ]     = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const doSearch = (q) => {
     setSearchQ(q);
@@ -555,67 +483,100 @@ export default function App() {
     setSearchResults([]);
   };
 
+  const handleRefresh = () => {
+    setRefreshKey(k => k + 1);
+    setLastUpdated(new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }));
+  };
+
+  const NAV_TABS = [
+    { id: 'screener',    label: 'Screener'    },
+    { id: 'rotation',    label: 'Rotation'    },
+    { id: 'breadth',     label: 'Breadth'     },
+    { id: 'cross-asset', label: 'Cross-Asset' },
+    { id: 'signals',     label: 'Signals'     },
+  ];
+
+  const showSidebar = page !== 'company';
+
   return (
-    <div style={{ minHeight:'100vh', background:'#f8fafc' }}>
+    <div style={{ minHeight:'100vh', background:'#0a0a0a', fontFamily:'monospace' }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 
       {/* Nav */}
-      <nav style={{ background:'#fff', borderBottom:'1px solid #e2e8f0', padding:'0 32px', display:'flex', alignItems:'center', height:58, position:'sticky', top:0, zIndex:100 }}>
-        <div style={{ fontFamily:'DM Serif Display,serif', fontSize:22, color:'#6366f1', marginRight:32, cursor:'pointer' }} onClick={()=>setPage('screener')}>
-          FinScope
+      <nav style={{ background:'#0a0a0a', borderBottom:'1px solid #2a2a2a', padding:'0 32px', display:'flex', alignItems:'center', height:52, position:'sticky', top:0, zIndex:100 }}>
+        <div style={{ fontFamily:'monospace', fontSize:16, fontWeight:700, color:'#f97316', marginRight:32, cursor:'pointer', letterSpacing:2, textTransform:'uppercase' }} onClick={()=>setPage('screener')}>
+          Egg Basket
         </div>
-        <button style={{ ...S.navBtn, ...(page==='screener'?S.navBtnActive:{}) }} onClick={()=>setPage('screener')}>Screener</button>
-        <div style={{ marginLeft:'auto', position:'relative' }}>
-          <input
-            placeholder="Search ticker or company…"
-            value={searchQ}
-            onChange={e=>{ doSearch(e.target.value); setShowSearch(true); }}
-            onFocus={()=>setShowSearch(true)}
-            onBlur={()=>setTimeout(()=>setShowSearch(false),200)}
-            style={S.searchInput}
-          />
-          {showSearch && searchResults.length>0 && (
-            <div style={S.dropdown}>
-              {searchResults.map(r=>(
-                <div key={r.symbol} onClick={()=>selectCompany(r.symbol)} style={S.dropdownItem}>
-                  <span style={{ fontFamily:'monospace', fontWeight:700, color:'#6366f1', minWidth:70 }}>{r.symbol.replace('.L','')}</span>
-                  <span style={{ color:'#475569', fontSize:13 }}>{r.name}</span>
-                  <span style={{ marginLeft:'auto', fontSize:11, color:'#94a3b8' }}>{r.exchange}</span>
-                </div>
-              ))}
-            </div>
-          )}
+        <div style={{ display:'flex', gap:2 }}>
+          {NAV_TABS.map(t => (
+            <button key={t.id} style={{ ...S.navBtn, ...(page===t.id ? S.navBtnActive : {}) }} onClick={()=>setPage(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:12 }}>
+          {lastUpdated && <span style={{ color:'#444', fontSize:10, fontFamily:'monospace' }}>Updated {lastUpdated}</span>}
+          <button onClick={handleRefresh} style={{ background:'#1a1a1a', color:'#666', border:'1px solid #2a2a2a', padding:'4px 10px', borderRadius:2, fontFamily:'monospace', fontSize:10, cursor:'pointer' }}>↻</button>
+          <div style={{ position:'relative' }}>
+            <input
+              placeholder="Search ticker or company…"
+              value={searchQ}
+              onChange={e=>{ doSearch(e.target.value); setShowSearch(true); }}
+              onFocus={()=>setShowSearch(true)}
+              onBlur={()=>setTimeout(()=>setShowSearch(false),200)}
+              style={S.searchInput}
+            />
+            {showSearch && searchResults.length>0 && (
+              <div style={S.dropdown}>
+                {searchResults.map(r=>(
+                  <div key={r.symbol} onClick={()=>selectCompany(r.symbol)} style={S.dropdownItem}>
+                    <span style={{ fontFamily:'monospace', fontWeight:700, color:'#818cf8', minWidth:70 }}>{r.symbol.replace('.L','')}</span>
+                    <span style={{ color:'#94a3b8', fontSize:13 }}>{r.name}</span>
+                    <span style={{ marginLeft:'auto', fontSize:11, color:'#64748b' }}>{r.exchange}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </nav>
 
-      <main style={{ maxWidth:1400, margin:'0 auto', padding:'32px 24px' }}>
-        {page==='screener' && <Screener onSelect={selectCompany} />}
-        {page==='company' && selectedSymbol && (
-          <CompanyDetail symbol={selectedSymbol} onBack={()=>setPage('screener')} />
-        )}
-      </main>
+      {/* Body: sidebar + main */}
+      <div style={{ display:'flex', maxWidth:1400, margin:'0 auto' }}>
+        {showSidebar && <Sidebar refreshKey={refreshKey} />}
+        <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
+          {page==='screener'    && <Screener onSelect={selectCompany} />}
+          {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
+          {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
+          {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}
+          {page==='signals'     && <SignalsTab refreshKey={refreshKey} />}
+          {page==='company' && selectedSymbol && (
+            <CompanyDetail symbol={selectedSymbol} onBack={()=>setPage('screener')} />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const S = {
-  loading:     { textAlign:'center', padding:64, color:'#94a3b8', fontSize:16 },
-  card:        { background:'#fff', borderRadius:14, padding:24, border:'1px solid #e2e8f0' },
-  cardTitle:   { margin:'0 0 16px', fontFamily:'DM Serif Display,serif', fontSize:17, color:'#0f172a' },
-  badge:       { background:'#f1f5f9', color:'#475569', fontSize:11, padding:'3px 10px', borderRadius:20 },
-  tab:         { background:'none', border:'none', padding:'10px 18px', color:'#64748b', cursor:'pointer', borderBottom:'2px solid transparent', transition:'all 0.15s', fontSize:13 },
-  tabActive:   { color:'#6366f1', borderBottom:'2px solid #6366f1', fontWeight:600 },
-  navBtn:      { background:'none', border:'none', padding:'6px 14px', color:'#64748b', cursor:'pointer', borderRadius:8, fontSize:13 },
-  navBtnActive:{ color:'#6366f1', background:'#eef2ff', fontWeight:600 },
-  backBtn:     { background:'none', border:'none', color:'#6366f1', cursor:'pointer', padding:'0 0 16px', display:'block', fontSize:14 },
-  searchInput: { width:260, padding:'8px 14px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:13, outline:'none', background:'#f8fafc' },
-  dropdown:    { position:'absolute', right:0, top:'100%', width:420, background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, boxShadow:'0 8px 24px rgba(0,0,0,0.1)', zIndex:200, maxHeight:320, overflowY:'auto' },
-  dropdownItem:{ display:'flex', alignItems:'center', gap:12, padding:'10px 16px', cursor:'pointer', borderBottom:'1px solid #f1f5f9' },
-  select:      { padding:'8px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:13, background:'#fff', cursor:'pointer', outline:'none' },
-  table:       { width:'100%', borderCollapse:'collapse', fontSize:13 },
-  th:          { textAlign:'left', padding:'8px 12px', background:'#f8fafc', color:'#64748b', fontSize:11, fontWeight:600, borderBottom:'2px solid #e2e8f0', whiteSpace:'nowrap' },
-  td:          { padding:'10px 12px', borderBottom:'1px solid #f1f5f9', color:'#334155', whiteSpace:'nowrap' },
-  tdNum:       { padding:'10px 12px', borderBottom:'1px solid #f1f5f9', textAlign:'right', fontFamily:'monospace', fontSize:12, whiteSpace:'nowrap', color:'#334155' },
-  tooltip:     { background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, fontSize:12 },
+  loading:     { textAlign:'center', padding:64, color:'#666', fontSize:16, fontFamily:'monospace' },
+  card:        { background:'#141414', borderRadius:4, padding:24, border:'1px solid #2a2a2a' },
+  cardTitle:   { margin:'0 0 16px', fontFamily:'monospace', fontSize:13, fontWeight:700, color:'#f97316', textTransform:'uppercase', letterSpacing:1 },
+  badge:       { background:'#1f1f1f', color:'#888', fontSize:11, padding:'3px 10px', borderRadius:2, fontFamily:'monospace' },
+  tab:         { background:'none', border:'none', padding:'10px 18px', color:'#666', cursor:'pointer', borderBottom:'2px solid transparent', transition:'all 0.15s', fontSize:12, fontFamily:'monospace', textTransform:'uppercase', letterSpacing:0.5 },
+  tabActive:   { color:'#f97316', borderBottom:'2px solid #f97316', fontWeight:700 },
+  navBtn:      { background:'none', border:'none', padding:'6px 14px', color:'#666', cursor:'pointer', borderRadius:2, fontSize:12, fontFamily:'monospace' },
+  navBtnActive:{ color:'#f97316', background:'#1f1200', fontWeight:700 },
+  backBtn:     { background:'none', border:'none', color:'#f97316', cursor:'pointer', padding:'0 0 16px', display:'block', fontSize:13, fontFamily:'monospace' },
+  searchInput: { width:260, padding:'8px 14px', borderRadius:2, border:'1px solid #2a2a2a', fontSize:13, outline:'none', background:'#0a0a0a', color:'#e5e5e5', fontFamily:'monospace' },
+  dropdown:    { position:'absolute', right:0, top:'100%', width:420, background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, boxShadow:'0 8px 24px rgba(0,0,0,0.8)', zIndex:200, maxHeight:320, overflowY:'auto' },
+  dropdownItem:{ display:'flex', alignItems:'center', gap:12, padding:'10px 16px', cursor:'pointer', borderBottom:'1px solid #1f1f1f' },
+  select:      { padding:'8px 12px', borderRadius:2, border:'1px solid #2a2a2a', fontSize:12, background:'#141414', color:'#ccc', cursor:'pointer', outline:'none', fontFamily:'monospace' },
+  table:       { width:'100%', borderCollapse:'collapse', fontSize:12, fontFamily:'monospace' },
+  th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5 },
+  td:          { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', color:'#ccc', whiteSpace:'nowrap' },
+  tdNum:       { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', textAlign:'right', fontFamily:'monospace', fontSize:12, whiteSpace:'nowrap', color:'#e5e5e5' },
+  tooltip:     { background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:12, color:'#e5e5e5', fontFamily:'monospace' },
 };

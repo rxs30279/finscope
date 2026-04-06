@@ -68,10 +68,25 @@ export default function Sidebar({ refreshKey }) {
         </div>
       )}
 
+      {/* CNN Fear & Greed */}
+      {data?.cnn_fear_greed?.value !== null && data?.cnn_fear_greed?.value !== undefined && (
+        <div style={{ marginBottom:12 }}>
+          <div style={rowStyle}>
+            <span style={nameStyle}>CNN F&amp;G</span>
+            <span style={{ fontFamily:'monospace', fontSize:10, fontWeight:700, color: fgColor(data.cnn_fear_greed.value) }}>
+              {data.cnn_fear_greed.value.toFixed(2)}
+            </span>
+          </div>
+          <div style={{ textAlign:'right', fontSize:8, fontWeight:400, color: fgColor(data.cnn_fear_greed.value), opacity:0.7, marginTop:-2 }}>
+            {data.cnn_fear_greed.description}
+          </div>
+        </div>
+      )}
+
       {/* Fear & Greed */}
       {data?.fear_greed && (
         <div style={{ marginTop:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
-          <div style={labelStyle}>Fear &amp; Greed</div>
+          <div style={labelStyle}>UK Fear &amp; Greed</div>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
             <span style={{ fontFamily:'monospace', fontSize:22, fontWeight:700, color: fgColor(data.fear_greed.score) }}>
               {data.fear_greed.score}

@@ -5,4 +5,4 @@ echo.
 echo Starting FinScope API on http://localhost:8000
 echo.
 cd backend
-python main.py
+uvicorn main:app --reload --port 8000

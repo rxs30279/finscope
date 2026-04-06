@@ -13,7 +13,7 @@ function fgColor(score) {
 function FearGreedCard({ fg }) {
   if (!fg) return null;
   const color = fgColor(fg.score);
-  const COMPONENT_ORDER = ['momentum', 'breadth', 'vix', 'safe_haven', 'hl_ratio'];
+  const COMPONENT_ORDER = ['momentum', 'breadth', 'vix', 'safe_haven', 'realised_vol', 'hl_ratio'];
   return (
     <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16, marginBottom:16 }}>
       <div style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 }}>
@@ -50,7 +50,7 @@ function FearGreedCard({ fg }) {
       </div>
 
       {/* Component cards */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:6 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:6 }}>
         {COMPONENT_ORDER.map(key => {
           const c = fg.components?.[key];
           if (!c) return null;
@@ -141,9 +141,8 @@ export default function BreadthTab({ refreshKey }) {
           <div style={title}>% Above 50-Day MA</div>
           <BreadthGauge value={data?.pct_above_50ma} />
           <div style={{ display:'flex', justifyContent:'space-around', marginTop:12, fontSize:10, fontFamily:'monospace' }}>
-            <span style={{ color:'#555' }}>Adv: <span style={{ color:'#10b981' }}>{data?.advances ?? '—'}</span></span>
-            <span style={{ color:'#555' }}>Dec: <span style={{ color:'#ef4444' }}>{data?.declines ?? '—'}</span></span>
-            <span style={{ color:'#555' }}>Unch: <span style={{ color:'#555' }}>{data?.unchanged ?? '—'}</span></span>
+            <span style={{ color:'#555' }}>Above: <span style={{ color:'#10b981' }}>{data?.above_50ma ?? '—'}</span></span>
+            <span style={{ color:'#555' }}>Below: <span style={{ color:'#ef4444' }}>{data?.below_50ma ?? '—'}</span></span>
           </div>
         </div>
 

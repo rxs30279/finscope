@@ -16,3 +16,12 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Superpowers
+.superpowers/
+
+# Claude Code
+.claude/
+
+# Crash dumps
+*.stackdump
