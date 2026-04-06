@@ -56,7 +56,7 @@ def _upsert_rows(rows):
             rows,
             page_size=1000,
         )
-        count = cur.rowcount
+        count = len(rows)
         conn.commit()
         return count
     finally:
