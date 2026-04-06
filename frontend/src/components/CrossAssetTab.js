@@ -117,25 +117,38 @@ function GiltHistoryChart({ history }) {
 
   return (
     <div>
-      <div style={{ color:'#555', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:8 }}>5-Year History</div>
-      {/* Custom legend — click to toggle lines */}
-      <div style={{ display:'flex', gap:12, marginBottom:8, flexWrap:'wrap' }}>
-        {MATURITIES.map(({ key, label }) => (
-          <span
-            key={key}
-            onClick={() => toggleLine(key)}
-            style={{
-              cursor:'pointer',
-              fontSize:9,
-              fontFamily:'monospace',
-              color: hidden[key] ? '#333' : MATURITY_COLORS[key],
-              textDecoration: hidden[key] ? 'line-through' : 'none',
-              userSelect:'none',
-            }}
-          >
-            {label}
-          </span>
-        ))}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <div style={{ color:'#555', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>5-Year History</div>
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+          {MATURITIES.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => toggleLine(key)}
+              style={{
+                cursor:'pointer',
+                fontSize:9,
+                fontFamily:'monospace',
+                padding:'2px 7px',
+                borderRadius:3,
+                border: `1px solid ${hidden[key] ? '#2a2a2a' : MATURITY_COLORS[key]}`,
+                background: hidden[key] ? 'transparent' : `${MATURITY_COLORS[key]}22`,
+                color: hidden[key] ? '#444' : MATURITY_COLORS[key],
+                userSelect:'none',
+                display:'flex',
+                alignItems:'center',
+                gap:4,
+              }}
+            >
+              <span style={{
+                width:6, height:6, borderRadius:'50%',
+                background: hidden[key] ? '#333' : MATURITY_COLORS[key],
+                display:'inline-block',
+                flexShrink:0,
+              }}/>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       <ResponsiveContainer width="100%" height={200}>
         <LineChart data={thinned} margin={{ top:5, right:30, bottom:5, left:0 }}>
