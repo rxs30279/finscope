@@ -81,7 +81,7 @@ function GiltSnapshotChart({ snapshot }) {
   return (
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <div style={{ color:'#555', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>Current Curve</div>
+        <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>Current Curve</div>
         <div style={{ color: curveColor, fontSize:9, fontWeight:700 }}>{curveLabel}</div>
       </div>
       <ResponsiveContainer width="100%" height={180}>
@@ -118,7 +118,7 @@ function GiltHistoryChart({ history }) {
   return (
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <div style={{ color:'#555', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>5-Year History</div>
+        <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>5-Year History</div>
         <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
           {MATURITIES.map(({ key, label }) => (
             <button
@@ -224,7 +224,7 @@ export default function CrossAssetTab({ refreshKey }) {
       </div>
       {giltData && (
         <div style={{ marginTop:24 }}>
-          <div style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
+          <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
             UK Gilt Yield Curve
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'2fr 3fr', gap:16 }}>
