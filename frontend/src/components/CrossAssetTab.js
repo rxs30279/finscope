@@ -106,6 +106,7 @@ function GiltSnapshotChart({ snapshot }) {
 
 function GiltHistoryChart({ history }) {
   const [hidden, setHidden] = useState({});
+  const [brushRange, setBrushRange] = useState(null);
 
   if (!history || history.length === 0) {
     return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No history available</div>;
@@ -115,6 +116,17 @@ function GiltHistoryChart({ history }) {
   const thinned = history.filter((_, i) => i % step === 0);
 
   const toggleLine = (key) => setHidden(h => ({ ...h, [key]: !h[key] }));
+
+  // Adapt date format and tick density to how many points are visible
+  const visibleCount = brushRange
+    ? (brushRange.endIndex - brushRange.startIndex)
+    : thinned.length;
+  const tickFmt = visibleCount > 180 ? d => d.slice(0, 4)     // year only
+                : visibleCount > 40  ? d => d.slice(0, 7)     // YYYY-MM
+                :                      d => d.slice(0, 10);   // full date
+  const tickInterval = visibleCount > 180 ? Math.floor(visibleCount / 5)
+                     : visibleCount > 40  ? Math.floor(visibleCount / 6)
+                     :                      Math.floor(visibleCount / 8);
 
   return (
     <div>
@@ -144,8 +156,8 @@ function GiltHistoryChart({ history }) {
           <XAxis
             dataKey="date"
             tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
-            tickFormatter={d => d.slice(0, 7)}
-            interval="preserveStartEnd"
+            tickFormatter={tickFmt}
+            interval={tickInterval}
           />
           <YAxis
             tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
@@ -158,8 +170,9 @@ function GiltHistoryChart({ history }) {
             labelFormatter={l => l}
           />
           <Brush dataKey="date" height={28} stroke="#444" fill="#1a1a1a" travellerWidth={8}
-            tickFormatter={d => d.slice(0, 7)}
+            tickFormatter={d => d.slice(0, 4)}
             style={{ fontSize: 9, fontFamily: 'monospace' }}
+            onChange={({ startIndex, endIndex }) => setBrushRange({ startIndex, endIndex })}
           />
           {MATURITIES.map(({ key }) => (
             <Line
