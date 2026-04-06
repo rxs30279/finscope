@@ -1,0 +1,74 @@
+import pytest
+from unittest.mock import patch, MagicMock
+import pandas as pd
+import numpy as np
+from datetime import date, timedelta
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _fake_yf_download(symbols, start, rows=300):
+    """Return a fake yfinance download DataFrame."""
+    dates = pd.bdate_range(end=pd.Timestamp.today(), periods=rows)
+    np.random.seed(42)
+    if len(symbols) == 1:
+        prices = 100 * np.cumprod(1 + np.random.normal(0.0002, 0.01, rows))
+        df = pd.DataFrame({'Close': prices}, index=dates)
+    else:
+        close_data = {}
+        for sym in symbols:
+            prices = 100 * np.cumprod(1 + np.random.normal(0.0002, 0.01, rows))
+            close_data[sym] = prices
+        df = pd.DataFrame(close_data, index=dates)
+        df.columns = pd.MultiIndex.from_product([['Close'], df.columns])
+    return df
+
+
+# ── refresh endpoint tests ────────────────────────────────────────────────────
+
+def test_refresh_returns_summary(client):
+    with patch('prices.yf.download', return_value=_fake_yf_download(['SHEL.L'], None)) as mock_dl, \
+         patch('prices.query') as mock_query, \
+         patch('prices._upsert_rows', return_value=10) as mock_upsert:
+        mock_query.side_effect = [
+            # all symbols from company_metadata
+            [{'symbol': 'SHEL.L'}],
+            # latest dates from price_history (empty — no history yet)
+            [],
+        ]
+        r = client.post('/api/prices/refresh')
+    assert r.status_code == 200
+    data = r.json()
+    assert 'rows_added' in data
+    assert 'updated' in data
+    assert 'duration_seconds' in data
+
+
+# ── _attach_momentum tests ────────────────────────────────────────────────────
+
+def test_attach_momentum_scores_range():
+    import prices
+    results = [{'symbol': f'S{i}.L'} for i in range(10)]
+    mock_rows = [
+        {'symbol': f'S{i}.L', 'close_63': 110 + i, 'close_252': 100.0}
+        for i in range(10)
+    ]
+    with patch('prices.query', return_value=mock_rows):
+        prices._attach_momentum(results)
+    scores = [r['momentum_score'] for r in results if r['momentum_score'] is not None]
+    assert all(1 <= s <= 10 for s in scores)
+
+
+def test_attach_momentum_null_for_insufficient_history():
+    import prices
+    results = [{'symbol': 'SHEL.L'}]
+    # No rows returned — stock has < 252 days of history
+    with patch('prices.query', return_value=[]):
+        prices._attach_momentum(results)
+    assert results[0]['momentum_score'] is None
+
+
+def test_attach_momentum_empty_results():
+    import prices
+    result = prices._attach_momentum([])
+    assert result == []
