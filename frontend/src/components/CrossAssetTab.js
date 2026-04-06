@@ -106,7 +106,7 @@ function GiltSnapshotChart({ snapshot }) {
 
 function GiltHistoryChart({ history }) {
   const [hidden, setHidden] = useState({});
-  const [brushRange, setBrushRange] = useState(null);
+  const [brushIndices, setBrushIndices] = useState({ startIndex: 0, endIndex: undefined });
 
   if (!history || history.length === 0) {
     return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No history available</div>;
@@ -118,8 +118,8 @@ function GiltHistoryChart({ history }) {
   const toggleLine = (key) => setHidden(h => ({ ...h, [key]: !h[key] }));
 
   // Adapt date format and tick density to how many points are visible
-  const visibleCount = brushRange
-    ? (brushRange.endIndex - brushRange.startIndex)
+  const visibleCount = brushIndices.endIndex !== undefined
+    ? brushIndices.endIndex - brushIndices.startIndex
     : thinned.length;
   const tickFmt = visibleCount > 180 ? d => d.slice(0, 4)     // year only
                 : visibleCount > 40  ? d => d.slice(0, 7)     // YYYY-MM
@@ -172,7 +172,9 @@ function GiltHistoryChart({ history }) {
           <Brush dataKey="date" height={28} stroke="#444" fill="#1a1a1a" travellerWidth={8}
             tickFormatter={d => d.slice(0, 4)}
             style={{ fontSize: 9, fontFamily: 'monospace' }}
-            onChange={({ startIndex, endIndex }) => setBrushRange({ startIndex, endIndex })}
+            startIndex={brushIndices.startIndex}
+            endIndex={brushIndices.endIndex ?? thinned.length - 1}
+            onChange={({ startIndex, endIndex }) => setBrushIndices({ startIndex, endIndex })}
           />
           {MATURITIES.map(({ key }) => (
             <Line
