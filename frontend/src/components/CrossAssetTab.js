@@ -157,8 +157,9 @@ function GiltHistoryChart({ history }) {
             formatter={(v, name) => [v !== null ? `${v.toFixed(2)}%` : '—', name.toUpperCase()]}
             labelFormatter={l => l}
           />
-          <Brush dataKey="date" height={20} stroke="#2a2a2a" fill="#111" travellerWidth={6}
+          <Brush dataKey="date" height={28} stroke="#444" fill="#1a1a1a" travellerWidth={8}
             tickFormatter={d => d.slice(0, 7)}
+            style={{ fontSize: 9, fontFamily: 'monospace' }}
           />
           {MATURITIES.map(({ key }) => (
             <Line
