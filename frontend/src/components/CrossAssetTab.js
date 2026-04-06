@@ -87,9 +87,9 @@ function GiltSnapshotChart({ snapshot }) {
       <ResponsiveContainer width="100%" height={180}>
         <LineChart data={data} margin={{ top:5, right:10, bottom:5, left:0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-          <XAxis dataKey="label" tick={{ fontSize:9, fill:'#444', fontFamily:'monospace' }} />
+          <XAxis dataKey="label" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
           <YAxis
-            tick={{ fontSize:9, fill:'#444', fontFamily:'monospace' }}
+            tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
             tickFormatter={v => `${v.toFixed(1)}%`}
             domain={['auto', 'auto']}
           />
@@ -143,12 +143,12 @@ function GiltHistoryChart({ history }) {
           <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize:9, fill:'#444', fontFamily:'monospace' }}
+            tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
             tickFormatter={d => d.slice(0, 7)}
             interval="preserveStartEnd"
           />
           <YAxis
-            tick={{ fontSize:9, fill:'#444', fontFamily:'monospace' }}
+            tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
             tickFormatter={v => `${v.toFixed(1)}%`}
             domain={['auto', 'auto']}
           />
