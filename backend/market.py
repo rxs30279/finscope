@@ -471,52 +471,58 @@ def _fetch_boe_gilt_yields():
         print(f"[market] BoE IADB gilt fetch failed: {e}")
 
     # ── Zip: 2Y and 30Y ──────────────────────────────────────────────────────
+    # Sheet structure: row 3 = maturity header ("years:", 0.5, 1, 1.5, 2, ...),
+    # rows 0-4 are preamble, data starts row 5. Need both recent files for 2021-present.
     zip_data = {2: {}, 30: {}}
     try:
         import openpyxl
         r = requests.get(ZIP_URL, timeout=60, headers=HEADERS)
         r.raise_for_status()
         zf = zipfile.ZipFile(io.BytesIO(r.content))
-        # Find the most recent xlsx file
         xlsx_names = sorted([n for n in zf.namelist() if n.endswith(".xlsx")])
         if not xlsx_names:
             raise ValueError("No xlsx files found in zip")
-        latest = xlsx_names[-1]
-        wb = openpyxl.load_workbook(io.BytesIO(zf.read(latest)), read_only=True, data_only=True)
-        ws = wb["4. spot curve"]
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
-            raise ValueError("Empty sheet")
-        # Row 0 is header — find columns for 2.0 and 30.0 years
-        header = rows[0]
-        col_2y  = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 2.0)  < 0.01), None)
-        col_30y = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 30.0) < 0.01), None)
-        for row in rows[1:]:
-            if not row or row[0] is None:
-                continue
-            try:
-                # Date column (column 0) may be a datetime object or string
-                cell_date = row[0]
-                if hasattr(cell_date, "strftime"):
-                    date_str = cell_date.strftime("%Y-%m-%d")
-                else:
-                    dt = datetime.strptime(str(cell_date).strip(), "%Y-%m-%d")
-                    date_str = dt.strftime("%Y-%m-%d")
-                # Only keep last 5 years
-                if date_str < "2021-01-01":
+
+        def _parse_sheet(wb_bytes):
+            wb = openpyxl.load_workbook(io.BytesIO(wb_bytes), read_only=True, data_only=True)
+            ws = wb["4. spot curve"]
+            rows = list(ws.iter_rows(values_only=True))
+            # Row 3 is the maturity header: ('years:', 0.5, 1.0, 1.5, 2.0, ...)
+            header = rows[3] if len(rows) > 3 else rows[0]
+            col_2y  = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 2.0)  < 0.01), None)
+            col_30y = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 30.0) < 0.01), None)
+            # Data starts at row 5
+            for row in rows[5:]:
+                if not row or row[0] is None:
                     continue
-                if col_2y is not None and col_2y < len(row) and row[col_2y] is not None:
-                    try:
-                        zip_data[2][date_str] = float(row[col_2y])
-                    except (ValueError, TypeError):
-                        pass
-                if col_30y is not None and col_30y < len(row) and row[col_30y] is not None:
-                    try:
-                        zip_data[30][date_str] = float(row[col_30y])
-                    except (ValueError, TypeError):
-                        pass
-            except (ValueError, TypeError, AttributeError):
-                continue
+                try:
+                    cell_date = row[0]
+                    if hasattr(cell_date, "strftime"):
+                        date_str = cell_date.strftime("%Y-%m-%d")
+                    else:
+                        dt = datetime.strptime(str(cell_date).strip(), "%Y-%m-%d")
+                        date_str = dt.strftime("%Y-%m-%d")
+                    if date_str < "2021-01-01":
+                        continue
+                    if col_2y is not None and col_2y < len(row) and row[col_2y] is not None:
+                        try:
+                            zip_data[2][date_str] = float(row[col_2y])
+                        except (ValueError, TypeError):
+                            pass
+                    if col_30y is not None and col_30y < len(row) and row[col_30y] is not None:
+                        try:
+                            zip_data[30][date_str] = float(row[col_30y])
+                        except (ValueError, TypeError):
+                            pass
+                except (ValueError, TypeError, AttributeError):
+                    continue
+
+        # Read all files that overlap 2021-present (last two files cover 2016-2024 and 2025+)
+        for fname in xlsx_names[-2:]:
+            try:
+                _parse_sheet(zf.read(fname))
+            except Exception as e:
+                print(f"[market] BoE zip parse failed for {fname}: {e}")
     except Exception as e:
         print(f"[market] BoE zip gilt fetch failed: {e}")
 
