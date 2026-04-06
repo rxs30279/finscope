@@ -230,9 +230,11 @@ def screener(
         ORDER BY t.market_cap DESC NULLS LAST
         LIMIT %s
     """
+    from prices import _attach_momentum
     results = query(sql, params)
     for r in results:
         r['quality_score'] = _quality_score(r)
+    _attach_momentum(results)
     return _attach_piotroski(results)
 
 @app.get("/api/filters")
