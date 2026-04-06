@@ -8,7 +8,7 @@ from typing import Optional
 from dotenv import load_dotenv
 import os
 from market import router as market_router
-from prices import router as prices_router
+from prices import router as prices_router, _attach_momentum
 
 load_dotenv()
 
@@ -230,7 +230,6 @@ def screener(
         ORDER BY t.market_cap DESC NULLS LAST
         LIMIT %s
     """
-    from prices import _attach_momentum
     results = query(sql, params)
     for r in results:
         r['quality_score'] = _quality_score(r)
