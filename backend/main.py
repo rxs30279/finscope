@@ -35,13 +35,24 @@ def get_pool():
     return _pool
 
 def query(sql, params=None):
-    pool = get_pool()
-    conn = pool.getconn()
+    try:
+        pool = get_pool()
+    except Exception as e:
+        print(f"[db] pool creation failed: {e}")
+        raise
+    try:
+        conn = pool.getconn()
+    except Exception as e:
+        print(f"[db] getconn failed: {e}")
+        raise
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params)
         rows = cur.fetchall()
         return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[db] query failed: {e}")
+        raise
     finally:
         pool.putconn(conn)
 
