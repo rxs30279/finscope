@@ -418,9 +418,10 @@ def _fetch_boe_gilt_yields():
     """
     import io, zipfile
 
+    _today = datetime.now().strftime("%d/%b/%Y")
     IADB_URL = (
         "https://www.bankofengland.co.uk/boeapps/database/_iadb-fromshowcolumns.asp"
-        "?csv.x=yes&Datefrom=01/Jan/2021&Dateto=31/Dec/2026"
+        f"?csv.x=yes&Datefrom=01/Jan/2021&Dateto={_today}"
         "&SeriesCodes=IUDSNZC,IUDMNZC,IUDLNZC&CSVF=TT&UsingCodes=Y&VPD=Y&VFD=N"
     )
     ZIP_URL = (
@@ -488,8 +489,8 @@ def _fetch_boe_gilt_yields():
             raise ValueError("Empty sheet")
         # Row 0 is header — find columns for 2.0 and 30.0 years
         header = rows[0]
-        col_2y  = next((i for i, h in enumerate(header) if h is not None and abs(float(h) - 2.0)  < 0.01), None) if any(isinstance(h, (int, float)) for h in header) else None
-        col_30y = next((i for i, h in enumerate(header) if h is not None and abs(float(h) - 30.0) < 0.01), None) if any(isinstance(h, (int, float)) for h in header) else None
+        col_2y  = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 2.0)  < 0.01), None)
+        col_30y = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 30.0) < 0.01), None)
         for row in rows[1:]:
             if not row or row[0] is None:
                 continue
