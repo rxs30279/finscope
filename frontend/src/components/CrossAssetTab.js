@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer
+  Tooltip, Legend, ResponsiveContainer, Brush
 } from 'recharts';
 import { API } from '../utils';
 
@@ -105,6 +105,8 @@ function GiltSnapshotChart({ snapshot }) {
 }
 
 function GiltHistoryChart({ history }) {
+  const [hidden, setHidden] = useState({});
+
   if (!history || history.length === 0) {
     return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No history available</div>;
   }
@@ -112,10 +114,31 @@ function GiltHistoryChart({ history }) {
   const step = Math.max(1, Math.floor(history.length / 260));
   const thinned = history.filter((_, i) => i % step === 0);
 
+  const toggleLine = (key) => setHidden(h => ({ ...h, [key]: !h[key] }));
+
   return (
     <div>
       <div style={{ color:'#555', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:8 }}>5-Year History</div>
-      <ResponsiveContainer width="100%" height={180}>
+      {/* Custom legend — click to toggle lines */}
+      <div style={{ display:'flex', gap:12, marginBottom:8, flexWrap:'wrap' }}>
+        {MATURITIES.map(({ key, label }) => (
+          <span
+            key={key}
+            onClick={() => toggleLine(key)}
+            style={{
+              cursor:'pointer',
+              fontSize:9,
+              fontFamily:'monospace',
+              color: hidden[key] ? '#333' : MATURITY_COLORS[key],
+              textDecoration: hidden[key] ? 'line-through' : 'none',
+              userSelect:'none',
+            }}
+          >
+            {label}
+          </span>
+        ))}
+      </div>
+      <ResponsiveContainer width="100%" height={200}>
         <LineChart data={thinned} margin={{ top:5, right:10, bottom:5, left:0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
           <XAxis
@@ -134,19 +157,19 @@ function GiltHistoryChart({ history }) {
             formatter={(v, name) => [v !== null ? `${v.toFixed(2)}%` : '—', name.toUpperCase()]}
             labelFormatter={l => l}
           />
-          <Legend
-            wrapperStyle={{ fontSize:9, fontFamily:'monospace' }}
-            formatter={v => v.toUpperCase()}
+          <Brush dataKey="date" height={20} stroke="#2a2a2a" fill="#111" travellerWidth={6}
+            tickFormatter={d => d.slice(0, 7)}
           />
           {MATURITIES.map(({ key }) => (
             <Line
               key={key}
               type="monotone"
               dataKey={key}
-              stroke={MATURITY_COLORS[key]}
+              stroke={hidden[key] ? 'transparent' : MATURITY_COLORS[key]}
               strokeWidth={1.5}
               dot={false}
               connectNulls={false}
+              hide={hidden[key]}
             />
           ))}
         </LineChart>
