@@ -34,6 +34,7 @@ def _get_pool():
 def query(sql, params=None):
     pool = _get_pool()
     conn = pool.getconn()
+    conn.autocommit = True   # prevent idle-in-transaction; query() is read-only
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params)
@@ -56,7 +57,7 @@ def _upsert_rows(rows):
             rows,
             page_size=1000,
         )
-        count = len(rows)
+        count = max(0, cur.rowcount)
         conn.commit()
         return count
     finally:
@@ -65,13 +66,10 @@ def _upsert_rows(rows):
 
 # ── Price fetch ───────────────────────────────────────────────────────────────
 
-THREE_YEARS_AGO = date.today() - timedelta(days=3 * 365)
-
-
 def _fetch_closes(symbols, start_date):
     """Fetch adjusted daily closes for symbols from start_date to today.
     Returns list of (symbol, date, close) tuples."""
-    end_date = date.today()
+    end_date = date.today()  # yf.download end is exclusive — today's partial session is intentionally excluded
     if not symbols:
         return []
 
@@ -118,6 +116,7 @@ def _attach_momentum(results):
 
     symbols = [r['symbol'] for r in results]
 
+    # Stocks without exactly 252+ rows of history silently get momentum_score=None via scores.get()
     rows = query("""
         WITH numbered AS (
             SELECT symbol, close,
@@ -178,7 +177,7 @@ def refresh_prices():
         if sym in latest and latest[sym] is not None:
             start = latest[sym] + timedelta(days=1)
         else:
-            start = THREE_YEARS_AGO
+            start = date.today() - timedelta(days=3 * 365)
         groups.setdefault(start, []).append(sym)
 
     total_rows = 0
