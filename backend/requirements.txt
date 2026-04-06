@@ -3,3 +3,5 @@ uvicorn
 psycopg2-binary
 python-dotenv
 yfinance
+fear-and-greed
+openpyxl

@@ -2,7 +2,10 @@ from fastapi import APIRouter
 import yfinance as yf
 import time
 import numpy as np
+import pandas as pd
+import requests
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 
@@ -37,44 +40,74 @@ SECTOR_TICKERS = {
     "Technology":             ["REL.L",  "HLMA.L","SGE.L",  "AUTO.L","RMV.L"],
     "Telecommunications":     ["VOD.L",  "BT-A.L","AAF.L"],
     "Utilities":              ["NG.L",   "SSE.L", "CNA.L",  "SVT.L", "UU.L"],
-    "Real Estate":            ["LAND.L", "SGRO.L", "BLND.L", "BBOX.L", "DELN.L", "GPE.L"],
+    "Real Estate":            ["LAND.L", "SGRO.L", "BLND.L", "BBOX.L", "PCTN.L", "GPE.L"],
 }
+
+# FTSE 100 — used for breadth calculations
+BREADTH_TICKERS = [
+    # Top 50 by market cap
+    "AZN.L",  "SHEL.L", "HSBA.L", "ULVR.L", "BP.L",
+    "RIO.L",  "GSK.L",  "LSEG.L", "REL.L",  "DGE.L",
+    "BATS.L", "GLEN.L", "LLOY.L", "BARC.L", "NG.L",
+    "RKT.L",  "IMB.L",  "HLN.L",  "AAL.L",  "NWG.L",
+    "TSCO.L", "SSE.L",  "AHT.L",  "BA.L",   "RR.L",
+    "HLMA.L", "SGE.L",  "IHG.L",  "SN.L",   "HIK.L",
+    "CPG.L",  "EXPN.L", "STAN.L", "IAG.L",  "ANTO.L",
+    "PRU.L",  "ABF.L",  "WPP.L",  "BT-A.L", "AUTO.L",
+    "FRES.L", "MNG.L",  "CNA.L",  "SVT.L",  "UU.L",
+    "LAND.L", "SGRO.L", "BLND.L", "VOD.L",  "NXT.L",
+    # FTSE 100 remainder
+    "AV.L",   "LGEN.L", "ADM.L",  "III.L",  "ITRK.L",
+    "CRDA.L", "RTO.L",  "WTB.L",  "JD.L",   "MKS.L",
+    "SBRY.L", "MNDI.L", "EZJ.L",  "ENT.L",  "FLTR.L",
+    "PSON.L", "SDR.L",  "PSN.L",  "TW.L",   "MRO.L",
+    "IMI.L",  "WEIR.L", "SKG.L",  "RMV.L",  "GAW.L",
+]
 
 CROSS_ASSET_TICKERS = {
     "gbpusd":   "GBPUSD=X",
-    "gilt_10y": "^TNGBP",   # UK 10Y gilt — validate ticker on first run
     "brent":    "BZ=F",
     "gold":     "GC=F",
-    "vftse":    "^VFTSE",
 }
 
 VIX_TICKER = "^VIX"
+GILT_ETF_TICKER = "IGLT.L"  # iShares UK Gilt ETF — used for safe haven spread & z-score
 
-ALL_PROXY_TICKERS = (
+ALL_PROXY_TICKERS = list(dict.fromkeys(
     list(BENCHMARK_TICKERS.values()) +
     [t for tickers in SECTOR_TICKERS.values() for t in tickers] +
+    BREADTH_TICKERS +
     list(CROSS_ASSET_TICKERS.values()) +
-    [VIX_TICKER]
-)
+    [VIX_TICKER, GILT_ETF_TICKER]
+))
 
 # ── Shared price fetch (all proxy tickers, 1 year history, cached) ────────────
 def _get_prices():
     def fetch():
-        try:
-            import pandas as pd
-            df = yf.download(
-                ALL_PROXY_TICKERS, period="1y",
-                progress=False, auto_adjust=True, threads=True
-            )["Close"]
-            # yf.download returns MultiIndex columns when multiple tickers;
-            # single ticker returns a Series — normalise to DataFrame
-            if hasattr(df, "columns") and not isinstance(df.columns, str):
-                return df
-            return df.to_frame()
-        except Exception as e:
-            import pandas as pd
-            print(f"[market] yfinance download failed: {e}")
+        def _fetch_one(ticker):
+            try:
+                hist = yf.Ticker(ticker).history(period="1y", auto_adjust=True)
+                if hist.empty:
+                    return ticker, None
+                col = hist["Close"]
+                if col.index.tz is not None:
+                    col.index = col.index.tz_localize(None)
+                return ticker, col
+            except Exception:
+                return ticker, None
+
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            futures = {executor.submit(_fetch_one, t): t for t in ALL_PROXY_TICKERS}
+            frames = {}
+            for future in as_completed(futures):
+                ticker, col = future.result()
+                if col is not None:
+                    frames[ticker] = col
+
+        if not frames:
+            print("[market] yfinance: no data returned for any ticker")
             return pd.DataFrame()
+        return pd.DataFrame(frames)
     return _cached("prices", fetch)
 
 # ── Cycle phase state (in-memory, manually set) ───────────────────────────────
@@ -98,7 +131,7 @@ PHASE_GUIDANCE = {
 _signal_log: list = []
 
 # ── Fear & Greed helpers ──────────────────────────────────────────────────────
-def _zscore_to_score(series, current_val):
+def _zscore_to_score(series, current_val, clip=2.0):
     """Map current_val to 0-100 using z-score over series. Returns 50 on insufficient data."""
     if len(series) < 20:
         return 50
@@ -107,8 +140,8 @@ def _zscore_to_score(series, current_val):
     if std == 0:
         return 50
     z = (current_val - mean) / std
-    z = max(-2.0, min(2.0, z))
-    return round((z + 2) / 4 * 100)
+    z = max(-clip, min(clip, z))
+    return round((z + clip) / (2 * clip) * 100)
 
 def _suggest_phase(score, trend):
     """Map F&G score + trend to a suggested cycle phase string."""
@@ -151,16 +184,25 @@ def _compute_fear_greed():
     if "momentum" not in components:
         components["momentum"] = {"score": 50, "label": "FTSE Momentum", "value": None}
 
-    # 2. Market Breadth — % basket stocks above 50-day MA
+    # 2. Market Breadth — % basket stocks above 50-day MA, z-score normalised
     breadth_data = _compute_breadth()
-    breadth_pct = breadth_data.get("pct_above_50ma")
-    if breadth_pct is not None:
-        components["breadth"] = {
-            "score": round(breadth_pct * 100),
-            "label": "Market Breadth",
-            "value": round(breadth_pct * 100, 1),
-        }
-    else:
+    above_flags = {}
+    for t in BREADTH_TICKERS:
+        if t in prices.columns:
+            col = prices[t].dropna()
+            if len(col) >= 51:
+                ma50 = col.rolling(50).mean()
+                above_flags[t] = (col > ma50).astype(float)
+    if above_flags:
+        breadth_series = pd.DataFrame(above_flags).mean(axis=1).dropna()
+        if len(breadth_series) >= 20:
+            current_breadth = float(breadth_series.iloc[-1])
+            components["breadth"] = {
+                "score": _zscore_to_score(breadth_series, current_breadth),
+                "label": "Market Breadth",
+                "value": round(current_breadth * 100, 1),
+            }
+    if "breadth" not in components:
         components["breadth"] = {"score": 50, "label": "Market Breadth", "value": None}
 
     # 3. VIX — inverted (high VIX = fear = low score)
@@ -176,8 +218,8 @@ def _compute_fear_greed():
     if "vix" not in components:
         components["vix"] = {"score": 50, "label": "VIX", "value": None}
 
-    # 4. Safe Haven Demand — 20-day return spread: FTSE 100 vs UK gilt
-    gilt_ticker = CROSS_ASSET_TICKERS["gilt_10y"]
+    # 4. Safe Haven Demand — 20-day return spread: FTSE 100 vs UK gilt ETF
+    gilt_ticker = GILT_ETF_TICKER
     if ftse_ticker in prices.columns and gilt_ticker in prices.columns:
         ftse = prices[ftse_ticker].dropna()
         gilt = prices[gilt_ticker].dropna()
@@ -193,12 +235,33 @@ def _compute_fear_greed():
     if "safe_haven" not in components:
         components["safe_haven"] = {"score": 50, "label": "Safe Haven Demand", "value": None}
 
-    # 5. New Highs / Lows ratio from basket
-    new_highs = breadth_data.get("new_highs", 0)
-    new_lows = breadth_data.get("new_lows", 0)
-    total_hl = new_highs + new_lows
+    # 5. Realised Volatility — 20-day annualised vol of FTSE 100, inverted (high vol = fear = low score)
+    if ftse_ticker in prices.columns:
+        ftse = prices[ftse_ticker].dropna()
+        if len(ftse) >= 22:
+            log_returns = np.log(ftse / ftse.shift(1)).dropna()
+            rv_series = log_returns.rolling(20).std().dropna() * np.sqrt(252)
+            if len(rv_series) >= 20:
+                current_rv = float(rv_series.iloc[-1])
+                components["realised_vol"] = {
+                    "score": _zscore_to_score(-rv_series, -current_rv, clip=3.0),
+                    "label": "Realised Vol",
+                    "value": round(current_rv * 100, 1),
+                }
+    if "realised_vol" not in components:
+        components["realised_vol"] = {"score": 50, "label": "Realised Vol", "value": None}
+
+    # 6. New Highs / Lows — % of stocks at 52w high minus % at 52w low, centred at 50
+    new_highs    = breadth_data.get("new_highs", 0)
+    new_lows     = breadth_data.get("new_lows", 0)
+    hl_universe  = breadth_data.get("hl_universe", 0)
+    if hl_universe > 0:
+        hl_score = round(50 + ((new_highs - new_lows) / hl_universe) * 50)
+        hl_score = max(0, min(100, hl_score))
+    else:
+        hl_score = 50
     components["hl_ratio"] = {
-        "score": round(new_highs / total_hl * 100) if total_hl > 0 else 50,
+        "score": hl_score,
         "label": "New Highs / Lows",
         "value": f"{new_highs}/{new_lows}",
     }
@@ -347,6 +410,159 @@ def _compute_rotation():
 
     return results
 
+def _fetch_boe_gilt_yields():
+    """Fetch UK nominal zero coupon gilt yields from Bank of England.
+    - 5Y/10Y/20Y: BoE IADB API (single request, series IUDSNZC/IUDMNZC/IUDLNZC)
+    - 2Y/30Y: BoE zip file (glcnominalddata.zip, sheet '4. spot curve')
+    Returns {"snapshot": {2: float, 5: float, ...}, "history": [{date, y2, y5, y10, y20, y30}, ...]}
+    """
+    import io, zipfile
+
+    IADB_URL = (
+        "https://www.bankofengland.co.uk/boeapps/database/_iadb-fromshowcolumns.asp"
+        "?csv.x=yes&Datefrom=01/Jan/2021&Dateto=31/Dec/2026"
+        "&SeriesCodes=IUDSNZC,IUDMNZC,IUDLNZC&CSVF=TT&UsingCodes=Y&VPD=Y&VFD=N"
+    )
+    ZIP_URL = (
+        "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/glcnominalddata.zip"
+    )
+    HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+    # ── IADB: 5Y, 10Y, 20Y ───────────────────────────────────────────────────
+    iadb_data = {5: {}, 10: {}, 20: {}}
+    try:
+        r = requests.get(IADB_URL, timeout=20, headers=HEADERS)
+        r.raise_for_status()
+        lines = r.text.splitlines()
+        # Find the data section (after blank line separator)
+        data_start = 0
+        for i, line in enumerate(lines):
+            if line.strip() == "":
+                data_start = i + 1
+                break
+        if data_start == 0:
+            data_start = 1  # fallback: skip just the header row
+
+        col_map = {}  # column_index -> maturity
+        for i, line in enumerate(lines[data_start:]):
+            parts = [p.strip().strip('"') for p in line.split(",")]
+            if i == 0:
+                # Header row: DATE, IUDSNZC, IUDMNZC, IUDLNZC
+                for j, col in enumerate(parts):
+                    if col == "IUDSNZC":  col_map[j] = 5
+                    elif col == "IUDMNZC": col_map[j] = 10
+                    elif col == "IUDLNZC": col_map[j] = 20
+                continue
+            if len(parts) < 2 or not parts[0]:
+                continue
+            try:
+                dt = datetime.strptime(parts[0], "%d %b %Y")
+                date_str = dt.strftime("%Y-%m-%d")
+                for j, maturity in col_map.items():
+                    if j < len(parts) and parts[j]:
+                        try:
+                            iadb_data[maturity][date_str] = float(parts[j])
+                        except ValueError:
+                            pass
+            except ValueError:
+                continue
+    except Exception as e:
+        print(f"[market] BoE IADB gilt fetch failed: {e}")
+
+    # ── Zip: 2Y and 30Y ──────────────────────────────────────────────────────
+    zip_data = {2: {}, 30: {}}
+    try:
+        import openpyxl
+        r = requests.get(ZIP_URL, timeout=60, headers=HEADERS)
+        r.raise_for_status()
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        # Find the most recent xlsx file
+        xlsx_names = sorted([n for n in zf.namelist() if n.endswith(".xlsx")])
+        if not xlsx_names:
+            raise ValueError("No xlsx files found in zip")
+        latest = xlsx_names[-1]
+        wb = openpyxl.load_workbook(io.BytesIO(zf.read(latest)), read_only=True, data_only=True)
+        ws = wb["4. spot curve"]
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            raise ValueError("Empty sheet")
+        # Row 0 is header — find columns for 2.0 and 30.0 years
+        header = rows[0]
+        col_2y  = next((i for i, h in enumerate(header) if h is not None and abs(float(h) - 2.0)  < 0.01), None) if any(isinstance(h, (int, float)) for h in header) else None
+        col_30y = next((i for i, h in enumerate(header) if h is not None and abs(float(h) - 30.0) < 0.01), None) if any(isinstance(h, (int, float)) for h in header) else None
+        for row in rows[1:]:
+            if not row or row[0] is None:
+                continue
+            try:
+                # Date column (column 0) may be a datetime object or string
+                cell_date = row[0]
+                if hasattr(cell_date, "strftime"):
+                    date_str = cell_date.strftime("%Y-%m-%d")
+                else:
+                    dt = datetime.strptime(str(cell_date).strip(), "%Y-%m-%d")
+                    date_str = dt.strftime("%Y-%m-%d")
+                # Only keep last 5 years
+                if date_str < "2021-01-01":
+                    continue
+                if col_2y is not None and col_2y < len(row) and row[col_2y] is not None:
+                    try:
+                        zip_data[2][date_str] = float(row[col_2y])
+                    except (ValueError, TypeError):
+                        pass
+                if col_30y is not None and col_30y < len(row) and row[col_30y] is not None:
+                    try:
+                        zip_data[30][date_str] = float(row[col_30y])
+                    except (ValueError, TypeError):
+                        pass
+            except (ValueError, TypeError, AttributeError):
+                continue
+    except Exception as e:
+        print(f"[market] BoE zip gilt fetch failed: {e}")
+
+    # ── Merge all series ──────────────────────────────────────────────────────
+    all_series = {
+        2:  zip_data[2],
+        5:  iadb_data[5],
+        10: iadb_data[10],
+        20: iadb_data[20],
+        30: zip_data[30],
+    }
+
+    if not any(all_series.values()):
+        return {"snapshot": {}, "history": []}
+
+    # Snapshot: latest value per maturity
+    snapshot = {}
+    for maturity, rows_dict in all_series.items():
+        if rows_dict:
+            snapshot[maturity] = rows_dict[max(rows_dict.keys())]
+
+    # History: list of {date, y2, y5, y10, y20, y30}
+    all_dates = sorted(set(d for rows_dict in all_series.values() for d in rows_dict))
+    history = []
+    for date in all_dates:
+        row = {"date": date}
+        for m in [2, 5, 10, 20, 30]:
+            row[f"y{m}"] = all_series[m].get(date)
+        if any(v is not None for k, v in row.items() if k != "date"):
+            history.append(row)
+
+    return {"snapshot": snapshot, "history": history}
+
+def _fetch_cnn_fg():
+    """Fetch CNN Fear & Greed Index via the fear-and-greed PyPI package."""
+    try:
+        import fear_and_greed
+        result = fear_and_greed.get()
+        return {
+            "value": round(float(result.value), 1),
+            "description": result.description,
+            "last_update": result.last_update.isoformat() if result.last_update else None,
+        }
+    except Exception as e:
+        print(f"[market] CNN fear-greed fetch failed: {e}")
+        return {"value": None, "description": None, "last_update": None}
+
 @router.get("/sidebar")
 def sidebar():
     def compute():
@@ -368,11 +584,13 @@ def sidebar():
         avg_breadth = round(float(np.mean(breadth_values)), 4) if breadth_values else None
         vix_col = prices[VIX_TICKER].dropna() if VIX_TICKER in prices.columns else None
         vix_level = round(float(vix_col.iloc[-1]), 2) if vix_col is not None and len(vix_col) else None
+        cnn_fg = _cached("cnn_fear_greed", _fetch_cnn_fg)
         fg = _cached("fear_greed", _compute_fear_greed)
         return {
             "benchmarks": benchmarks,
             "sectors": sectors,
             "vix": vix_level,
+            "cnn_fear_greed": cnn_fg,
             "fear_greed": {
                 "score":           fg["score"],
                 "sentiment":       fg["sentiment"],
@@ -393,7 +611,7 @@ def rotation():
 
 def _compute_breadth():
     prices = _get_prices()
-    all_basket_tickers = [t for tickers in SECTOR_TICKERS.values() for t in tickers]
+    all_basket_tickers = BREADTH_TICKERS
 
     above_50 = 0
     total = 0
@@ -466,6 +684,9 @@ def _compute_breadth():
 
     return {
         "pct_above_50ma": pct_above,
+        "above_50ma": above_50,
+        "below_50ma": total - above_50,
+        "hl_universe": sum(1 for t in all_basket_tickers if t in prices.columns and len(prices[t].dropna()) >= 252),
         "advances": today_adv,
         "declines": today_dec,
         "unchanged": today_unch,
@@ -492,7 +713,7 @@ def _cross_asset_item(prices, ticker):
 def _gilt_vs_utilities_zscore(prices):
     """Z-score of (gilt yield - utilities basket price change) over 252 days.
     Negative z-score = gilts expensive vs utilities (bearish for utilities)."""
-    gilt_ticker = CROSS_ASSET_TICKERS["gilt_10y"]
+    gilt_ticker = GILT_ETF_TICKER
     util_tickers = SECTOR_TICKERS["Utilities"]
     if gilt_ticker not in prices.columns:
         return None
@@ -514,35 +735,24 @@ def _compute_cross_asset():
     prices = _get_prices()
     t = CROSS_ASSET_TICKERS
     gbpusd = _cross_asset_item(prices, t["gbpusd"])
-    gilt   = _cross_asset_item(prices, t["gilt_10y"])
     brent  = _cross_asset_item(prices, t["brent"])
     gold   = _cross_asset_item(prices, t["gold"])
-    vftse  = _cross_asset_item(prices, t["vftse"])
     zscore = _gilt_vs_utilities_zscore(prices)
-
-    # Simple bias labels
-    if vftse.get("value") is not None:
-        vftse["bias"] = "Low Vol — Risk-On" if vftse["value"] < 20 else ("High Vol — Risk-Off" if vftse["value"] > 30 else "Neutral")
-    else:
-        vftse["bias"] = None
-
-    if gilt.get("pct_change") is not None:
-        gilt["bias"] = "Bearish (yields rising)" if gilt["pct_change"] > 0 else "Bullish (yields falling)"
-    else:
-        gilt["bias"] = None
 
     return {
         "gbpusd":            gbpusd,
-        "gilt_10y":          gilt,
         "brent":             brent,
         "gold":              gold,
-        "vftse":             vftse,
         "gilt_vs_utilities": {"zscore": zscore, "bias": "Gilts expensive vs Utilities" if zscore is not None and zscore < -1 else None},
     }
 
 @router.get("/cross-asset")
 def cross_asset():
     return _cached("cross_asset", _compute_cross_asset)
+
+@router.get("/gilt-yields")
+def gilt_yields():
+    return _cached("gilt_yields", _fetch_boe_gilt_yields)
 
 @router.get("/fear-greed")
 def fear_greed():
