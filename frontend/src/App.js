@@ -212,7 +212,7 @@ function CompanyDetail({ symbol, onBack }) {
                     <tr key={k} style={{ borderBottom:'1px solid #334155' }}>
                       <td style={S.td}>{l}</td>
                       {annual.slice(-5).map(r=>(
-                        <td key={r.period_end_date} style={{ ...S.tdNum, color: r[k]<0?'#ef4444':'inherit' }}>
+                        <td key={r.period_end_date} style={{ ...S.tdNum, color: r[k]<0?'#ef4444':'#ccc' }}>
                           {r[k] ? '£'+(r[k]/1e9).toFixed(2)+'B' : '—'}
                         </td>
                       ))}
@@ -339,28 +339,72 @@ function CompanyDetail({ symbol, onBack }) {
   );
 }
 
+// ── Hybrid select (presets + custom input) ────────────────────────────────────
+function HybridSelect({ selectMode, onSelectChange, onCustomCommit, children, placeholder, inputWidth = 80 }) {
+  const [draft, setDraft] = useState('');
+  const isCustom = selectMode === 'custom';
+
+  const commit = () => {
+    const n = parseFloat(draft);
+    if (!isNaN(n)) onCustomCommit(n);
+  };
+
+  return (
+    <div style={{ display:'flex', gap:4, alignItems:'center' }}>
+      <select
+        style={S.select}
+        value={selectMode}
+        onChange={e => {
+          setDraft('');
+          onSelectChange(e.target.value);
+        }}
+      >
+        {children}
+        <option value="custom">Custom…</option>
+      </select>
+      {isCustom && (
+        <input
+          type="number"
+          placeholder={placeholder}
+          value={draft}
+          style={{ ...S.select, width:inputWidth, padding:'8px 8px' }}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => e.key === 'Enter' && commit()}
+          autoFocus
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Screener ──────────────────────────────────────────────────────────────────
+const EMPTY_FILTERS = { sector:'', ftse_index:'', min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
+const EMPTY_MODES   = { min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
+
 function Screener({ onSelect }) {
-  const [filters, setFilters]     = useState({});
+  const [filters, setFilters]       = useState(EMPTY_FILTERS);
+  const [selectModes, setSelectModes] = useState(EMPTY_MODES);
   const [filterOpts, setFilterOpts] = useState({ sectors:[], countries:[] });
-  const [results, setResults]     = useState([]);
-  const [loading, setLoading]     = useState(false);
+  const [results, setResults]       = useState([]);
+  const [loading, setLoading]       = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     fetch(`${API}/filters`).then(r=>r.json()).then(setFilterOpts);
-    runScreener({});
+    runScreener(EMPTY_FILTERS);
   }, []);
 
   const runScreener = useCallback((f) => {
     setLoading(true);
     const p = new URLSearchParams();
-    if (f.sector)            p.set('sector', f.sector);
-    if (f.country)           p.set('country', f.country);
-    if (f.ftse_index)        p.set('ftse_index', f.ftse_index);
-    if (f.min_market_cap)      p.set('min_market_cap', f.min_market_cap);
-    if (f.max_pe)              p.set('max_pe', f.max_pe);
-    if (f.min_roe)             p.set('min_roe', f.min_roe);
-    if (f.min_revenue_growth)  p.set('min_revenue_growth', f.min_revenue_growth);
+    if (f.sector)             p.set('sector', f.sector);
+    if (f.country)            p.set('country', f.country);
+    if (f.ftse_index)         p.set('ftse_index', f.ftse_index);
+    if (f.min_market_cap)     p.set('min_market_cap', f.min_market_cap);
+    if (f.max_pe)             p.set('max_pe', f.max_pe);
+    if (f.min_roe)            p.set('min_roe', f.min_roe);
+    if (f.min_revenue_growth) p.set('min_revenue_growth', f.min_revenue_growth);
     p.set('limit', 350);
     fetch(`${API}/screener?${p}`)
       .then(r=>r.json())
@@ -368,11 +412,33 @@ function Screener({ onSelect }) {
       .catch(()=>setLoading(false));
   }, []);
 
-  const update = (k,v) => {
+  const update = (k, v) => {
     const f = { ...filters, [k]: v };
     setFilters(f);
     runScreener(f);
   };
+
+  // Called when a HybridSelect dropdown changes (preset or 'custom')
+  const handleSelectMode = (key, mode) => {
+    setSelectModes(m => ({ ...m, [key]: mode }));
+    if (mode !== 'custom') update(key, mode); // preset value — apply immediately
+    else update(key, '');                      // custom selected — clear filter until value typed
+  };
+
+  // Called when a custom input value is committed (blur / Enter)
+  const handleCustomCommit = (key, rawValue, parse) => {
+    const apiValue = String(parse(rawValue));
+    update(key, apiValue);
+  };
+
+  const clearFilters = () => {
+    setFilters(EMPTY_FILTERS);
+    setSelectModes(EMPTY_MODES);
+    runScreener(EMPTY_FILTERS);
+  };
+
+  const hasActiveFilters = Object.values(filters).some(v => v !== '');
+  const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth;
 
   return (
     <div>
@@ -382,50 +448,96 @@ function Screener({ onSelect }) {
         <div style={{ background:'#334155', color:'#cbd5e1', borderRadius:20, padding:'2px 12px', fontSize:13, fontWeight:600 }}>{results.length} companies</div>
       </div>
 
-      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:20 }}>
-        <select style={S.select} onChange={e=>update('sector',e.target.value)}>
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8, alignItems:'center' }}>
+        <select style={S.select} value={filters.sector} onChange={e=>update('sector',e.target.value)}>
           <option value="">All Sectors</option>
           {filterOpts.sectors.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <select style={S.select} onChange={e=>update('ftse_index',e.target.value)}>
+        <select style={S.select} value={filters.ftse_index} onChange={e=>update('ftse_index',e.target.value)}>
           <option value="">FTSE All-Share</option>
           <option value="FTSE 100">FTSE 100</option>
           <option value="FTSE 250">FTSE 250</option>
           <option value="FTSE 350">FTSE 350</option>
           <option value="FTSE SmallCap">FTSE SmallCap</option>
         </select>
-        <select style={S.select} onChange={e=>update('min_market_cap',e.target.value)}>
+        <HybridSelect
+          selectMode={selectModes.min_market_cap}
+          onSelectChange={mode => handleSelectMode('min_market_cap', mode)}
+          onCustomCommit={v => handleCustomCommit('min_market_cap', v, n => Math.round(n * 1e9))}
+          placeholder="£B"
+          inputWidth={70}
+        >
           <option value="">Any Market Cap</option>
           <option value="1000000000">£1B+</option>
           <option value="10000000000">£10B+</option>
           <option value="50000000000">£50B+</option>
-        </select>
-        <select style={S.select} onChange={e=>update('max_pe',e.target.value)}>
-          <option value="">Any P/E</option>
-          <option value="15">P/E &lt; 15</option>
-          <option value="25">P/E &lt; 25</option>
-          <option value="40">P/E &lt; 40</option>
-        </select>
-        <select style={S.select} onChange={e=>update('min_roe',e.target.value)}>
-          <option value="">Any ROE</option>
-          <option value="0.1">ROE &gt; 10%</option>
-          <option value="0.15">ROE &gt; 15%</option>
-          <option value="0.2">ROE &gt; 20%</option>
-        </select>
-        <select style={S.select} onChange={e=>update('min_revenue_growth',e.target.value)}>
-          <option value="">Any Rev Growth</option>
-          <option value="0.05">Rev Growth &gt; 5%</option>
-          <option value="0.1">Rev Growth &gt; 10%</option>
-          <option value="0.2">Rev Growth &gt; 20%</option>
-        </select>
+        </HybridSelect>
+        <button
+          onClick={() => setShowAdvanced(v => !v)}
+          style={{
+            ...S.select,
+            cursor:'pointer',
+            color: (showAdvanced || hasAdvancedFilters) ? '#f97316' : '#888',
+            borderColor: hasAdvancedFilters ? '#f97316' : '#2a2a2a',
+          }}
+        >
+          Advanced {showAdvanced ? '▲' : '▼'}{hasAdvancedFilters ? ' ●' : ''}
+        </button>
+        {hasActiveFilters && (
+          <button onClick={clearFilters} style={{ ...S.select, cursor:'pointer', color:'#ef4444', borderColor:'#3a1a1a' }}>
+            Clear filters ✕
+          </button>
+        )}
       </div>
+
+      {showAdvanced && (
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8 }}>
+          <HybridSelect
+            selectMode={selectModes.max_pe}
+            onSelectChange={mode => handleSelectMode('max_pe', mode)}
+            onCustomCommit={v => handleCustomCommit('max_pe', v, n => n)}
+            placeholder="P/E"
+            inputWidth={65}
+          >
+            <option value="">Any P/E</option>
+            <option value="15">P/E &lt; 15</option>
+            <option value="25">P/E &lt; 25</option>
+            <option value="40">P/E &lt; 40</option>
+          </HybridSelect>
+          <HybridSelect
+            selectMode={selectModes.min_roe}
+            onSelectChange={mode => handleSelectMode('min_roe', mode)}
+            onCustomCommit={v => handleCustomCommit('min_roe', v, n => n / 100)}
+            placeholder="ROE %"
+            inputWidth={75}
+          >
+            <option value="">Any ROE</option>
+            <option value="0.1">ROE &gt; 10%</option>
+            <option value="0.15">ROE &gt; 15%</option>
+            <option value="0.2">ROE &gt; 20%</option>
+          </HybridSelect>
+          <HybridSelect
+            selectMode={selectModes.min_revenue_growth}
+            onSelectChange={mode => handleSelectMode('min_revenue_growth', mode)}
+            onCustomCommit={v => handleCustomCommit('min_revenue_growth', v, n => n / 100)}
+            placeholder="Growth %"
+            inputWidth={85}
+          >
+            <option value="">Any Rev Growth</option>
+            <option value="0.05">Rev Growth &gt; 5%</option>
+            <option value="0.1">Rev Growth &gt; 10%</option>
+            <option value="0.2">Rev Growth &gt; 20%</option>
+          </HybridSelect>
+        </div>
+      )}
+
 
       {loading ? <div style={S.loading}>Screening…</div> : (
         <div style={{ overflowX:'auto' }}>
           <table style={S.table}>
             <thead>
               <tr>
-                {[['Symbol',false],['Name',false],['Sector',false],['Index',false],['Mkt Cap',true],['Rev',true],['P/E',true],['P/B',true],['ROE',true],['ROIC',true],['Gross Margin',true],['Rev Growth',true],['D/E',true]].map(([h,num])=>(
+                {[['Symbol',false],['Name',false],['Sector',false],['Index',false],['Mkt Cap',true],['P/E',true],['P/B',true],['ROE',true],['Rev Growth',true],['D/E',true],['Momentum',true],['Quality',true],['Value',true]].map(([h,num])=>(
                   <th key={h} style={{ ...S.th, textAlign: num?'right':'left' }}>{h}</th>
                 ))}
               </tr>
@@ -441,14 +553,32 @@ function Screener({ onSelect }) {
                   <td style={{ ...S.td, color:'#64748b' }}>{r.sector?.slice(0,18)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.ftse_index?.replace('FTSE ','')}</td>
                   <td style={S.tdNum}>{fmt(r.market_cap,'currency')}</td>
-                  <td style={S.tdNum}>{fmt(r.revenue,'currency')}</td>
-                  <td style={{ ...S.tdNum, color: r.price_to_earnings<15?'#10b981':r.price_to_earnings>40?'#ef4444':'inherit' }}>{fmt(r.price_to_earnings,'ratio')}</td>
+                  <td style={{ ...S.tdNum, color: r.price_to_earnings<15?'#10b981':r.price_to_earnings>40?'#ef4444':'#ccc' }}>{fmt(r.price_to_earnings,'ratio')}</td>
                   <td style={S.tdNum}>{fmt(r.price_to_book,'ratio')}</td>
                   <td style={{ ...S.tdNum, color:gc(r.roe) }}>{fmt(r.roe,'pct')}</td>
-                  <td style={{ ...S.tdNum, color:gc(r.roic) }}>{fmt(r.roic,'pct')}</td>
-                  <td style={S.tdNum}>{fmt(r.gross_margin,'pct')}</td>
                   <td style={{ ...S.tdNum, color:gc(r.revenue_growth) }}>{fmt(r.revenue_growth,'pct')}</td>
-                  <td style={{ ...S.tdNum, color: r.debt_to_equity>2?'#ef4444':'inherit' }}>{fmt(r.debt_to_equity,'ratio')}</td>
+                  <td style={{ ...S.tdNum, color: r.debt_to_equity>2?'#ef4444':'#ccc' }}>{fmt(r.debt_to_equity,'ratio')}</td>
+                  <td style={{ ...S.tdNum,
+                    color: r.momentum_score == null ? '#444'
+                         : r.momentum_score >= 7    ? '#10b981'
+                         : r.momentum_score >= 4    ? '#f59e0b'
+                         :                            '#ef4444',
+                    fontWeight: 700,
+                  }}>{r.momentum_score ?? '—'}</td>
+                  <td style={{ ...S.tdNum,
+                    color: r.quality_score == null ? '#444'
+                         : r.quality_score >= 7    ? '#10b981'
+                         : r.quality_score >= 4    ? '#f59e0b'
+                         :                           '#ef4444',
+                    fontWeight: 700,
+                  }}>{r.quality_score ?? '—'}</td>
+                  <td style={{ ...S.tdNum,
+                    color: r.piotroski_score == null ? '#444'
+                         : r.piotroski_score >= 7   ? '#10b981'
+                         : r.piotroski_score >= 4   ? '#f59e0b'
+                         :                            '#ef4444',
+                    fontWeight: 700,
+                  }}>{r.piotroski_score ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -468,6 +598,8 @@ export default function App() {
   const [showSearch, setShowSearch] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [priceRefreshing, setPriceRefreshing] = useState(false);
+  const [priceToast, setPriceToast]           = useState(null);
 
   const doSearch = (q) => {
     setSearchQ(q);
@@ -488,6 +620,21 @@ export default function App() {
     setLastUpdated(new Date().toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }));
   };
 
+  const handlePriceRefresh = async () => {
+    setPriceRefreshing(true);
+    setPriceToast(null);
+    try {
+      const res = await fetch(`${API}/prices/refresh`, { method: 'POST' });
+      const data = await res.json();
+      setPriceToast({ ok: true, msg: `+${data.rows_added} rows (${data.duration_seconds}s)` });
+    } catch {
+      setPriceToast({ ok: false, msg: 'Price refresh failed' });
+    } finally {
+      setPriceRefreshing(false);
+      setTimeout(() => setPriceToast(null), 4000);
+    }
+  };
+
   const NAV_TABS = [
     { id: 'screener',    label: 'Screener'    },
     { id: 'rotation',    label: 'Rotation'    },
@@ -497,6 +644,7 @@ export default function App() {
   ];
 
   const showSidebar = page !== 'company';
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
     <div style={{ minHeight:'100vh', background:'#0a0a0a', fontFamily:'monospace' }}>
@@ -517,6 +665,27 @@ export default function App() {
         <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:12 }}>
           {lastUpdated && <span style={{ color:'#444', fontSize:10, fontFamily:'monospace' }}>Updated {lastUpdated}</span>}
           <button onClick={handleRefresh} style={{ background:'#1a1a1a', color:'#666', border:'1px solid #2a2a2a', padding:'4px 10px', borderRadius:2, fontFamily:'monospace', fontSize:10, cursor:'pointer' }}>↻</button>
+          <button
+            onClick={handlePriceRefresh}
+            disabled={priceRefreshing}
+            title="Refresh price history"
+            style={{
+              background: '#1a1a1a', color: priceRefreshing ? '#444' : '#666',
+              border: '1px solid #2a2a2a', padding: '4px 10px',
+              borderRadius: 2, fontFamily: 'monospace', fontSize: 10,
+              cursor: priceRefreshing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {priceRefreshing ? 'Refreshing…' : '↻ Prices'}
+          </button>
+          {priceToast && (
+            <span style={{
+              fontSize: 10, fontFamily: 'monospace',
+              color: priceToast.ok ? '#10b981' : '#ef4444',
+            }}>
+              {priceToast.msg}
+            </span>
+          )}
           <div style={{ position:'relative' }}>
             <input
               placeholder="Search ticker or company…"
@@ -543,7 +712,26 @@ export default function App() {
 
       {/* Body: sidebar + main */}
       <div style={{ display:'flex', maxWidth:1400, margin:'0 auto' }}>
-        {showSidebar && <Sidebar refreshKey={refreshKey} />}
+        {showSidebar && (
+          sidebarCollapsed ? (
+            <div style={{ width:28, flexShrink:0, borderRight:'1px solid #1e1e1e', position:'relative' }}>
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                title="Expand sidebar"
+                style={{ position:'sticky', top:80, width:28, height:48, background:'#141414', border:'none', borderRight:'1px solid #1e1e1e', color:'#555', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}
+              >›</button>
+            </div>
+          ) : (
+            <div style={{ position:'relative', flexShrink:0 }}>
+              <Sidebar refreshKey={refreshKey} />
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                title="Collapse sidebar"
+                style={{ position:'absolute', top:8, right:-14, width:28, height:28, background:'#141414', border:'1px solid #2a2a2a', borderRadius:'50%', color:'#888', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10 }}
+              >‹</button>
+            </div>
+          )
+        )}
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
           {page==='screener'    && <Screener onSelect={selectCompany} />}
           {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
