@@ -625,6 +625,7 @@ export default function App() {
     setPriceToast(null);
     try {
       const res = await fetch(`${API}/prices/refresh`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setPriceToast({ ok: true, msg: `+${data.rows_added} rows (${data.duration_seconds}s)` });
     } catch {
