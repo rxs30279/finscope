@@ -306,6 +306,68 @@ def _attach_piotroski(results):
     return results
 
 
+def _attach_risk_score(results):
+    """Add risk_score (1-10), altman_z, and volatility_annualised to each result row.
+
+    Fetches total_assets from annual_financials and price history in two bulk queries.
+    risk_score = blend of Altman Z component (60%) and volatility component (40%).
+    """
+    if not results:
+        return results
+
+    symbols = [r['symbol'] for r in results]
+
+    # 1. Fetch most recent total_assets per symbol from annual_financials
+    ta_rows = query("""
+        WITH ranked AS (
+            SELECT company_symbol, total_assets,
+                   ROW_NUMBER() OVER (PARTITION BY company_symbol ORDER BY period_end_date DESC) AS rn
+            FROM annual_financials
+            WHERE company_symbol = ANY(%s)
+        )
+        SELECT company_symbol, total_assets FROM ranked WHERE rn = 1
+    """, (symbols,))
+    total_assets_map = {r['company_symbol']: r['total_assets'] for r in ta_rows}
+
+    # 2. Fetch up to 252 most recent closes per symbol, oldest-first for log-return ordering
+    #    rn=1 is the latest date; ORDER BY rn DESC puts oldest (largest rn) first.
+    price_rows = query("""
+        WITH numbered AS (
+            SELECT symbol, close,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM price_history
+            WHERE symbol = ANY(%s)
+        )
+        SELECT symbol, close
+        FROM numbered
+        WHERE rn <= 252
+        ORDER BY symbol, rn DESC
+    """, (symbols,))
+
+    # Group closes by symbol (list is already oldest-first within each symbol)
+    closes_map = {}
+    for r in price_rows:
+        closes_map.setdefault(r['symbol'], []).append(float(r['close']))
+
+    # 3. Compute and attach scores
+    for r in results:
+        sym = r['symbol']
+        ta  = total_assets_map.get(sym)
+
+        z                = _altman_z(r, ta)
+        altman_component = _z_to_risk(z)
+
+        closes = closes_map.get(sym, [])
+        vol    = _annualised_vol(closes) if len(closes) >= 63 else None
+        vol_component = _vol_to_score(vol)
+
+        r['risk_score']            = _blend_risk(altman_component, vol_component)
+        r['altman_z']              = z
+        r['volatility_annualised'] = round(vol * 100, 1) if vol is not None else None
+
+    return results
+
+
 @app.get("/api/screener")
 def screener(
     sector: Optional[str]=None,

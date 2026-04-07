@@ -144,3 +144,74 @@ def test_blend_risk_clamped():
     # Should stay within 1-10
     assert _blend_risk(10, 10) == 10
     assert _blend_risk(1, 1) == 1
+
+
+# ── _attach_risk_score ────────────────────────────────────────────────────────
+
+from unittest.mock import patch
+
+
+def _make_result(symbol, **kwargs):
+    """Minimal screener result row."""
+    defaults = {
+        'symbol': symbol,
+        'market_cap': 5e9,
+        'revenue': 3e9,
+        'operating_margin': 0.25,
+        'price_to_book': 3.0,
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def test_attach_risk_score_empty():
+    from main import _attach_risk_score
+    assert _attach_risk_score([]) == []
+
+
+def test_attach_risk_score_attaches_fields():
+    from main import _attach_risk_score
+    results = [_make_result('SHEL.L')]
+
+    ta_rows = [{'company_symbol': 'SHEL.L', 'total_assets': 4e9}]
+    # 10 closes with mild upward drift — oldest first
+    price_rows = [{'symbol': 'SHEL.L', 'close': 100.0 + i * 0.1} for i in range(252)]
+
+    with patch('main.query', side_effect=[ta_rows, price_rows]):
+        _attach_risk_score(results)
+
+    r = results[0]
+    assert 'risk_score' in r
+    assert 'altman_z' in r
+    assert 'volatility_annualised' in r
+    assert r['risk_score'] is None or 1 <= r['risk_score'] <= 10
+
+
+def test_attach_risk_score_null_when_no_data():
+    from main import _attach_risk_score
+    results = [_make_result('SHEL.L')]
+
+    with patch('main.query', side_effect=[[], []]):
+        _attach_risk_score(results)
+
+    r = results[0]
+    assert r['risk_score'] is None
+    assert r['altman_z'] is None
+    assert r['volatility_annualised'] is None
+
+
+def test_attach_risk_score_vol_none_when_insufficient_history():
+    from main import _attach_risk_score
+    results = [_make_result('SHEL.L')]
+
+    ta_rows = [{'company_symbol': 'SHEL.L', 'total_assets': 4e9}]
+    # Only 10 closes — below the 63-row threshold
+    price_rows = [{'symbol': 'SHEL.L', 'close': 100.0 + i} for i in range(10)]
+
+    with patch('main.query', side_effect=[ta_rows, price_rows]):
+        _attach_risk_score(results)
+
+    r = results[0]
+    assert r['volatility_annualised'] is None
+    # risk_score should still be set (from Altman alone)
+    assert r['risk_score'] is not None
