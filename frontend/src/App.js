@@ -669,6 +669,7 @@ export default function App() {
   ];
 
   const showSidebar = page !== 'company';
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
     <div style={{ minHeight:'100vh', background:'#0a0a0a', fontFamily:'monospace' }}>
@@ -736,9 +737,13 @@ export default function App() {
 
       {/* Body: sidebar + main */}
       <div style={{ display:'flex', maxWidth:1400, margin:'0 auto' }}>
-        {showSidebar && (
+        {showSidebar && sidebarCollapsed && (
+          <button onClick={() => setSidebarCollapsed(false)} title="Expand sidebar"
+            style={{ position:'fixed', left:0, top:80, zIndex:200, background:'#141414', border:'1px solid #2a2a2a', borderLeft:'none', borderRadius:'0 4px 4px 0', color:'#555', fontSize:14, cursor:'pointer', padding:'8px 4px', lineHeight:1 }}>›</button>
+        )}
+        {showSidebar && !sidebarCollapsed && (
           <div style={{ position:'relative', flexShrink:0 }}>
-            <Sidebar refreshKey={refreshKey} />
+            <Sidebar refreshKey={refreshKey} onCollapse={() => setSidebarCollapsed(true)} />
           </div>
         )}
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
