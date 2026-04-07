@@ -26,7 +26,7 @@ function CompanyDetail({ symbol, onBack }) {
   const [snap, setSnap]       = useState(null);
   const [annual, setAnnual]   = useState([]);
   const [quarterly, setQuarterly] = useState([]);
-  const [tab, setTab]         = useState('overview');
+  const [tab, setTab]         = useState('chart');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -75,7 +75,7 @@ function CompanyDetail({ symbol, onBack }) {
     eps:        r.eps_diluted,
   }));
 
-  const tabs = ['overview','financials','valuation','health','growth'];
+  const tabs = ['chart','overview','financials','valuation','health','growth'];
 
   return (
     <div>
@@ -118,6 +118,13 @@ function CompanyDetail({ symbol, onBack }) {
           </button>
         ))}
       </div>
+
+      {/* CHART */}
+      {tab==='chart' && (
+        <div>
+          <PriceChart symbol={symbol} />
+        </div>
+      )}
 
       {/* OVERVIEW */}
       {tab==='overview' && (
@@ -406,6 +413,98 @@ function HybridSelect({ selectMode, onSelectChange, onCustomCommit, children, pl
           autoFocus
         />
       )}
+    </div>
+  );
+}
+
+// ── PriceChart ────────────────────────────────────────────────────────────────
+function PriceChart({ symbol }) {
+  const [priceData, setPriceData] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [range, setRange]         = useState('1Y');
+  const [showMA20, setShowMA20]   = useState(true);
+  const [showMA50, setShowMA50]   = useState(true);
+
+  useEffect(() => {
+    if (!symbol) return;
+    setLoading(true);
+    fetch(`${API}/prices/refresh/${symbol}`, { method: 'POST' })
+      .then(() => fetch(`${API}/prices/${symbol}`))
+      .then(r => r.json())
+      .then(data => { setPriceData(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [symbol]);
+
+  const computeMA = (data, n) =>
+    data.map((_, i) => {
+      if (i < n - 1) return null;
+      const slice = data.slice(i - n + 1, i + 1);
+      return Math.round(slice.reduce((s, d) => s + d.close, 0) / n * 100) / 100;
+    });
+
+  const ma20 = computeMA(priceData, 20);
+  const ma50 = computeMA(priceData, 50);
+
+  const RANGE_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, 'All': null };
+  const cutoffDays = RANGE_DAYS[range];
+  const latest = priceData.length ? new Date(priceData[priceData.length - 1].date) : new Date();
+  const cutoff  = cutoffDays ? new Date(latest.getTime() - cutoffDays * 86400000) : null;
+
+  const chartData = priceData
+    .map((d, i) => ({ date: d.date, close: d.close, ma20: ma20[i], ma50: ma50[i] }))
+    .filter(d => !cutoff || new Date(d.date) >= cutoff);
+
+  const pillBase = {
+    border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 10px',
+    fontSize: 12, cursor: 'pointer', fontFamily: 'monospace', background: 'none',
+  };
+  const rangePill = active => ({ ...pillBase, ...(active ? { background:'#3730a3', color:'#e0e7ff', borderColor:'#4338ca' } : { color:'#64748b' }) });
+  const ma20Pill  = active => ({ ...pillBase, ...(active ? { background:'#78350f', color:'#fde68a', borderColor:'#92400e' } : { color:'#64748b' }) });
+  const ma50Pill  = active => ({ ...pillBase, ...(active ? { background:'#4c1d95', color:'#ddd6fe', borderColor:'#5b21b6' } : { color:'#64748b' }) });
+
+  if (loading) return (
+    <div style={{ height:400, display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b', fontFamily:'monospace' }}>
+      Loading…
+    </div>
+  );
+  if (!priceData.length) return (
+    <div style={{ height:400, display:'flex', alignItems:'center', justifyContent:'center', color:'#64748b' }}>
+      No price history available
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap', alignItems:'center' }}>
+        <div style={{ display:'flex', gap:4 }}>
+          {['1M','3M','6M','1Y','3Y','All'].map(r => (
+            <button key={r} onClick={() => setRange(r)} style={rangePill(r === range)}>{r}</button>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:4, marginLeft:8 }}>
+          <button onClick={() => setShowMA20(v => !v)} style={ma20Pill(showMA20)}>MA20</button>
+          <button onClick={() => setShowMA50(v => !v)} style={ma50Pill(showMA50)}>MA50</button>
+        </div>
+      </div>
+      <ResponsiveContainer width="100%" height={380}>
+        <AreaChart data={chartData} margin={{ top:5, right:10, bottom:5, left:0 }}>
+          <defs>
+            <linearGradient id="gPrice" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.3}/>
+              <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+            </linearGradient>
+          </defs>
+          <XAxis dataKey="date" tick={{ fontSize:10 }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize:10 }} domain={['auto','auto']} width={60} />
+          <Tooltip
+            contentStyle={S.tooltip}
+            formatter={(val, name) => [val != null ? val.toFixed(2) : '—', name]}
+          />
+          <Area type="monotone" dataKey="close" stroke="#6366f1" fill="url(#gPrice)" strokeWidth={2} dot={false} name="Close" />
+          {showMA20 && <Line type="monotone" dataKey="ma20" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="MA20" connectNulls={false} />}
+          {showMA50 && <Line type="monotone" dataKey="ma50" stroke="#a855f7" strokeWidth={1.5} dot={false} name="MA50" connectNulls={false} />}
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }
