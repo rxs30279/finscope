@@ -72,3 +72,25 @@ def test_attach_momentum_empty_results():
     import prices
     result = prices._attach_momentum([])
     assert result == []
+
+
+# ── GET /api/prices/{symbol} ──────────────────────────────────────────────────
+
+def test_get_prices_returns_list(client):
+    rows = [
+        {'date': date(2024, 1, 2), 'close': 310.5},
+        {'date': date(2024, 1, 3), 'close': 315.0},
+    ]
+    with patch('prices.query', return_value=rows):
+        r = client.get('/api/prices/SHEL.L')
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 2
+    assert data[0]['date'] == '2024-01-02'
+    assert data[0]['close'] == 310.5
+
+
+def test_get_prices_404_when_no_data(client):
+    with patch('prices.query', return_value=[]):
+        r = client.get('/api/prices/UNKNOWN.L')
+    assert r.status_code == 404

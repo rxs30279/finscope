@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 import yfinance as yf
 import psycopg2
 import psycopg2.extras
@@ -195,3 +195,15 @@ def refresh_prices():
         "rows_added": total_rows,
         "duration_seconds": round(time.time() - t0, 1),
     }
+
+
+@router.get("/api/prices/{symbol}")
+def get_prices(symbol: str):
+    """Return full close history for a symbol, oldest first."""
+    rows = query(
+        "SELECT date, close FROM price_history WHERE symbol = %s ORDER BY date ASC",
+        (symbol,)
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="No price history")
+    return [{"date": str(r["date"]), "close": float(r["close"])} for r in rows]
