@@ -1,14 +1,18 @@
 export const API = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api';
 
-export const fmt = (v, type = 'number') => {
+export const currSym = (code) =>
+  code === 'USD' ? '$' : code === 'EUR' ? '\u20AC' : '\u00A3';
+
+export const fmt = (v, type = 'number', currency = 'GBP') => {
   if (v === null || v === undefined || (typeof v === 'number' && isNaN(v))) return '—';
   if (type === 'currency') {
+    const sym = currSym(currency);
     const abs = Math.abs(v);
     const neg = v < 0 ? '-' : '';
-    if (abs >= 1e12) return neg + '\u00A3' + (abs/1e12).toFixed(2) + 'T';
-    if (abs >= 1e9)  return neg + '\u00A3' + (abs/1e9).toFixed(2) + 'B';
-    if (abs >= 1e6)  return neg + '\u00A3' + (abs/1e6).toFixed(2) + 'M';
-    return neg + '\u00A3' + abs.toLocaleString();
+    if (abs >= 1e12) return neg + sym + (abs/1e12).toFixed(2) + 'T';
+    if (abs >= 1e9)  return neg + sym + (abs/1e9).toFixed(2) + 'B';
+    if (abs >= 1e6)  return neg + sym + (abs/1e6).toFixed(2) + 'M';
+    return neg + sym + abs.toLocaleString();
   }
   if (type === 'pct') return `${(v*100).toFixed(1)}%`;
   if (type === 'pct_direct') return `${v.toFixed(1)}%`;

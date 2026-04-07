@@ -3,7 +3,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
-import { API, fmt, gc } from './utils';
+import { API, fmt, gc, currSym } from './utils';
 import Sidebar from './components/Sidebar';
 import RotationTab from './components/RotationTab';
 import BreadthTab from './components/BreadthTab';
@@ -47,6 +47,9 @@ function CompanyDetail({ symbol, onBack }) {
 
   if (loading) return <div style={S.loading}>Loading {symbol}…</div>;
   if (!snap)   return <div style={S.loading}>No data for {symbol}</div>;
+
+  const fcur = meta?.financial_currency || 'GBP';
+  const sym  = currSym(fcur);
 
   const annualChart = annual.map(r => ({
     year:           r.period_end_date?.slice(0,4),
@@ -101,9 +104,9 @@ function CompanyDetail({ symbol, onBack }) {
           )}
         </div>
         <div style={{ textAlign:'right' }}>
-          <div style={{ fontSize:30, fontFamily:'DM Serif Display,serif', color:'#f1f5f9' }}>{fmt(snap.market_cap,'currency')}</div>
+          <div style={{ fontSize:30, fontFamily:'DM Serif Display,serif', color:'#f1f5f9' }}>{fmt(snap.market_cap,'currency',fcur)}</div>
           <div style={{ fontSize:12, color:'#64748b' }}>Market Cap</div>
-          {snap.enterprise_value && <div style={{ fontSize:13, color:'#94a3b8', marginTop:2 }}>EV: {fmt(snap.enterprise_value,'currency')}</div>}
+          {snap.enterprise_value && <div style={{ fontSize:13, color:'#94a3b8', marginTop:2 }}>EV: {fmt(snap.enterprise_value,'currency',fcur)}</div>}
         </div>
       </div>
 
@@ -120,10 +123,10 @@ function CompanyDetail({ symbol, onBack }) {
       {tab==='overview' && (
         <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:10 }}>
-            <MetricCard label="Revenue"       value={fmt(snap.revenue,'currency')} />
-            <MetricCard label="Net Income"    value={fmt(snap.net_income,'currency')} color={snap.net_income>0?'#10b981':'#ef4444'} />
-            <MetricCard label="EBITDA"        value={fmt(snap.ebitda,'currency')} />
-            <MetricCard label="Free Cash Flow"value={fmt(snap.fcf,'currency')} color={snap.fcf>0?'#10b981':'#ef4444'} />
+            <MetricCard label="Revenue"       value={fmt(snap.revenue,'currency',fcur)} />
+            <MetricCard label="Net Income"    value={fmt(snap.net_income,'currency',fcur)} color={snap.net_income>0?'#10b981':'#ef4444'} />
+            <MetricCard label="EBITDA"        value={fmt(snap.ebitda,'currency',fcur)} />
+            <MetricCard label="Free Cash Flow"value={fmt(snap.fcf,'currency',fcur)} color={snap.fcf>0?'#10b981':'#ef4444'} />
             <MetricCard label="P/E"           value={fmt(snap.price_to_earnings,'ratio')} />
             <MetricCard label="P/B"           value={fmt(snap.price_to_book,'ratio')} />
             <MetricCard label="ROE"           value={fmt(snap.roe,'pct')} color={gc(snap.roe)} />
@@ -134,13 +137,13 @@ function CompanyDetail({ symbol, onBack }) {
             <MetricCard label="Current Ratio" value={fmt(snap.current_ratio,'ratio')} />
           </div>
           <div style={S.card}>
-            <h3 style={S.cardTitle}>Revenue & Net Income (Annual £B)</h3>
+            <h3 style={S.cardTitle}>{`Revenue & Net Income (Annual ${sym}B)`}</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
                 <XAxis dataKey="year" tick={{ fontSize:11, fill:'#666', fontFamily:'monospace' }} />
                 <YAxis tick={{ fontSize:11, fill:'#666', fontFamily:'monospace' }} />
-                <Tooltip formatter={v=>'£'+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
+                <Tooltip formatter={v=>sym+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
                 <Bar dataKey="revenue"    fill="#f97316" radius={[2,2,0,0]} name="Revenue" />
                 <Bar dataKey="net_income" fill="#10b981" radius={[2,2,0,0]} name="Net Income" />
               </BarChart>
@@ -153,7 +156,7 @@ function CompanyDetail({ symbol, onBack }) {
       {tab==='financials' && (
         <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
           <div style={S.card}>
-            <h3 style={S.cardTitle}>Revenue, EBITDA & FCF (Annual £B)</h3>
+            <h3 style={S.cardTitle}>{`Revenue, EBITDA & FCF (Annual ${sym}B)`}</h3>
             <ResponsiveContainer width="100%" height={250}>
               <AreaChart data={annualChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
                 <defs>
@@ -163,7 +166,7 @@ function CompanyDetail({ symbol, onBack }) {
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                 <XAxis dataKey="year" tick={{ fontSize:11 }} />
                 <YAxis tick={{ fontSize:11 }} />
-                <Tooltip formatter={v=>'£'+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
+                <Tooltip formatter={v=>sym+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
                 <Area type="monotone" dataKey="revenue"    stroke="#6366f1" fill="url(#gR)" strokeWidth={2} name="Revenue" />
                 <Area type="monotone" dataKey="ebitda"     stroke="#10b981" fill="url(#gE)" strokeWidth={2} name="EBITDA" />
                 <Line type="monotone" dataKey="fcf"        stroke="#f59e0b" strokeWidth={2} dot={false} name="FCF" />
@@ -172,13 +175,13 @@ function CompanyDetail({ symbol, onBack }) {
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
             <div style={S.card}>
-              <h3 style={S.cardTitle}>Quarterly Revenue (£B)</h3>
+              <h3 style={S.cardTitle}>{`Quarterly Revenue (${sym}B)`}</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={qChart} margin={{ top:5,right:10,bottom:5,left:0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="q" tick={{ fontSize:10 }} />
                   <YAxis tick={{ fontSize:11 }} />
-                  <Tooltip formatter={v=>'£'+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
+                  <Tooltip formatter={v=>sym+(v?.toFixed(2))+'B'} contentStyle={S.tooltip} />
                   <Bar dataKey="revenue" fill="#6366f1" radius={[4,4,0,0]} name="Revenue" />
                 </BarChart>
               </ResponsiveContainer>
@@ -190,7 +193,7 @@ function CompanyDetail({ symbol, onBack }) {
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize:11 }} />
                   <YAxis tick={{ fontSize:11 }} />
-                  <Tooltip formatter={v=>'£'+(v?.toFixed(2))} contentStyle={S.tooltip} />
+                  <Tooltip formatter={v=>sym+(v?.toFixed(2))} contentStyle={S.tooltip} />
                   <ReferenceLine y={0} stroke="#334155" />
                   <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={{ r:4, fill:'#6366f1' }} name="EPS" />
                 </LineChart>
@@ -198,7 +201,7 @@ function CompanyDetail({ symbol, onBack }) {
             </div>
           </div>
           <div style={S.card}>
-            <h3 style={S.cardTitle}>Income Statement (£B)</h3>
+            <h3 style={S.cardTitle}>{`Income Statement (${sym}B)`}</h3>
             <div style={{ overflowX:'auto' }}>
               <table style={S.table}>
                 <thead>
@@ -213,7 +216,7 @@ function CompanyDetail({ symbol, onBack }) {
                       <td style={S.td}>{l}</td>
                       {annual.slice(-5).map(r=>(
                         <td key={r.period_end_date} style={{ ...S.tdNum, color: r[k]<0?'#ef4444':'#ccc' }}>
-                          {r[k] ? '£'+(r[k]/1e9).toFixed(2)+'B' : '—'}
+                          {r[k] ? sym+(r[k]/1e9).toFixed(2)+'B' : '—'}
                         </td>
                       ))}
                     </tr>
@@ -275,7 +278,7 @@ function CompanyDetail({ symbol, onBack }) {
               ['Debt/Assets',snap.debt_to_assets,'ratio'],['Cash',snap.cash_and_equiv,'currency'],
               ['Net Debt',snap.net_debt,'currency'],['Working Capital',snap.working_capital,'currency'],
               ['Interest Coverage',snap.interest_coverage,'ratio'],['Book Value',snap.book_value,'currency'],
-            ].map(([l,v,t])=><MetricCard key={l} label={l} value={fmt(v,t)} />)}
+            ].map(([l,v,t])=><MetricCard key={l} label={l} value={fmt(v,t,fcur)} />)}
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
             <div style={S.card}>
@@ -552,7 +555,7 @@ function Screener({ onSelect }) {
                   <td style={S.td}>{r.name?.slice(0,26)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.sector?.slice(0,18)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.ftse_index?.replace('FTSE ','')}</td>
-                  <td style={S.tdNum}>{fmt(r.market_cap,'currency')}</td>
+                  <td style={S.tdNum}>{fmt(r.market_cap,'currency',r.financial_currency)}</td>
                   <td style={{ ...S.tdNum, color: r.price_to_earnings<15?'#10b981':r.price_to_earnings>40?'#ef4444':'#ccc' }}>{fmt(r.price_to_earnings,'ratio')}</td>
                   <td style={S.tdNum}>{fmt(r.price_to_book,'ratio')}</td>
                   <td style={{ ...S.tdNum, color:gc(r.roe) }}>{fmt(r.roe,'pct')}</td>
