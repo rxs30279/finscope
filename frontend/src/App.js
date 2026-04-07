@@ -621,23 +621,13 @@ function Screener({ onSelect, highlightSymbol }) {
                          :                            '#ef4444',
                     fontWeight: 700,
                   }}>{r.piotroski_score ?? '—'}</td>
-                  <td style={{ ...S.tdNum }}>
-                    {r.risk_score == null ? <span style={{ color:'#444' }}>—</span> : (
-                      <span style={{
-                        display: 'inline-block',
-                        padding: '1px 7px',
-                        borderRadius: 4,
-                        fontWeight: 700,
-                        fontSize: 12,
-                        background: r.risk_score <= 3 ? '#14532d'
-                                  : r.risk_score <= 6 ? '#78350f'
-                                  :                    '#7f1d1d',
-                        color:      r.risk_score <= 3 ? '#4ade80'
-                                  : r.risk_score <= 6 ? '#fbbf24'
-                                  :                    '#f87171',
-                      }}>{r.risk_score}</span>
-                    )}
-                  </td>
+                  <td style={{ ...S.tdNum,
+                    color: r.risk_score == null ? '#444'
+                         : r.risk_score <= 3    ? '#10b981'
+                         : r.risk_score <= 6    ? '#f59e0b'
+                         :                        '#ef4444',
+                    fontWeight: 700,
+                  }}>{r.risk_score ?? '—'}</td>
                 </tr>
                 );
               })}
