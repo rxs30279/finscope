@@ -76,7 +76,12 @@ def company(symbol: str = Query(...)):
 def snapshot(symbol: str = Query(...)):
     rows = query("SELECT * FROM ttm_financials WHERE company_symbol = %s", (symbol,))
     if not rows: raise HTTPException(404, "No data")
-    return rows[0]
+    row = rows[0]
+    # _attach_risk_score expects a 'symbol' key (screener convention)
+    row['symbol'] = symbol
+    _attach_risk_score([row])
+    row.pop('symbol', None)
+    return row
 
 @app.get("/api/annual")
 def annual(symbol: str = Query(...)):
