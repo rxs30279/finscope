@@ -385,7 +385,7 @@ function HybridSelect({ selectMode, onSelectChange, onCustomCommit, children, pl
 const EMPTY_FILTERS = { sector:'', ftse_index:'', min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
 const EMPTY_MODES   = { min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
 
-function Screener({ onSelect }) {
+function Screener({ onSelect, highlightSymbol }) {
   const [filters, setFilters]       = useState(EMPTY_FILTERS);
   const [selectModes, setSelectModes] = useState(EMPTY_MODES);
   const [filterOpts, setFilterOpts] = useState({ sectors:[], countries:[] });
@@ -397,6 +397,13 @@ function Screener({ onSelect }) {
     fetch(`${API}/filters`).then(r=>r.json()).then(setFilterOpts);
     runScreener(EMPTY_FILTERS);
   }, []);
+
+  useEffect(() => {
+    if (highlightSymbol) {
+      const el = document.getElementById('row-' + highlightSymbol);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlightSymbol, results]);
 
   const runScreener = useCallback((f) => {
     setLoading(true);
@@ -546,11 +553,14 @@ function Screener({ onSelect }) {
               </tr>
             </thead>
             <tbody>
-              {results.map((r,i) => (
-                <tr key={r.symbol} onClick={()=>onSelect(r.symbol)}
-                  style={{ background: i%2===0?'#1e293b':'#162032', cursor:'pointer' }}
+              {results.map((r,i) => {
+                const isHighlighted = r.symbol === highlightSymbol;
+                const baseBg = isHighlighted ? '#2d1e00' : i%2===0 ? '#1e293b' : '#162032';
+                return (
+                <tr key={r.symbol} id={'row-'+r.symbol} onClick={()=>onSelect(r.symbol)}
+                  style={{ background: baseBg, cursor:'pointer', boxShadow: isHighlighted ? 'inset 3px 0 0 #f97316' : 'none' }}
                   onMouseEnter={e=>e.currentTarget.style.background='#334155'}
-                  onMouseLeave={e=>e.currentTarget.style.background=i%2===0?'#1e293b':'#162032'}>
+                  onMouseLeave={e=>e.currentTarget.style.background=baseBg}>
                   <td style={{ ...S.td, fontFamily:'monospace', fontWeight:700, color:'#818cf8' }}>{r.symbol.replace('.L','')}</td>
                   <td style={S.td}>{r.name?.slice(0,26)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.sector?.slice(0,18)}</td>
@@ -583,7 +593,8 @@ function Screener({ onSelect }) {
                     fontWeight: 700,
                   }}>{r.piotroski_score ?? '—'}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -596,6 +607,7 @@ function Screener({ onSelect }) {
 export default function App() {
   const [page, setPage]           = useState('screener'); // screener | rotation | breadth | cross-asset | signals | company
   const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const [highlightSymbol, setHighlightSymbol] = useState(null);
   const [searchQ, setSearchQ]     = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
@@ -613,6 +625,15 @@ export default function App() {
   const selectCompany = (sym) => {
     setSelectedSymbol(sym);
     setPage('company');
+    setHighlightSymbol(null);
+    setShowSearch(false);
+    setSearchQ('');
+    setSearchResults([]);
+  };
+
+  const highlightInScreener = (sym) => {
+    setHighlightSymbol(sym);
+    setPage('screener');
     setShowSearch(false);
     setSearchQ('');
     setSearchResults([]);
@@ -702,7 +723,7 @@ export default function App() {
             {showSearch && searchResults.length>0 && (
               <div style={S.dropdown}>
                 {searchResults.map(r=>(
-                  <div key={r.symbol} onClick={()=>selectCompany(r.symbol)} style={S.dropdownItem}>
+                  <div key={r.symbol} onClick={()=>highlightInScreener(r.symbol)} style={S.dropdownItem}>
                     <span style={{ fontFamily:'monospace', fontWeight:700, color:'#818cf8', minWidth:70 }}>{r.symbol.replace('.L','')}</span>
                     <span style={{ color:'#94a3b8', fontSize:13 }}>{r.name}</span>
                     <span style={{ marginLeft:'auto', fontSize:11, color:'#64748b' }}>{r.exchange}</span>
@@ -737,7 +758,7 @@ export default function App() {
           )
         )}
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
-          {page==='screener'    && <Screener onSelect={selectCompany} />}
+          {page==='screener'    && <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />}
           {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
           {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
           {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}
