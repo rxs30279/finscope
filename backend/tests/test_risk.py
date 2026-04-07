@@ -215,3 +215,51 @@ def test_attach_risk_score_vol_none_when_insufficient_history():
     assert r['volatility_annualised'] is None
     # risk_score should still be set (from Altman alone)
     assert r['risk_score'] is not None
+
+
+def test_screener_includes_risk_score(client):
+    from unittest.mock import patch
+
+    screener_row = {
+        'symbol': 'SHEL.L', 'name': 'Shell', 'sector': 'Energy',
+        'country': 'GB', 'exchange': 'LSE', 'ftse_index': 'FTSE 100',
+        'financial_currency': 'USD',
+        'market_cap': 5e9, 'revenue': 3e9, 'net_income': 5e8,
+        'price_to_earnings': 12.0, 'price_to_book': 3.0, 'price_to_sales': 1.0,
+        'roe': 0.15, 'roa': 0.08, 'roic': 0.12, 'roce': 0.10,
+        'gross_margin': 0.4, 'operating_margin': 0.25, 'net_income_margin': 0.17,
+        'revenue_growth': 0.05, 'eps_diluted_growth': 0.03, 'fcf_growth': 0.04,
+        'debt_to_equity': 0.5, 'current_ratio': 1.5, 'fcf': 4e8, 'ebitda': 9e8,
+        'revenue_cagr_10': 0.06, 'eps_cagr_10': 0.05, 'period_end_date': '2024-12-31',
+        'fcf_margin': 0.13,
+        'gross_margin_median': 0.38, 'operating_margin_median': 0.23,
+        'net_margin_median': 0.15, 'roe_median': 0.14, 'roic_median': 0.11,
+    }
+    piotroski_row = {
+        'company_symbol': 'SHEL.L',
+        'roa_cur': 0.08, 'roa_prev': 0.07, 'cf_cfo': 4e8,
+        'ta_cur': 4e9, 'ta_prev': 3.8e9,
+        'de_cur': 0.5, 'de_prev': 0.6,
+        'cr_cur': 1.5, 'cr_prev': 1.4,
+        'sh_cur': 1e9, 'sh_prev': 1e9,
+        'gm_cur': 0.4, 'gm_prev': 0.38,
+        'rev_cur': 3e9, 'rev_prev': 2.8e9,
+    }
+    ta_row = [{'company_symbol': 'SHEL.L', 'total_assets': 4e9}]
+    price_rows = [{'symbol': 'SHEL.L', 'close': 100.0 + i * 0.05} for i in range(252)]
+
+    with patch('main.query', side_effect=[
+        [screener_row],   # screener SQL
+        [piotroski_row],  # _attach_piotroski annual_financials
+        ta_row,           # _attach_risk_score total_assets
+        price_rows,       # _attach_risk_score price_history
+    ]):
+        with patch('prices.query', return_value=[]):  # _attach_momentum
+            r = client.get('/api/screener')
+
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert 'risk_score' in data[0]
+    assert 'altman_z' in data[0]
+    assert 'volatility_annualised' in data[0]

@@ -417,7 +417,8 @@ def screener(
     for r in results:
         r['quality_score'] = _quality_score(r)
     _attach_momentum(results)
-    return _attach_piotroski(results)
+    _attach_piotroski(results)
+    return _attach_risk_score(results)
 
 @app.get("/api/filters")
 def filters():
