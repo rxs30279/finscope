@@ -669,7 +669,6 @@ export default function App() {
   ];
 
   const showSidebar = page !== 'company';
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
     <div style={{ minHeight:'100vh', background:'#0a0a0a', fontFamily:'monospace' }}>
@@ -738,19 +737,9 @@ export default function App() {
       {/* Body: sidebar + main */}
       <div style={{ display:'flex', maxWidth:1400, margin:'0 auto' }}>
         {showSidebar && (
-          sidebarCollapsed ? (
-            <div style={{ width:28, flexShrink:0, borderRight:'1px solid #1e1e1e', position:'relative' }}>
-              <button
-                onClick={() => setSidebarCollapsed(false)}
-                title="Expand sidebar"
-                style={{ position:'sticky', top:80, width:28, height:48, background:'#141414', border:'none', borderRight:'1px solid #1e1e1e', color:'#555', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}
-              >›</button>
-            </div>
-          ) : (
-            <div style={{ position:'relative', flexShrink:0 }}>
-              <Sidebar refreshKey={refreshKey} onCollapse={() => setSidebarCollapsed(true)} />
-            </div>
-          )
+          <div style={{ position:'relative', flexShrink:0 }}>
+            <Sidebar refreshKey={refreshKey} />
+          </div>
         )}
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
           {page==='screener'    && <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />}

@@ -29,7 +29,7 @@ function PctBadge({ value }) {
   );
 }
 
-export default function Sidebar({ refreshKey, onCollapse }) {
+export default function Sidebar({ refreshKey }) {
   const [data, setData] = useState(null);
 
   useEffect(() => {
@@ -45,14 +45,6 @@ export default function Sidebar({ refreshKey, onCollapse }) {
 
   return (
     <aside style={{ width:185, flexShrink:0, background:'#0d0d0d', borderRight:'1px solid #1e1e1e', padding:'16px 12px', height:'calc(100vh - 52px)', position:'sticky', top:52, overflowY:'auto' }}>
-
-      {onCollapse && (
-        <button
-          onClick={onCollapse}
-          title="Collapse sidebar"
-          style={{ position:'absolute', top:8, right:-14, width:28, height:28, background:'#141414', border:'1px solid #2a2a2a', borderRadius:'50%', color:'#888', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10 }}
-        >‹</button>
-      )}
 
       {/* Benchmarks */}
       <div style={labelStyle}>Benchmarks</div>
