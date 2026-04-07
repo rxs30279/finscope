@@ -413,6 +413,7 @@ function HybridSelect({ selectMode, onSelectChange, onCustomCommit, children, pl
 // ── Screener ──────────────────────────────────────────────────────────────────
 const EMPTY_FILTERS = { sector:'', ftse_index:'', min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
 const EMPTY_MODES   = { min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
+const EMPTY_SCORE_FILTERS = { min_momentum:'', min_quality:'', min_piotroski:'', max_risk:'' };
 
 function Screener({ onSelect, highlightSymbol }) {
   const [filters, setFilters]       = useState(EMPTY_FILTERS);
@@ -421,6 +422,7 @@ function Screener({ onSelect, highlightSymbol }) {
   const [results, setResults]       = useState([]);
   const [loading, setLoading]       = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [scoreFilters, setScoreFilters] = useState(EMPTY_SCORE_FILTERS);
 
   useEffect(() => {
     fetch(`${API}/filters`).then(r=>r.json()).then(setFilterOpts);
@@ -473,18 +475,33 @@ function Screener({ onSelect, highlightSymbol }) {
   const clearFilters = () => {
     setFilters(EMPTY_FILTERS);
     setSelectModes(EMPTY_MODES);
+    setScoreFilters(EMPTY_SCORE_FILTERS);
     runScreener(EMPTY_FILTERS);
   };
 
-  const hasActiveFilters = Object.values(filters).some(v => v !== '');
-  const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth;
+  const updateScore = (k, v) => setScoreFilters(sf => ({ ...sf, [k]: v }));
+
+  const displayed = results.filter(r => {
+    const sf = scoreFilters;
+    if (sf.min_momentum  && (r.momentum_score  == null || r.momentum_score  < +sf.min_momentum))  return false;
+    if (sf.min_quality   && (r.quality_score   == null || r.quality_score   < +sf.min_quality))   return false;
+    if (sf.min_piotroski && (r.piotroski_score == null || r.piotroski_score < +sf.min_piotroski)) return false;
+    if (sf.max_risk      && (r.risk_score      == null || r.risk_score      > +sf.max_risk))      return false;
+    return true;
+  });
+
+  const hasActiveFilters = Object.values(filters).some(v => v !== '') || Object.values(scoreFilters).some(v => v !== '');
+  const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth
+    || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_piotroski || scoreFilters.max_risk;
 
   return (
     <div>
       <h2 style={{ fontFamily:'DM Serif Display,serif', fontSize:26, color:'#f1f5f9', marginBottom:4 }}>Stock Screener</h2>
       <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
         <div style={{ fontSize:13, color:'#64748b' }}>{filters.ftse_index || 'All indices'}{filters.sector ? ` · ${filters.sector}` : ''}</div>
-        <div style={{ background:'#334155', color:'#cbd5e1', borderRadius:20, padding:'2px 12px', fontSize:13, fontWeight:600 }}>{results.length} companies</div>
+        <div style={{ background:'#334155', color:'#cbd5e1', borderRadius:20, padding:'2px 12px', fontSize:13, fontWeight:600 }}>
+          {displayed.length !== results.length ? `${displayed.length} / ${results.length}` : displayed.length} companies
+        </div>
       </div>
 
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8, alignItems:'center' }}>
@@ -531,6 +548,30 @@ function Screener({ onSelect, highlightSymbol }) {
 
       {showAdvanced && (
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8 }}>
+          <select style={S.select} value={scoreFilters.min_momentum} onChange={e=>updateScore('min_momentum',e.target.value)}>
+            <option value="">Momentum</option>
+            <option value="4">Mom ≥ 4</option>
+            <option value="6">Mom ≥ 6</option>
+            <option value="8">Mom ≥ 8</option>
+          </select>
+          <select style={S.select} value={scoreFilters.min_quality} onChange={e=>updateScore('min_quality',e.target.value)}>
+            <option value="">Quality</option>
+            <option value="4">Quality ≥ 4</option>
+            <option value="6">Quality ≥ 6</option>
+            <option value="8">Quality ≥ 8</option>
+          </select>
+          <select style={S.select} value={scoreFilters.min_piotroski} onChange={e=>updateScore('min_piotroski',e.target.value)}>
+            <option value="">Value</option>
+            <option value="4">Value ≥ 4</option>
+            <option value="6">Value ≥ 6</option>
+            <option value="8">Value ≥ 8</option>
+          </select>
+          <select style={S.select} value={scoreFilters.max_risk} onChange={e=>updateScore('max_risk',e.target.value)}>
+            <option value="">Risk</option>
+            <option value="3">Risk ≤ 3</option>
+            <option value="5">Risk ≤ 5</option>
+            <option value="7">Risk ≤ 7</option>
+          </select>
           <HybridSelect
             selectMode={selectModes.max_pe}
             onSelectChange={mode => handleSelectMode('max_pe', mode)}
@@ -582,7 +623,7 @@ function Screener({ onSelect, highlightSymbol }) {
               </tr>
             </thead>
             <tbody>
-              {results.map((r,i) => {
+              {displayed.map((r,i) => {
                 const isHighlighted = r.symbol === highlightSymbol;
                 const baseBg = isHighlighted ? '#2d1e00' : i%2===0 ? '#1e293b' : '#162032';
                 return (
