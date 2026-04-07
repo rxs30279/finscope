@@ -161,6 +161,117 @@ def _quality_score(r):
     return score
 
 
+import math as _math
+
+
+def _altman_z(row, total_assets):
+    """Compute Altman Z-Score from a ttm_financials row + total_assets.
+
+    X1 (working capital) is treated as 0 (conservative — unavailable from stored data).
+    X2 uses book equity as a proxy for retained earnings.
+    X3 uses operating income (operating_margin * revenue) as EBIT proxy.
+    Returns None if insufficient data to compute any meaningful score.
+    """
+    if not total_assets or total_assets <= 0:
+        return None
+
+    mc       = row.get('market_cap')
+    revenue  = row.get('revenue')
+    op_margin = row.get('operating_margin')
+    p2b      = row.get('price_to_book')
+
+    z = 0.0
+    computed_terms = 0
+
+    # X2 = book_equity / total_assets  (proxy for retained earnings / total_assets)
+    book_equity = None
+    if mc and p2b and p2b > 0:
+        book_equity = mc / p2b
+        z += 1.4 * (book_equity / total_assets)
+        computed_terms += 1
+
+    # X3 = EBIT / total_assets  (operating income as EBIT proxy)
+    if op_margin is not None and revenue:
+        ebit = op_margin * revenue
+        z += 3.3 * (ebit / total_assets)
+        computed_terms += 1
+
+    # X4 = market_cap / total_liabilities
+    if book_equity is not None:
+        total_liabilities = total_assets - book_equity
+        if total_liabilities > 0:
+            z += 0.6 * (mc / total_liabilities)
+            computed_terms += 1
+
+    # X5 = revenue / total_assets
+    if revenue:
+        z += 1.0 * (revenue / total_assets)
+        computed_terms += 1
+
+    if computed_terms == 0:
+        return None
+
+    return round(z, 3)
+
+
+def _z_to_risk(z):
+    """Map Altman Z to 1-10 risk component. Lower Z = higher risk.
+
+    Z >= 3.0 → 1 (safe), Z <= 1.0 → 10 (distress), linear between.
+    """
+    if z is None:
+        return None
+    if z >= 3.0:
+        return 1
+    if z <= 1.0:
+        return 10
+    # Linear: z=3.0→1, z=1.0→10. Slope = (10-1)/(1.0-3.0) = -4.5
+    return round(1 + (3.0 - z) * 4.5)
+
+
+def _annualised_vol(closes):
+    """Compute annualised volatility from a list of closes (oldest first).
+
+    Returns annualised std of log returns, or None if fewer than 2 prices.
+    """
+    if len(closes) < 2:
+        return None
+    log_returns = [_math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    n = len(log_returns)
+    mean = sum(log_returns) / n
+    variance = sum((r - mean) ** 2 for r in log_returns) / (n - 1) if n > 1 else 0.0
+    return _math.sqrt(variance) * _math.sqrt(252)
+
+
+def _vol_to_score(vol):
+    """Map annualised volatility to 1-10 risk score using absolute thresholds.
+
+    Thresholds calibrated for FTSE-listed stocks (typical range 10-40% ann. vol).
+    Returns None if vol is None.
+    """
+    if vol is None:
+        return None
+    thresholds = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60]
+    for i, t in enumerate(thresholds):
+        if vol < t:
+            return i + 1
+    return 10
+
+
+def _blend_risk(altman_component, vol_component):
+    """Combine Altman (60%) and volatility (40%) components into 1-10 score.
+
+    Falls back to whichever component is available. Returns None if both are None.
+    """
+    if altman_component is not None and vol_component is not None:
+        return max(1, min(10, round(0.6 * altman_component + 0.4 * vol_component)))
+    if altman_component is not None:
+        return max(1, min(10, altman_component))
+    if vol_component is not None:
+        return max(1, min(10, vol_component))
+    return None
+
+
 def _attach_piotroski(results):
     """Add piotroski_score to each screener result row."""
     if not results:
