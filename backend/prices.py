@@ -207,3 +207,25 @@ def get_prices(symbol: str):
     if not rows:
         raise HTTPException(status_code=404, detail="No price history")
     return [{"date": str(r["date"]), "close": float(r["close"])} for r in rows]
+
+
+@router.post("/api/prices/refresh/{symbol}")
+def refresh_symbol(symbol: str):
+    """Top up price history for a single symbol to today."""
+    rows = query(
+        "SELECT MAX(date) AS latest FROM price_history WHERE symbol = %s",
+        (symbol,)
+    )
+    latest = rows[0]["latest"] if rows else None
+
+    if latest is not None:
+        start = latest + timedelta(days=1)
+    else:
+        start = date.today() - timedelta(days=3 * 365)
+
+    if start >= date.today():
+        return {"rows_added": 0}
+
+    fetched = _fetch_closes([symbol], start)
+    count = _upsert_rows(fetched)
+    return {"rows_added": count}

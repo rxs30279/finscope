@@ -94,3 +94,39 @@ def test_get_prices_404_when_no_data(client):
     with patch('prices.query', return_value=[]):
         r = client.get('/api/prices/UNKNOWN.L')
     assert r.status_code == 404
+
+
+# ── POST /api/prices/refresh/{symbol} ────────────────────────────────────────
+
+def test_refresh_symbol_already_up_to_date(client):
+    from datetime import date as _date
+    today = _date.today()
+    yesterday = today - timedelta(days=1)
+    with patch('prices.query', return_value=[{'latest': yesterday}]):
+        r = client.post('/api/prices/refresh/SHEL.L')
+    assert r.status_code == 200
+    assert r.json() == {'rows_added': 0}
+
+
+def test_refresh_symbol_fetches_missing_rows(client):
+    from datetime import date as _date
+    stale_date = _date(2026, 4, 2)
+    with patch('prices.query', return_value=[{'latest': stale_date}]), \
+         patch('prices._fetch_closes', return_value=[('SHEL.L', _date(2026, 4, 3), 320.0)]) as mock_fetch, \
+         patch('prices._upsert_rows', return_value=1) as mock_upsert:
+        r = client.post('/api/prices/refresh/SHEL.L')
+    assert r.status_code == 200
+    assert r.json()['rows_added'] == 1
+    mock_fetch.assert_called_once()
+    mock_upsert.assert_called_once()
+
+
+def test_refresh_symbol_no_history_uses_3yr_start(client):
+    from datetime import date as _date
+    with patch('prices.query', return_value=[{'latest': None}]), \
+         patch('prices._fetch_closes', return_value=[]) as mock_fetch, \
+         patch('prices._upsert_rows', return_value=0):
+        r = client.post('/api/prices/refresh/NEW.L')
+    assert r.status_code == 200
+    called_start = mock_fetch.call_args[0][1]
+    assert (_date.today() - called_start).days >= 3 * 365 - 1
