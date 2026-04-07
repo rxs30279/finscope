@@ -60,6 +60,9 @@ def _upsert_rows(rows):
         count = max(0, cur.rowcount)
         conn.commit()
         return count
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         pool.putconn(conn)
 
