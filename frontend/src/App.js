@@ -747,7 +747,7 @@ export default function App() {
               >›</button>
             </div>
           ) : (
-            <div style={{ position:'relative', flexShrink:0 }}>
+            <div style={{ position:'sticky', top:52, alignSelf:'flex-start', flexShrink:0 }}>
               <Sidebar refreshKey={refreshKey} />
               <button
                 onClick={() => setSidebarCollapsed(true)}
@@ -788,7 +788,7 @@ const S = {
   dropdownItem:{ display:'flex', alignItems:'center', gap:12, padding:'10px 16px', cursor:'pointer', borderBottom:'1px solid #1f1f1f' },
   select:      { padding:'8px 12px', borderRadius:2, border:'1px solid #2a2a2a', fontSize:12, background:'#141414', color:'#ccc', cursor:'pointer', outline:'none', fontFamily:'monospace' },
   table:       { width:'100%', borderCollapse:'collapse', fontSize:12, fontFamily:'monospace' },
-  th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5 },
+  th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5, position:'sticky', top:52, zIndex:1 },
   td:          { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', color:'#ccc', whiteSpace:'nowrap' },
   tdNum:       { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', textAlign:'right', fontFamily:'monospace', fontSize:12, whiteSpace:'nowrap', color:'#e5e5e5' },
   tooltip:     { background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:12, color:'#e5e5e5', fontFamily:'monospace' },
