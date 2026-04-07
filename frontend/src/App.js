@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, AreaChart, Area,
+  LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
 import { API, fmt, gc, currSym } from './utils';
@@ -445,7 +445,7 @@ function PriceChart({ symbol }) {
   const ma20 = computeMA(priceData, 20);
   const ma50 = computeMA(priceData, 50);
 
-  const RANGE_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, 'All': null };
+  const RANGE_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': 1825 };
   const cutoffDays = RANGE_DAYS[range];
   const latest = priceData.length ? new Date(priceData[priceData.length - 1].date) : new Date();
   const cutoff  = cutoffDays ? new Date(latest.getTime() - cutoffDays * 86400000) : null;
@@ -453,6 +453,13 @@ function PriceChart({ symbol }) {
   const chartData = priceData
     .map((d, i) => ({ date: d.date, close: d.close, ma20: ma20[i], ma50: ma50[i] }))
     .filter(d => !cutoff || new Date(d.date) >= cutoff);
+
+  const tickFormatter = (dateStr) => {
+    const d = new Date(dateStr);
+    const mon = d.toLocaleString('default', { month: 'short' });
+    if (['3Y', '5Y'].includes(range)) return `${mon}${String(d.getFullYear()).slice(2)}`;
+    return mon;
+  };
 
   const pillBase = {
     border: '1px solid #2a2a2a', borderRadius: 4, padding: '3px 10px',
@@ -477,7 +484,7 @@ function PriceChart({ symbol }) {
     <div>
       <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap', alignItems:'center' }}>
         <div style={{ display:'flex', gap:4 }}>
-          {['1M','3M','6M','1Y','3Y','All'].map(r => (
+          {['1M','3M','6M','1Y','3Y','5Y'].map(r => (
             <button key={r} onClick={() => setRange(r)} style={rangePill(r === range)}>{r}</button>
           ))}
         </div>
@@ -487,23 +494,24 @@ function PriceChart({ symbol }) {
         </div>
       </div>
       <ResponsiveContainer width="100%" height={380}>
-        <AreaChart data={chartData} margin={{ top:5, right:10, bottom:5, left:0 }}>
+        <ComposedChart data={chartData} margin={{ top:5, right:10, bottom:5, left:0 }}>
           <defs>
             <linearGradient id="gPrice" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.3}/>
               <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
             </linearGradient>
           </defs>
-          <XAxis dataKey="date" tick={{ fontSize:10 }} interval="preserveStartEnd" />
+          <XAxis dataKey="date" tick={{ fontSize:10 }} interval="preserveStartEnd" tickFormatter={tickFormatter} />
           <YAxis tick={{ fontSize:10 }} domain={['auto','auto']} width={60} />
           <Tooltip
             contentStyle={S.tooltip}
+            labelFormatter={tickFormatter}
             formatter={(val, name) => [val != null ? val.toFixed(2) : '—', name]}
           />
           <Area type="monotone" dataKey="close" stroke="#6366f1" fill="url(#gPrice)" strokeWidth={2} dot={false} name="Close" />
           {showMA20 && <Line type="monotone" dataKey="ma20" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="MA20" connectNulls={false} />}
           {showMA50 && <Line type="monotone" dataKey="ma50" stroke="#a855f7" strokeWidth={1.5} dot={false} name="MA50" connectNulls={false} />}
-        </AreaChart>
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
@@ -923,7 +931,9 @@ export default function App() {
           </div>
         )}
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
-          {page==='screener'    && <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />}
+          <div style={{ display: page==='screener' ? 'block' : 'none' }}>
+            <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />
+          </div>
           {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
           {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
           {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}

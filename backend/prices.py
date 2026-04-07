@@ -174,14 +174,28 @@ def refresh_prices():
         )
     }
 
+    # Earliest stored date per symbol (for backfill detection)
+    earliest = {
+        r['symbol']: r['earliest']
+        for r in query(
+            "SELECT symbol, MIN(date) AS earliest FROM price_history GROUP BY symbol"
+        )
+    }
+
+    target_start = date.today() - timedelta(days=5 * 365)
+
     # Group symbols by the start date we need to fetch from
     groups = {}  # start_date -> [symbols]
     for sym in all_symbols:
         if sym in latest and latest[sym] is not None:
-            start = latest[sym] + timedelta(days=1)
+            # Top-up from latest stored date
+            top_up_start = latest[sym] + timedelta(days=1)
+            groups.setdefault(top_up_start, []).append(sym)
+            # Backfill if we don't have 5Y of history
+            if sym in earliest and earliest[sym] > target_start:
+                groups.setdefault(target_start, []).append(sym)
         else:
-            start = date.today() - timedelta(days=3 * 365)
-        groups.setdefault(start, []).append(sym)
+            groups.setdefault(target_start, []).append(sym)
 
     total_rows = 0
     for start_date, symbols in groups.items():
@@ -211,21 +225,27 @@ def get_prices(symbol: str):
 
 @router.post("/api/prices/refresh/{symbol}")
 def refresh_symbol(symbol: str):
-    """Top up price history for a single symbol to today."""
+    """Top up price history for a single symbol to today, backfilling to 5Y if needed."""
     rows = query(
-        "SELECT MAX(date) AS latest FROM price_history WHERE symbol = %s",
+        "SELECT MIN(date) AS earliest, MAX(date) AS latest FROM price_history WHERE symbol = %s",
         (symbol,)
     )
-    latest = rows[0]["latest"] if rows else None
+    earliest = rows[0]["earliest"] if rows else None
+    latest   = rows[0]["latest"]   if rows else None
 
+    target_start = date.today() - timedelta(days=5 * 365)
+    total = 0
+
+    # Backfill older history if we have less than 5Y
+    if earliest is None or earliest > target_start:
+        fetched = _fetch_closes([symbol], target_start)
+        total += _upsert_rows(fetched)
+
+    # Top-up from latest stored date to today
     if latest is not None:
-        start = latest + timedelta(days=1)
-    else:
-        start = date.today() - timedelta(days=3 * 365)
+        top_up_start = latest + timedelta(days=1)
+        if top_up_start < date.today():
+            fetched = _fetch_closes([symbol], top_up_start)
+            total += _upsert_rows(fetched)
 
-    if start >= date.today():
-        return {"rows_added": 0}
-
-    fetched = _fetch_closes([symbol], start)
-    count = _upsert_rows(fetched)
-    return {"rows_added": count}
+    return {"rows_added": total}
