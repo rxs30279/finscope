@@ -405,7 +405,7 @@ function Screener({ onSelect }) {
     if (f.max_pe)             p.set('max_pe', f.max_pe);
     if (f.min_roe)            p.set('min_roe', f.min_roe);
     if (f.min_revenue_growth) p.set('min_revenue_growth', f.min_revenue_growth);
-    p.set('limit', 350);
+    p.set('limit', 1000);
     fetch(`${API}/screener?${p}`)
       .then(r=>r.json())
       .then(d=>{ setResults(Array.isArray(d)?d:[]); setLoading(false); })
@@ -665,19 +665,19 @@ export default function App() {
         </div>
         <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:12 }}>
           {lastUpdated && <span style={{ color:'#444', fontSize:10, fontFamily:'monospace' }}>Updated {lastUpdated}</span>}
-          <button onClick={handleRefresh} style={{ background:'#1a1a1a', color:'#666', border:'1px solid #2a2a2a', padding:'4px 10px', borderRadius:2, fontFamily:'monospace', fontSize:10, cursor:'pointer' }}>↻</button>
+          <button onClick={handleRefresh} style={{ background:'#1a1a1a', color:'#666', border:'1px solid #2a2a2a', padding:'4px 10px', borderRadius:2, fontFamily:'monospace', fontSize:10, cursor:'pointer' }}>↻ Market</button>
           <button
             onClick={handlePriceRefresh}
             disabled={priceRefreshing}
             title="Refresh price history"
             style={{
-              background: '#1a1a1a', color: priceRefreshing ? '#444' : '#666',
+              background: '#1a1a1a', color: priceRefreshing ? '#f97316' : '#666',
               border: '1px solid #2a2a2a', padding: '4px 10px',
               borderRadius: 2, fontFamily: 'monospace', fontSize: 10,
               cursor: priceRefreshing ? 'not-allowed' : 'pointer',
             }}
           >
-            {priceRefreshing ? 'Refreshing…' : '↻ Prices'}
+            <span className={priceRefreshing ? 'spinning' : ''}>↻</span>{priceRefreshing ? ' Refreshing…' : ' Stock Prices'}
           </button>
           {priceToast && (
             <span style={{

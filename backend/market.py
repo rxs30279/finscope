@@ -587,8 +587,8 @@ def sidebar():
         ]
         rotation = _compute_rotation()
         top_rs = rotation[0]["sector"] if rotation else None
-        breadth_values = [r["breadth"] for r in rotation if r["breadth"] is not None]
-        avg_breadth = round(float(np.mean(breadth_values)), 4) if breadth_values else None
+        breadth_data = _compute_breadth()
+        avg_breadth = breadth_data.get("pct_above_50ma")
         vix_col = prices[VIX_TICKER].dropna() if VIX_TICKER in prices.columns else None
         vix_level = round(float(vix_col.iloc[-1]), 2) if vix_col is not None and len(vix_col) else None
         cnn_fg = _cached("cnn_fear_greed", _fetch_cnn_fg)

@@ -132,7 +132,7 @@ export default function Sidebar({ refreshKey }) {
               ⚡ {data.signal_summary.cycle_phase?.toUpperCase()}
             </div>
             <div style={{ color:'#666', fontSize:9 }}>
-              Breadth: <span style={{ color:'#10b981' }}>{data.signal_summary.breadth !== null ? `${(data.signal_summary.breadth*100).toFixed(0)}%` : '—'}</span>
+              Above 50MA: <span style={{ color:'#10b981' }}>{data.signal_summary.breadth !== null ? `${(data.signal_summary.breadth*100).toFixed(0)}%` : '—'}</span>
             </div>
             <div style={{ color:'#666', fontSize:9 }}>
               Top RS: <span style={{ color:'#60a5fa' }}>{data.signal_summary.top_rs_sector ?? '—'}</span>

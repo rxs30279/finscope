@@ -211,22 +211,34 @@ export default function CrossAssetTab({ refreshKey }) {
       .catch(() => {});
   }, [refreshKey]);
 
-  if (loading) return <div style={{ color:'#444', padding:32, fontFamily:'monospace' }}>Loading cross-asset data…</div>;
+  const skelStyle = { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:3 };
 
   return (
     <div>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Cross-Asset</h2>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12 }}>
-        <AssetCard label="GBP / USD"        item={data?.gbpusd}   decimals={4} />
-        <AssetCard label="Brent Crude"     item={data?.brent}    decimals={2} prefix="$" />
-        <AssetCard label="Gold"            item={data?.gold}     decimals={0} prefix="$" />
-        <ZScoreCard label="Gilt vs Utilities (z-score)" item={data?.gilt_vs_utilities} />
+        {loading ? (
+          [0,1,2,3].map(i => (
+            <div key={i} style={{ ...skelStyle, padding:16, height:80 }}>
+              <div style={{ background:'#252525', borderRadius:2, height:8, width:'40%', marginBottom:10 }} />
+              <div style={{ background:'#252525', borderRadius:2, height:20, width:'60%', marginBottom:8 }} />
+              <div style={{ background:'#252525', borderRadius:2, height:8, width:'30%' }} />
+            </div>
+          ))
+        ) : (
+          <>
+            <AssetCard label="GBP / USD"        item={data?.gbpusd}   decimals={4} />
+            <AssetCard label="Brent Crude"     item={data?.brent}    decimals={2} prefix="$" />
+            <AssetCard label="Gold"            item={data?.gold}     decimals={0} prefix="$" />
+            <ZScoreCard label="Gilt vs Utilities (z-score)" item={data?.gilt_vs_utilities} />
+          </>
+        )}
       </div>
-      {giltData && (
-        <div style={{ marginTop:24 }}>
-          <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
-            UK Gilt Yield Curve
-          </div>
+      <div style={{ marginTop:24 }}>
+        <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
+          UK Gilt Yield Curve
+        </div>
+        {giltData ? (
           <div style={{ display:'grid', gridTemplateColumns:'2fr 3fr', gap:16 }}>
             <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 }}>
               <GiltSnapshotChart snapshot={giltData.snapshot} />
@@ -235,8 +247,13 @@ export default function CrossAssetTab({ refreshKey }) {
               <GiltHistoryChart history={giltData.history} />
             </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'2fr 3fr', gap:16 }}>
+            <div style={{ ...skelStyle, height:230 }} />
+            <div style={{ ...skelStyle, height:230 }} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

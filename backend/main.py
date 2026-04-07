@@ -40,6 +40,16 @@ def query(sql, params=None):
     pool = get_pool()
     conn = pool.getconn()
     try:
+        conn.autocommit = True
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except psycopg2.OperationalError:
+        # Connection was dropped (e.g. SSL timeout) — discard it and retry once
+        pool.putconn(conn, close=True)
+        conn = pool.getconn()
+        conn.autocommit = True
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params)
         rows = cur.fetchall()
