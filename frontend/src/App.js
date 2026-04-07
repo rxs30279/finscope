@@ -273,6 +273,35 @@ function CompanyDetail({ symbol, onBack }) {
       {/* HEALTH */}
       {tab==='health' && (
         <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+          {/* Risk Score card */}
+          <div style={{ background:'#141414', borderRadius:2, padding:'18px 22px', border:'1px solid #2a2a2a', display:'flex', alignItems:'center', gap:24 }}>
+            <div>
+              <div style={{ fontSize:10, color:'#666', marginBottom:8, textTransform:'uppercase', letterSpacing:1, fontFamily:'monospace' }}>Risk Score</div>
+              {snap.risk_score == null ? (
+                <span style={{ fontSize:28, fontFamily:'monospace', fontWeight:700, color:'#444' }}>—</span>
+              ) : (
+                <span style={{
+                  display: 'inline-block',
+                  padding: '4px 14px',
+                  borderRadius: 6,
+                  fontSize: 28,
+                  fontFamily: 'monospace',
+                  fontWeight: 700,
+                  background: snap.risk_score <= 3 ? '#14532d'
+                            : snap.risk_score <= 6 ? '#78350f'
+                            :                       '#7f1d1d',
+                  color:      snap.risk_score <= 3 ? '#4ade80'
+                            : snap.risk_score <= 6 ? '#fbbf24'
+                            :                       '#f87171',
+                }}>{snap.risk_score}</span>
+              )}
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:6, color:'#888', fontSize:12, fontFamily:'monospace' }}>
+              <span>Altman Z: {snap.altman_z != null ? snap.altman_z.toFixed(2) : '—'}</span>
+              <span>Volatility: {snap.volatility_annualised != null ? `${snap.volatility_annualised}% ann.` : '—'}</span>
+              <span style={{ color:'#555', fontSize:11, marginTop:2 }}>Z &gt; 3.0 safe · 1.8–3.0 grey · &lt; 1.8 distress</span>
+            </div>
+          </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(145px,1fr))', gap:10 }}>
             {[['Current Ratio',snap.current_ratio,'ratio'],['Debt/Equity',snap.debt_to_equity,'ratio'],
               ['Debt/Assets',snap.debt_to_assets,'ratio'],['Cash',snap.cash_and_equiv,'currency'],
