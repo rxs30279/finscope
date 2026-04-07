@@ -757,7 +757,7 @@ export default function App() {
             </div>
           )
         )}
-        <main style={{ flex:1, padding:'32px 24px', minWidth:0, overflowX:'auto' }}>
+        <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
           {page==='screener'    && <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />}
           {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
           {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
@@ -787,7 +787,7 @@ const S = {
   dropdown:    { position:'absolute', right:0, top:'100%', width:420, background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, boxShadow:'0 8px 24px rgba(0,0,0,0.8)', zIndex:200, maxHeight:320, overflowY:'auto' },
   dropdownItem:{ display:'flex', alignItems:'center', gap:12, padding:'10px 16px', cursor:'pointer', borderBottom:'1px solid #1f1f1f' },
   select:      { padding:'8px 12px', borderRadius:2, border:'1px solid #2a2a2a', fontSize:12, background:'#141414', color:'#ccc', cursor:'pointer', outline:'none', fontFamily:'monospace' },
-  table:       { width:'100%', borderCollapse:'collapse', fontSize:12, fontFamily:'monospace' },
+  table:       { width:'100%', borderCollapse:'separate', borderSpacing:0, fontSize:12, fontFamily:'monospace' },
   th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5, position:'sticky', top:52, zIndex:1 },
   td:          { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', color:'#ccc', whiteSpace:'nowrap' },
   tdNum:       { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', textAlign:'right', fontFamily:'monospace', fontSize:12, whiteSpace:'nowrap', color:'#e5e5e5' },
