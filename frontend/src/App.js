@@ -543,7 +543,7 @@ function Screener({ onSelect, highlightSymbol }) {
 
 
       {loading ? <div style={S.loading}>Screening…</div> : (
-        <div style={{ overflowX:'auto' }}>
+        <div>
           <table style={S.table}>
             <thead>
               <tr>
@@ -757,7 +757,7 @@ export default function App() {
             </div>
           )
         )}
-        <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
+        <main style={{ flex:1, padding:'32px 24px', minWidth:0, overflowX:'auto' }}>
           {page==='screener'    && <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />}
           {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
           {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
