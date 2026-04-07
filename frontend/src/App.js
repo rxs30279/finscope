@@ -747,13 +747,8 @@ export default function App() {
               >›</button>
             </div>
           ) : (
-            <div style={{ position:'sticky', top:52, alignSelf:'flex-start', flexShrink:0 }}>
-              <Sidebar refreshKey={refreshKey} />
-              <button
-                onClick={() => setSidebarCollapsed(true)}
-                title="Collapse sidebar"
-                style={{ position:'absolute', top:8, right:-14, width:28, height:28, background:'#141414', border:'1px solid #2a2a2a', borderRadius:'50%', color:'#888', fontSize:14, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', zIndex:10 }}
-              >‹</button>
+            <div style={{ position:'relative', flexShrink:0 }}>
+              <Sidebar refreshKey={refreshKey} onCollapse={() => setSidebarCollapsed(true)} />
             </div>
           )
         )}
