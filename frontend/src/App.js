@@ -463,7 +463,7 @@ function Screener({ onSelect, highlightSymbol }) {
   const handleSelectMode = (key, mode) => {
     setSelectModes(m => ({ ...m, [key]: mode }));
     if (mode !== 'custom') update(key, mode); // preset value — apply immediately
-    else update(key, '');                      // custom selected — clear filter until value typed
+    // custom: just show the input, don't re-run until user commits a value
   };
 
   // Called when a custom input value is committed (blur / Enter)
