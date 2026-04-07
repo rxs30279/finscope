@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer, Brush
+  Tooltip, ResponsiveContainer
 } from 'recharts';
 import { API } from '../utils';
 
@@ -104,86 +104,68 @@ function GiltSnapshotChart({ snapshot }) {
   );
 }
 
+const RANGE_DAYS = { '1Y': 365, '2Y': 730, '3Y': 1095, '5Y': 1825 };
+
 function GiltHistoryChart({ history }) {
   const [hidden, setHidden] = useState({});
+  const [range, setRange]   = useState('5Y');
+
   if (!history || history.length === 0) {
     return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No history available</div>;
   }
 
-  const step = Math.max(1, Math.floor(history.length / 260));
-  const thinned = history.filter((_, i) => i % step === 0);
+  const cutoff = new Date(Date.now() - RANGE_DAYS[range] * 86400000);
+  const filtered = history.filter(d => new Date(d.date) >= cutoff);
 
   const toggleLine = (key) => setHidden(h => ({ ...h, [key]: !h[key] }));
 
+  const pillBase = { border:'1px solid #2a2a2a', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', background:'none' };
+  const pillActive = { ...pillBase, background:'#3730a3', color:'#e0e7ff', borderColor:'#4338ca' };
+  const pillInactive = { ...pillBase, color:'#555' };
+
+  const tickFormatter = (d) => {
+    const date = new Date(d);
+    const mon = date.toLocaleString('default', { month: 'short' });
+    return range === '1Y' ? mon : `${mon}${String(date.getFullYear()).slice(2)}`;
+  };
+
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>5-Year History</div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+        <div style={{ display:'flex', gap:4 }}>
+          {Object.keys(RANGE_DAYS).map(r => (
+            <button key={r} onClick={() => setRange(r)} style={r === range ? pillActive : pillInactive}>{r}</button>
+          ))}
+        </div>
         <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
           {MATURITIES.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => toggleLine(key)}
-              style={{
-                cursor:'pointer',
-                fontSize:9,
-                fontFamily:'monospace',
-                padding:'2px 7px',
-                borderRadius:3,
-                border: `1px solid ${hidden[key] ? '#2a2a2a' : MATURITY_COLORS[key]}`,
-                background: hidden[key] ? 'transparent' : `${MATURITY_COLORS[key]}22`,
-                color: hidden[key] ? '#444' : MATURITY_COLORS[key],
-                userSelect:'none',
-                display:'flex',
-                alignItems:'center',
-                gap:4,
-              }}
-            >
-              <span style={{
-                width:6, height:6, borderRadius:'50%',
-                background: hidden[key] ? '#333' : MATURITY_COLORS[key],
-                display:'inline-block',
-                flexShrink:0,
-              }}/>
+            <button key={key} onClick={() => toggleLine(key)} style={{
+              cursor:'pointer', fontSize:9, fontFamily:'monospace', padding:'2px 7px', borderRadius:3,
+              border: `1px solid ${hidden[key] ? '#2a2a2a' : MATURITY_COLORS[key]}`,
+              background: hidden[key] ? 'transparent' : `${MATURITY_COLORS[key]}22`,
+              color: hidden[key] ? '#444' : MATURITY_COLORS[key],
+              userSelect:'none', display:'flex', alignItems:'center', gap:4,
+            }}>
+              <span style={{ width:6, height:6, borderRadius:'50%', background: hidden[key] ? '#333' : MATURITY_COLORS[key], display:'inline-block', flexShrink:0 }}/>
               {label}
             </button>
           ))}
         </div>
       </div>
       <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={thinned} margin={{ top:5, right:30, bottom:5, left:0 }}>
+        <LineChart data={filtered} margin={{ top:5, right:10, bottom:5, left:0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-          <XAxis
-            dataKey="date"
-            tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
-            tickFormatter={d => d.slice(0, 4)}
-            interval={Math.floor(thinned.length / 5)}
-          />
-          <YAxis
-            tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
-            tickFormatter={v => `${v.toFixed(1)}%`}
-            domain={['auto', 'auto']}
-          />
+          <XAxis dataKey="date" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} interval="preserveStartEnd" tickFormatter={tickFormatter} />
+          <YAxis tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} tickFormatter={v => `${v.toFixed(1)}%`} domain={['auto','auto']} />
           <Tooltip
             contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:10, fontFamily:'monospace' }}
             formatter={(v, name) => [v !== null ? `${v.toFixed(2)}%` : '—', name.toUpperCase()]}
             labelFormatter={l => l}
           />
-          <Brush dataKey="date" height={28} stroke="#444" fill="#1a1a1a" travellerWidth={8}
-            tickFormatter={d => d.slice(0, 4)}
-            style={{ fontSize: 9, fontFamily: 'monospace' }}
-          />
           {MATURITIES.map(({ key }) => (
-            <Line
-              key={key}
-              type="monotone"
-              dataKey={key}
+            <Line key={key} type="monotone" dataKey={key}
               stroke={hidden[key] ? 'transparent' : MATURITY_COLORS[key]}
-              strokeWidth={1.5}
-              dot={false}
-              connectNulls={false}
-              hide={hidden[key]}
-            />
+              strokeWidth={1.5} dot={false} connectNulls={false} hide={hidden[key]} />
           ))}
         </LineChart>
       </ResponsiveContainer>

@@ -12,7 +12,7 @@ function needleXY(phase, cx, cy, r) {
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
 }
 
-function CycleWheel({ phase, onSetPhase }) {
+function CycleWheel({ phase }) {
   const cx = 90, cy = 90, r = 65;
   const needle = needleXY(phase, cx, cy, 55);
   const colour = PHASE_COLOURS[phase] || '#f59e0b';
@@ -20,30 +20,19 @@ function CycleWheel({ phase, onSetPhase }) {
   return (
     <div style={{ textAlign:'center' }}>
       <svg width={180} height={180} viewBox="0 0 180 180">
-        {/* Quadrant fills */}
         <path d={`M${cx},${cy} L${cx},${cy-r} A${r},${r} 0 0,1 ${cx+r},${cy} Z`} fill="#0d2318" stroke="#1e4030" strokeWidth={1}/>
         <path d={`M${cx},${cy} L${cx+r},${cy} A${r},${r} 0 0,1 ${cx},${cy+r} Z`} fill="#1a1400" stroke="#3a2800" strokeWidth={1}/>
         <path d={`M${cx},${cy} L${cx},${cy+r} A${r},${r} 0 0,1 ${cx-r},${cy} Z`} fill="#2a0d0d" stroke="#4a1a1a" strokeWidth={1}/>
         <path d={`M${cx},${cy} L${cx-r},${cy} A${r},${r} 0 0,1 ${cx},${cy-r} Z`} fill="#0d1a2a" stroke="#1a3040" strokeWidth={1}/>
-        {/* Labels */}
         <text x={cx+42} y={cy-38} fill="#10b981" fontSize={9} fontFamily="monospace" textAnchor="middle">RECOVERY</text>
         <text x={cx+42} y={cy+46} fill="#60a5fa" fontSize={9} fontFamily="monospace" textAnchor="middle">EXPANSION</text>
         <text x={cx-40} y={cy+46} fill="#f59e0b" fontSize={9} fontFamily="monospace" textAnchor="middle">SLOWDOWN</text>
         <text x={cx-38} y={cy-38} fill="#ef4444" fontSize={9} fontFamily="monospace" textAnchor="middle">CONTRACTION</text>
-        {/* Center */}
         <circle cx={cx} cy={cy} r={22} fill="#111" stroke="#333" strokeWidth={1}/>
-        {/* Needle */}
         <line x1={cx} y1={cy} x2={needle.x} y2={needle.y} stroke={colour} strokeWidth={2.5} strokeLinecap="round"/>
         <circle cx={cx} cy={cy} r={4} fill={colour}/>
       </svg>
       <div style={{ color: colour, fontSize:13, fontWeight:700, marginTop:4 }}>{phase?.toUpperCase()}</div>
-      <select
-        value={phase}
-        onChange={e => onSetPhase(e.target.value)}
-        style={{ marginTop:8, background:'#1a1a1a', color:'#666', border:'1px solid #333', padding:'3px 8px', borderRadius:2, fontFamily:'monospace', fontSize:10, cursor:'pointer' }}
-      >
-        {PHASES.map(p => <option key={p} value={p}>{p}</option>)}
-      </select>
     </div>
   );
 }
@@ -107,6 +96,35 @@ function RSTable({ sectors }) {
   );
 }
 
+function SuggestionRow({ label, phase, confirmed, current, onAccept }) {
+  if (!phase) return (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+      <span style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
+      <span style={{ color:'#333', fontSize:9 }}>No signal</span>
+    </div>
+  );
+  const colour = PHASE_COLOURS[phase] || '#888';
+  const isMatch = phase === current;
+  return (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+      <span style={{ color:'#555', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
+      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+        {!confirmed && <span style={{ color:'#444', fontSize:8 }}>unconfirmed</span>}
+        <span style={{ color: colour, fontSize:10, fontWeight:700, fontFamily:'monospace' }}>
+          {phase}
+        </span>
+        {isMatch
+          ? <span style={{ color:'#10b981', fontSize:9 }}>✓</span>
+          : <button onClick={() => onAccept(phase)} style={{
+              background:'#1a1a1a', border:`1px solid ${colour}44`, color: colour,
+              borderRadius:2, padding:'2px 7px', fontSize:9, cursor:'pointer', fontFamily:'monospace',
+            }}>Accept</button>
+        }
+      </div>
+    </div>
+  );
+}
+
 export default function RotationTab({ refreshKey }) {
   const [rotation, setRotation] = useState([]);
   const [cycle, setCycle]       = useState(null);
@@ -147,11 +165,29 @@ export default function RotationTab({ refreshKey }) {
         </div>
         <div style={card}>
           <div style={title}>Business Cycle</div>
-          {cycle && <CycleWheel phase={cycle.phase} onSetPhase={handleSetPhase} />}
+          {cycle && <CycleWheel phase={cycle.phase} />}
           {cycle?.guidance && (
             <div style={{ marginTop:12, fontSize:10 }}>
               <div style={{ color:'#10b981', marginBottom:2 }}>Favour: {cycle.guidance.favour?.join(', ')}</div>
               <div style={{ color:'#ef4444' }}>Avoid: {cycle.guidance.avoid?.join(', ')}</div>
+            </div>
+          )}
+          {cycle && (
+            <div style={{ marginTop:16, borderTop:'1px solid #1e1e1e', paddingTop:12, display:'flex', flexDirection:'column', gap:8 }}>
+              <SuggestionRow
+                label="F&G"
+                phase={cycle.fg_suggested_phase}
+                confirmed={cycle.fg_confirmed}
+                current={cycle.phase}
+                onAccept={handleSetPhase}
+              />
+              <SuggestionRow
+                label="Rotation"
+                phase={cycle.rotation_suggested_phase}
+                confirmed={true}
+                current={cycle.phase}
+                onAccept={handleSetPhase}
+              />
             </div>
           )}
         </div>

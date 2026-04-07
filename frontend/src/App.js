@@ -7,6 +7,7 @@ import { API, fmt, gc, currSym } from './utils';
 import Sidebar from './components/Sidebar';
 import RotationTab from './components/RotationTab';
 import BreadthTab from './components/BreadthTab';
+import FearGreedTab from './components/FearGreedTab';
 import CrossAssetTab from './components/CrossAssetTab';
 import SignalsTab from './components/SignalsTab';
 
@@ -720,8 +721,8 @@ function Screener({ onSelect, highlightSymbol }) {
 
 
       {loading ? <div style={S.loading}>Screening…</div> : (
-        <div>
-          <table style={S.table}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ ...S.table, minWidth: 900 }}>
             <thead>
               <tr>
                 {[['Symbol',false],['Name',false],['Sector',false],['Index',false],['Mkt Cap',true],['P/E',true],['P/B',true],['ROE',true],['Rev Growth',true],['D/E',true],['Momentum',true],['Quality',true],['Value',true],['Risk',true]].map(([h,num])=>(
@@ -844,13 +845,19 @@ export default function App() {
     }
   };
 
-  const NAV_TABS = [
-    { id: 'screener',    label: 'Screener'    },
-    { id: 'rotation',    label: 'Rotation'    },
-    { id: 'breadth',     label: 'Breadth'     },
-    { id: 'cross-asset', label: 'Cross-Asset' },
-    { id: 'signals',     label: 'Signals'     },
+  const NAV_GROUPS = [
+    { id: 'screener', label: 'Screener' },
+    { id: 'sector-analysis', label: 'Sector Analysis', children: [
+      { id: 'rotation', label: 'Rotation'   },
+      { id: 'breadth',  label: 'Breadth'    },
+      { id: 'signals',  label: 'Signal Log' },
+    ]},
+    { id: 'markets', label: 'Markets', children: [
+      { id: 'fear-greed',  label: 'Fear & Greed' },
+      { id: 'cross-asset', label: 'Cross-Asset'  },
+    ]},
   ];
+  const [openMenu, setOpenMenu] = useState(null);
 
   const showSidebar = page !== 'company';
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -861,15 +868,50 @@ export default function App() {
 
       {/* Nav */}
       <nav style={{ background:'#0a0a0a', borderBottom:'1px solid #2a2a2a', padding:'0 32px', display:'flex', alignItems:'center', height:52, position:'sticky', top:0, zIndex:100 }}>
+        <button onClick={() => setSidebarCollapsed(v => !v)} title="Toggle sidebar"
+          style={{ background:'none', border:'none', cursor:'pointer', padding:'4px 8px 4px 0', marginRight:8, marginLeft:-20, display:'flex', alignItems:'center', opacity: sidebarCollapsed ? 0.35 : 0.75, transition:'opacity 0.2s' }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="2" width="20" height="20" rx="3" stroke="#f1f5f9" strokeWidth="1.5"/>
+            <line x1="8" y1="2" x2="8" y2="22" stroke="#f1f5f9" strokeWidth="1.5"/>
+            <line x1="11" y1="7" x2="19" y2="7" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="11" y1="12" x2="19" y2="12" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round"/>
+            <line x1="11" y1="17" x2="16" y2="17" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round"/>
+          </svg>
+        </button>
         <div style={{ fontFamily:'monospace', fontSize:16, fontWeight:700, color:'#f97316', marginRight:32, cursor:'pointer', letterSpacing:2, textTransform:'uppercase' }} onClick={()=>setPage('screener')}>
           Egg Basket
         </div>
         <div style={{ display:'flex', gap:2 }}>
-          {NAV_TABS.map(t => (
-            <button key={t.id} style={{ ...S.navBtn, ...(page===t.id ? S.navBtnActive : {}) }} onClick={()=>setPage(t.id)}>
-              {t.label}
-            </button>
-          ))}
+          {NAV_GROUPS.map(g => {
+            if (!g.children) {
+              return (
+                <button key={g.id} style={{ ...S.navBtn, ...(page===g.id ? S.navBtnActive : {}) }} onClick={() => setPage(g.id)}>
+                  {g.label}
+                </button>
+              );
+            }
+            const groupActive = g.children.some(c => c.id === page);
+            return (
+              <div key={g.id} style={{ position:'relative' }}
+                onMouseEnter={() => setOpenMenu(g.id)}
+                onMouseLeave={() => setOpenMenu(null)}>
+                <button style={{ ...S.navBtn, ...(groupActive ? S.navBtnActive : {}), display:'flex', alignItems:'center', gap:4 }}>
+                  {g.label} <span style={{ fontSize:8, opacity:0.6 }}>▾</span>
+                </button>
+                {openMenu === g.id && (
+                  <div style={{ position:'absolute', top:'100%', left:0, background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, minWidth:140, zIndex:200, boxShadow:'0 8px 24px rgba(0,0,0,0.8)' }}>
+                    {g.children.map(c => (
+                      <button key={c.id}
+                        onClick={() => { setPage(c.id); setOpenMenu(null); }}
+                        style={{ ...S.navBtn, ...(page===c.id ? S.navBtnActive : {}), display:'block', width:'100%', textAlign:'left', borderRadius:0, padding:'10px 16px' }}>
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:12 }}>
           {lastUpdated && <span style={{ color:'#444', fontSize:10, fontFamily:'monospace' }}>Updated {lastUpdated}</span>}
@@ -921,13 +963,9 @@ export default function App() {
 
       {/* Body: sidebar + main */}
       <div style={{ display:'flex', maxWidth:1400, margin:'0 auto' }}>
-        {showSidebar && sidebarCollapsed && (
-          <button onClick={() => setSidebarCollapsed(false)} title="Expand sidebar"
-            style={{ position:'fixed', left:0, top:80, zIndex:200, background:'#141414', border:'1px solid #2a2a2a', borderLeft:'none', borderRadius:'0 4px 4px 0', color:'#555', fontSize:14, cursor:'pointer', padding:'8px 4px', lineHeight:1 }}>›</button>
-        )}
         {showSidebar && !sidebarCollapsed && (
-          <div style={{ position:'relative', flexShrink:0 }}>
-            <Sidebar refreshKey={refreshKey} onCollapse={() => setSidebarCollapsed(true)} />
+          <div style={{ flexShrink:0 }}>
+            <Sidebar refreshKey={refreshKey} />
           </div>
         )}
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
@@ -936,6 +974,7 @@ export default function App() {
           </div>
           {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
           {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
+          {page==='fear-greed'  && <FearGreedTab refreshKey={refreshKey} />}
           {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}
           {page==='signals'     && <SignalsTab refreshKey={refreshKey} />}
           {page==='company' && selectedSymbol && (
@@ -963,7 +1002,7 @@ const S = {
   dropdownItem:{ display:'flex', alignItems:'center', gap:12, padding:'10px 16px', cursor:'pointer', borderBottom:'1px solid #1f1f1f' },
   select:      { padding:'8px 12px', borderRadius:2, border:'1px solid #2a2a2a', fontSize:12, background:'#141414', color:'#ccc', cursor:'pointer', outline:'none', fontFamily:'monospace' },
   table:       { width:'100%', borderCollapse:'separate', borderSpacing:0, fontSize:12, fontFamily:'monospace' },
-  th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5, position:'sticky', top:52, zIndex:1 },
+  th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5 },
   td:          { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', color:'#ccc', whiteSpace:'nowrap' },
   tdNum:       { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', textAlign:'right', fontFamily:'monospace', fontSize:12, whiteSpace:'nowrap', color:'#e5e5e5' },
   tooltip:     { background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:12, color:'#e5e5e5', fontFamily:'monospace' },

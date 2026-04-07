@@ -726,7 +726,7 @@ def _gilt_vs_utilities_zscore(prices):
         return None
     gilt = prices[gilt_ticker].dropna()
     util_cols = [prices[t].dropna() for t in util_tickers if t in prices.columns]
-    if not util_cols or len(gilt) < 252:
+    if not util_cols or len(gilt) < 20:
         return None
     min_len = min(len(gilt), min(len(u) for u in util_cols))
     window = min(252, min_len)
@@ -798,12 +798,53 @@ def _compute_signals():
 def signals():
     return _cached("signals", _compute_signals)
 
+def _suggest_phase_from_rotation(rotation_data):
+    """Infer cycle phase from which sectors are leading by RS rank.
+    Returns the phase whose favoured sectors best match the top-4 RS leaders,
+    or None if the signal is ambiguous (fewer than 2 matches)."""
+    if not rotation_data:
+        return None
+    top_sectors = {s["sector"] for s in rotation_data if s.get("rank", 99) <= 4}
+    scores = {
+        phase: len(set(guidance["favour"]) & top_sectors)
+        for phase, guidance in PHASE_GUIDANCE.items()
+    }
+    best_phase = max(scores, key=scores.get)
+    return best_phase if scores[best_phase] >= 2 else None
+
+
 @router.get("/cycle")
 def get_cycle():
+    rotation = _cached("rotation", _compute_rotation)
+    rotation_suggestion = _suggest_phase_from_rotation(rotation)
+
+    # Ensure F&G has been computed at least once
+    fg_data = _cached("fear_greed", _compute_fear_greed)
+    fg_score = fg_data.get("score") if fg_data else None
+
+    # Use trend-based suggestion if available, otherwise derive from score alone
+    fg_suggestion = _fg_history[-1]["suggested_phase"] if _fg_history else None
+    if not fg_suggestion or fg_suggestion == "no_change":
+        if fg_score is not None:
+            if fg_score >= 70:   fg_suggestion = "Expansion"
+            elif fg_score >= 55: fg_suggestion = "Recovery"
+            elif fg_score <= 30: fg_suggestion = "Contraction"
+            elif fg_score <= 45: fg_suggestion = "Slowdown"
+            else:                fg_suggestion = None  # 45-55: neutral
+
+    fg_confirmed = (
+        len(_fg_history) >= 2
+        and _fg_history[-1].get("suggested_phase") not in (None, "no_change")
+        and _fg_history[-1]["suggested_phase"] == _fg_history[-2].get("suggested_phase")
+    )
+
     return {
         "phase": _cycle["phase"],
         "set_at": _cycle["set_at"],
         "guidance": PHASE_GUIDANCE.get(_cycle["phase"], {}),
+        "fg_suggested_phase": fg_suggestion,
+        "fg_confirmed": fg_confirmed,
+        "rotation_suggested_phase": rotation_suggestion,
     }
 
 @router.post("/cycle")
@@ -822,4 +863,4 @@ def set_cycle(body: dict = Body(...)):
     # clear signal cache so next fetch reflects new phase
     _cache.pop("signals", None)
     _cache.pop("sidebar", None)
-    return _cycle
+    return get_cycle()
