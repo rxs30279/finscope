@@ -377,6 +377,11 @@ function CompanyDetail({ symbol, onBack }) {
           </div>
         </div>
       )}
+
+      {/* ANALYSTS */}
+      {tab==='analysts' && (
+        <AnalystTab symbol={symbol} />
+      )}
     </div>
   );
 }
@@ -820,10 +825,6 @@ function Screener({ onSelect, highlightSymbol }) {
         </div>
       )}
 
-      {/* ANALYSTS */}
-      {tab==='analysts' && (
-        <AnalystTab symbol={symbol} />
-      )}
     </div>
   );
 }
