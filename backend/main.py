@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 from market import router as market_router
 from prices import router as prices_router, _attach_momentum
+from analysts import router as analysts_router
 
 load_dotenv()
 
@@ -18,6 +19,7 @@ ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").spl
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 app.include_router(market_router)
 app.include_router(prices_router)
+app.include_router(analysts_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
@@ -382,6 +384,8 @@ def screener(
     max_pe: Optional[float]=None,
     min_roe: Optional[float]=None,
     min_revenue_growth: Optional[float]=None,
+    consensus: Optional[str]=None,
+    min_upside_pct: Optional[float]=None,
     limit: int=100
 ):
     wheres = ["1=1"]
@@ -399,6 +403,8 @@ def screener(
     if max_pe: wheres.append("t.price_to_earnings <= %s AND t.price_to_earnings > 0"); params.append(max_pe)
     if min_roe: wheres.append("t.roe >= %s"); params.append(min_roe)
     if min_revenue_growth: wheres.append("t.revenue_growth >= %s"); params.append(min_revenue_growth)
+    if consensus:      wheres.append("a.consensus = %s");    params.append(consensus)
+    if min_upside_pct: wheres.append("a.upside_pct >= %s");  params.append(min_upside_pct)
     params.append(limit)
     sql = f"""
         SELECT m.symbol, m.name, m.sector, m.country, m.exchange, m.ftse_index, m.financial_currency,
@@ -411,9 +417,16 @@ def screener(
                t.revenue_cagr_10, t.eps_cagr_10, t.period_end_date,
                t.fcf_margin,
                t.gross_margin_median, t.operating_margin_median,
-               t.net_margin_median, t.roe_median, t.roic_median
+               t.net_margin_median, t.roe_median, t.roic_median,
+               a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol)
+                symbol, consensus, buy_pct, upside_pct, total_analysts, revision_score
+            FROM analyst_snapshots
+            ORDER BY symbol, snapshot_date DESC
+        ) a ON a.symbol = m.symbol
         WHERE {' AND '.join(wheres)}
         ORDER BY t.market_cap DESC NULLS LAST
         LIMIT %s
