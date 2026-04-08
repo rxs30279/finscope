@@ -10,6 +10,8 @@ import BreadthTab from './components/BreadthTab';
 import FearGreedTab from './components/FearGreedTab';
 import CrossAssetTab from './components/CrossAssetTab';
 import SignalsTab from './components/SignalsTab';
+import AnalystTab from './components/AnalystTab';
+import AnalystMonitorTab from './components/AnalystMonitorTab';
 
 
 function MetricCard({ label, value, color }) {
@@ -76,7 +78,7 @@ function CompanyDetail({ symbol, onBack }) {
     eps:        r.eps_diluted,
   }));
 
-  const tabs = ['chart','overview','financials','valuation','health','growth'];
+  const tabs = ['chart','overview','financials','valuation','health','growth','analysts'];
 
   return (
     <div>
@@ -519,7 +521,7 @@ function PriceChart({ symbol }) {
 }
 
 // ── Screener ──────────────────────────────────────────────────────────────────
-const EMPTY_FILTERS = { sector:'', ftse_index:'', min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
+const EMPTY_FILTERS = { sector:'', ftse_index:'', min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'', consensus:'', min_upside_pct:'' };
 const EMPTY_MODES   = { min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
 const EMPTY_SCORE_FILTERS = { min_momentum:'', min_quality:'', min_piotroski:'', max_risk:'' };
 
@@ -554,6 +556,8 @@ function Screener({ onSelect, highlightSymbol }) {
     if (f.max_pe)             p.set('max_pe', f.max_pe);
     if (f.min_roe)            p.set('min_roe', f.min_roe);
     if (f.min_revenue_growth) p.set('min_revenue_growth', f.min_revenue_growth);
+    if (f.consensus)          p.set('consensus', f.consensus);
+    if (f.min_upside_pct)     p.set('min_upside_pct', f.min_upside_pct);
     p.set('limit', 1000);
     fetch(`${API}/screener?${p}`)
       .then(r=>r.json())
@@ -716,6 +720,26 @@ function Screener({ onSelect, highlightSymbol }) {
             <option value="0.1">Rev Growth &gt; 10%</option>
             <option value="0.2">Rev Growth &gt; 20%</option>
           </HybridSelect>
+          <select
+            style={S.select}
+            value={filters.consensus}
+            onChange={e => update('consensus', e.target.value)}
+          >
+            <option value="">All Consensus</option>
+            <option value="Buy">Buy</option>
+            <option value="Hold">Hold</option>
+            <option value="Sell">Sell</option>
+          </select>
+          <select
+            style={S.select}
+            value={filters.min_upside_pct}
+            onChange={e => update('min_upside_pct', e.target.value)}
+          >
+            <option value="">Any Upside</option>
+            <option value="5">Upside &gt; 5%</option>
+            <option value="10">Upside &gt; 10%</option>
+            <option value="20">Upside &gt; 20%</option>
+          </select>
         </div>
       )}
 
@@ -725,7 +749,7 @@ function Screener({ onSelect, highlightSymbol }) {
           <table style={{ ...S.table, minWidth: 900 }}>
             <thead>
               <tr>
-                {[['Symbol',false],['Name',false],['Sector',false],['Index',false],['Mkt Cap',true],['P/E',true],['P/B',true],['ROE',true],['Rev Growth',true],['D/E',true],['Momentum',true],['Quality',true],['Value',true],['Risk',true]].map(([h,num])=>(
+                {[['Symbol',false],['Name',false],['Sector',false],['Index',false],['Mkt Cap',true],['P/E',true],['P/B',true],['ROE',true],['Rev Growth',true],['D/E',true],['Momentum',true],['Quality',true],['Value',true],['Risk',true],['Consensus',false],['Upside',true]].map(([h,num])=>(
                   <th key={h} style={{ ...S.th, textAlign: num?'right':'left' }}>{h}</th>
                 ))}
               </tr>
@@ -777,12 +801,28 @@ function Screener({ onSelect, highlightSymbol }) {
                          :                        '#ef4444',
                     fontWeight: 700,
                   }}>{r.risk_score ?? '—'}</td>
+                  <td style={S.td}>
+                    {r.consensus
+                      ? <span style={{
+                          ...({ Buy: { background:'#0d3320', color:'#10b981' }, Hold: { background:'#1a1400', color:'#f59e0b' }, Sell: { background:'#2a0d0d', color:'#ef4444' } }[r.consensus] || {}),
+                          padding:'2px 7px', borderRadius:2, fontSize:9, fontFamily:'monospace', fontWeight:700
+                        }}>{r.consensus}</span>
+                      : <span style={{ color:'#2a2a2a' }}>—</span>}
+                  </td>
+                  <td style={{ ...S.tdNum, color: r.upside_pct >= 0 ? '#10b981' : r.upside_pct < 0 ? '#ef4444' : '#555' }}>
+                    {r.upside_pct != null ? `${r.upside_pct >= 0 ? '+' : ''}${r.upside_pct.toFixed(1)}%` : '—'}
+                  </td>
                 </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* ANALYSTS */}
+      {tab==='analysts' && (
+        <AnalystTab symbol={symbol} />
       )}
     </div>
   );
@@ -846,7 +886,8 @@ export default function App() {
   };
 
   const NAV_GROUPS = [
-    { id: 'screener', label: 'Screener' },
+    { id: 'screener',        label: 'Screener' },
+    { id: 'analyst-monitor', label: 'Analysts' },
     { id: 'sector-analysis', label: 'Sector Analysis', children: [
       { id: 'rotation', label: 'Rotation'   },
       { id: 'breadth',  label: 'Breadth'    },
@@ -976,7 +1017,8 @@ export default function App() {
           {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
           {page==='fear-greed'  && <FearGreedTab refreshKey={refreshKey} />}
           {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}
-          {page==='signals'     && <SignalsTab refreshKey={refreshKey} />}
+          {page==='signals'        && <SignalsTab refreshKey={refreshKey} />}
+          {page==='analyst-monitor' && <AnalystMonitorTab refreshKey={refreshKey} />}
           {page==='company' && selectedSymbol && (
             <CompanyDetail symbol={selectedSymbol} onBack={()=>setPage('screener')} />
           )}
