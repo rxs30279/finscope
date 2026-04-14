@@ -217,7 +217,7 @@ function CompanyDetail({ symbol, onBack }) {
                 <thead>
                   <tr>
                     <th style={S.th}>Metric</th>
-                    {annual.slice(-5).map(r=><th key={r.period_end_date} style={S.th}>{r.period_end_date?.slice(0,4)}</th>)}
+                    {annual.slice(-5).map(r=><th key={r.period_end_date} style={{ ...S.th, textAlign:'right' }}>{r.period_end_date?.slice(0,4)}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -530,6 +530,19 @@ const EMPTY_FILTERS = { sector:'', ftse_index:'', min_market_cap:'', max_pe:'', 
 const EMPTY_MODES   = { min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
 const EMPTY_SCORE_FILTERS = { min_momentum:'', min_quality:'', min_piotroski:'', max_risk:'' };
 
+// [label, rightAlign, sortKey]
+const FUND_COLS = [
+  ['Symbol',false,'symbol'],['Name',false,'name'],['Sector',false,'sector'],['Index',false,'ftse_index'],
+  ['Mkt Cap',true,'market_cap'],['P/E',true,'price_to_earnings'],['P/B',true,'price_to_book'],
+  ['ROE',true,'roe'],['Rev Growth',true,'revenue_growth'],['D/E',true,'debt_to_equity'],
+  ['Momentum',true,'momentum_score'],['Quality',true,'quality_score'],['Value',true,'piotroski_score'],['Risk',true,'risk_score'],
+];
+const ANALYST_COLS = [
+  ['Symbol',false,'symbol'],['Name',false,'name'],['Sector',false,'sector'],['Index',false,'ftse_index'],
+  ['Mkt Cap',true,'market_cap'],['Consensus',false,'consensus'],['Upside',true,'upside_pct'],
+  ['Buy%',true,'buy_pct'],['# Analysts',true,'total_analysts'],['Rev Score',true,'revision_score'],
+];
+
 function Screener({ onSelect, highlightSymbol }) {
   const [filters, setFilters]       = useState(EMPTY_FILTERS);
   const [selectModes, setSelectModes] = useState(EMPTY_MODES);
@@ -538,6 +551,9 @@ function Screener({ onSelect, highlightSymbol }) {
   const [loading, setLoading]       = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [scoreFilters, setScoreFilters] = useState(EMPTY_SCORE_FILTERS);
+  const [tableView, setTableView] = useState('fundamentals');
+  const [sortCol, setSortCol]     = useState(null);
+  const [sortDir, setSortDir]     = useState('desc');
 
   useEffect(() => {
     fetch(`${API}/filters`).then(r=>r.json()).then(setFilterOpts);
@@ -611,6 +627,20 @@ function Screener({ onSelect, highlightSymbol }) {
   const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth
     || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_piotroski || scoreFilters.max_risk;
 
+  const handleSort = (key) => {
+    if (sortCol === key) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    else { setSortCol(key); setSortDir('desc'); }
+  };
+
+  const sorted = sortCol == null ? displayed : [...displayed].sort((a, b) => {
+    const av = a[sortCol], bv = b[sortCol];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortDir === 'asc' ? av - bv : bv - av;
+  });
+
   return (
     <div>
       <h2 style={{ fontFamily:'DM Serif Display,serif', fontSize:26, color:'#f1f5f9', marginBottom:4 }}>Stock Screener</h2>
@@ -627,11 +657,12 @@ function Screener({ onSelect, highlightSymbol }) {
           {filterOpts.sectors.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
         <select style={S.select} value={filters.ftse_index} onChange={e=>update('ftse_index',e.target.value)}>
-          <option value="">FTSE All-Share</option>
+          <option value="">FTSE Market</option>
           <option value="FTSE 100">FTSE 100</option>
           <option value="FTSE 250">FTSE 250</option>
           <option value="FTSE 350">FTSE 350</option>
           <option value="FTSE SmallCap">FTSE SmallCap</option>
+          <option value="FTSE AIM 100">AIM 100</option>
         </select>
         <HybridSelect
           selectMode={selectModes.min_market_cap}
@@ -749,18 +780,37 @@ function Screener({ onSelect, highlightSymbol }) {
       )}
 
 
+      {/* View toggle */}
+      <div style={{ display:'flex', gap:6, marginBottom:12 }}>
+        {['fundamentals','analysts'].map(v => (
+          <button key={v} onClick={() => setTableView(v)} style={{
+            padding:'5px 14px', borderRadius:2, border:'1px solid',
+            fontSize:11, fontFamily:'monospace', cursor:'pointer', textTransform:'uppercase', letterSpacing:0.5,
+            background: tableView===v ? '#f97316' : '#141414',
+            color:       tableView===v ? '#000'    : '#666',
+            borderColor: tableView===v ? '#f97316' : '#2a2a2a',
+            fontWeight:  tableView===v ? 700       : 400,
+          }}>{v}</button>
+        ))}
+      </div>
+
       {loading ? <div style={S.loading}>Screening…</div> : (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ ...S.table, minWidth: 900 }}>
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 280px)', scrollbarGutter: 'stable' }}>
+          <table style={{ ...S.table, minWidth: tableView==='analysts' ? 700 : 900 }}>
             <thead>
               <tr>
-                {[['Symbol',false],['Name',false],['Sector',false],['Index',false],['Mkt Cap',true],['P/E',true],['P/B',true],['ROE',true],['Rev Growth',true],['D/E',true],['Momentum',true],['Quality',true],['Value',true],['Risk',true],['Consensus',false],['Upside',true]].map(([h,num])=>(
-                  <th key={h} style={{ ...S.th, textAlign: num?'right':'left' }}>{h}</th>
+                {(tableView === 'fundamentals' ? FUND_COLS : ANALYST_COLS).map(([h,num,key])=>(
+                  <th key={h} onClick={() => handleSort(key)} style={{
+                    ...S.th, textAlign: num?'right':'left', cursor:'pointer', userSelect:'none',
+                    color: sortCol===key ? '#fb923c' : '#f97316',
+                  }}>
+                    {h}{sortCol===key ? (sortDir==='desc'?' ▼':' ▲') : ''}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {displayed.map((r,i) => {
+              {sorted.map((r,i) => {
                 const isHighlighted = r.symbol === highlightSymbol;
                 const baseBg = isHighlighted ? '#2d1e00' : i%2===0 ? '#1e293b' : '#162032';
                 return (
@@ -768,55 +818,57 @@ function Screener({ onSelect, highlightSymbol }) {
                   style={{ background: baseBg, cursor:'pointer', boxShadow: isHighlighted ? 'inset 3px 0 0 #f97316' : 'none' }}
                   onMouseEnter={e=>e.currentTarget.style.background='#334155'}
                   onMouseLeave={e=>e.currentTarget.style.background=baseBg}>
+                  {/* Shared columns */}
                   <td style={{ ...S.td, fontFamily:'monospace', fontWeight:700, color:'#818cf8' }}>{r.symbol.replace('.L','')}</td>
                   <td style={S.td}>{r.name?.slice(0,26)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.sector?.slice(0,18)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.ftse_index?.replace('FTSE ','')}</td>
                   <td style={S.tdNum}>{fmt(r.market_cap,'currency',r.financial_currency)}</td>
-                  <td style={{ ...S.tdNum, color: r.price_to_earnings<15?'#10b981':r.price_to_earnings>40?'#ef4444':'#ccc' }}>{fmt(r.price_to_earnings,'ratio')}</td>
-                  <td style={S.tdNum}>{fmt(r.price_to_book,'ratio')}</td>
-                  <td style={{ ...S.tdNum, color:gc(r.roe) }}>{fmt(r.roe,'pct')}</td>
-                  <td style={{ ...S.tdNum, color:gc(r.revenue_growth) }}>{fmt(r.revenue_growth,'pct')}</td>
-                  <td style={{ ...S.tdNum, color: r.debt_to_equity>2?'#ef4444':'#ccc' }}>{fmt(r.debt_to_equity,'ratio')}</td>
-                  <td style={{ ...S.tdNum,
-                    color: r.momentum_score == null ? '#444'
-                         : r.momentum_score >= 7    ? '#10b981'
-                         : r.momentum_score >= 4    ? '#f59e0b'
-                         :                            '#ef4444',
-                    fontWeight: 700,
-                  }}>{r.momentum_score ?? '—'}</td>
-                  <td style={{ ...S.tdNum,
-                    color: r.quality_score == null ? '#444'
-                         : r.quality_score >= 7    ? '#10b981'
-                         : r.quality_score >= 4    ? '#f59e0b'
-                         :                           '#ef4444',
-                    fontWeight: 700,
-                  }}>{r.quality_score ?? '—'}</td>
-                  <td style={{ ...S.tdNum,
-                    color: r.piotroski_score == null ? '#444'
-                         : r.piotroski_score >= 7   ? '#10b981'
-                         : r.piotroski_score >= 4   ? '#f59e0b'
-                         :                            '#ef4444',
-                    fontWeight: 700,
-                  }}>{r.piotroski_score ?? '—'}</td>
-                  <td style={{ ...S.tdNum,
-                    color: r.risk_score == null ? '#444'
-                         : r.risk_score <= 3    ? '#10b981'
-                         : r.risk_score <= 6    ? '#f59e0b'
-                         :                        '#ef4444',
-                    fontWeight: 700,
-                  }}>{r.risk_score ?? '—'}</td>
-                  <td style={S.td}>
-                    {r.consensus
-                      ? <span style={{
-                          ...({ Buy: { background:'#0d3320', color:'#10b981' }, Hold: { background:'#1a1400', color:'#f59e0b' }, Sell: { background:'#2a0d0d', color:'#ef4444' } }[r.consensus] || {}),
-                          padding:'2px 7px', borderRadius:2, fontSize:9, fontFamily:'monospace', fontWeight:700
-                        }}>{r.consensus}</span>
-                      : <span style={{ color:'#2a2a2a' }}>—</span>}
-                  </td>
-                  <td style={{ ...S.tdNum, color: r.upside_pct >= 0 ? '#10b981' : r.upside_pct < 0 ? '#ef4444' : '#555' }}>
-                    {r.upside_pct != null ? `${r.upside_pct >= 0 ? '+' : ''}${r.upside_pct.toFixed(1)}%` : '—'}
-                  </td>
+                  {tableView === 'fundamentals' ? (<>
+                    <td style={{ ...S.tdNum, color: r.price_to_earnings<15?'#10b981':r.price_to_earnings>40?'#ef4444':'#ccc' }}>{fmt(r.price_to_earnings,'ratio')}</td>
+                    <td style={S.tdNum}>{fmt(r.price_to_book,'ratio')}</td>
+                    <td style={{ ...S.tdNum, color:gc(r.roe) }}>{fmt(r.roe,'pct')}</td>
+                    <td style={{ ...S.tdNum, color:gc(r.revenue_growth) }}>{fmt(r.revenue_growth,'pct')}</td>
+                    <td style={{ ...S.tdNum, color: r.debt_to_equity>2?'#ef4444':'#ccc' }}>{fmt(r.debt_to_equity,'ratio')}</td>
+                    <td style={{ ...S.tdNum,
+                      color: r.momentum_score == null ? '#444' : r.momentum_score >= 7 ? '#10b981' : r.momentum_score >= 4 ? '#f59e0b' : '#ef4444',
+                      fontWeight: 700,
+                    }}>{r.momentum_score ?? '—'}</td>
+                    <td style={{ ...S.tdNum,
+                      color: r.quality_score == null ? '#444' : r.quality_score >= 7 ? '#10b981' : r.quality_score >= 4 ? '#f59e0b' : '#ef4444',
+                      fontWeight: 700,
+                    }}>{r.quality_score ?? '—'}</td>
+                    <td style={{ ...S.tdNum,
+                      color: r.piotroski_score == null ? '#444' : r.piotroski_score >= 7 ? '#10b981' : r.piotroski_score >= 4 ? '#f59e0b' : '#ef4444',
+                      fontWeight: 700,
+                    }}>{r.piotroski_score ?? '—'}</td>
+                    <td style={{ ...S.tdNum,
+                      color: r.risk_score == null ? '#444' : r.risk_score <= 3 ? '#10b981' : r.risk_score <= 6 ? '#f59e0b' : '#ef4444',
+                      fontWeight: 700,
+                    }}>{r.risk_score ?? '—'}</td>
+                  </>) : (<>
+                    <td style={S.td}>
+                      {r.consensus
+                        ? <span style={{
+                            ...({ Buy: { background:'#0d3320', color:'#10b981' }, Hold: { background:'#1a1400', color:'#f59e0b' }, Sell: { background:'#2a0d0d', color:'#ef4444' } }[r.consensus] || {}),
+                            padding:'2px 7px', borderRadius:2, fontSize:9, fontFamily:'monospace', fontWeight:700
+                          }}>{r.consensus}</span>
+                        : <span style={{ color:'#444' }}>—</span>}
+                    </td>
+                    <td style={{ ...S.tdNum, color: r.upside_pct > 0 ? '#10b981' : r.upside_pct < 0 ? '#ef4444' : '#555' }}>
+                      {r.upside_pct != null ? `${r.upside_pct >= 0 ? '+' : ''}${r.upside_pct.toFixed(1)}%` : '—'}
+                    </td>
+                    <td style={{ ...S.tdNum, color: r.buy_pct != null ? (r.buy_pct >= 60 ? '#10b981' : r.buy_pct >= 40 ? '#f59e0b' : '#ef4444') : '#444' }}>
+                      {r.buy_pct != null ? `${r.buy_pct.toFixed(0)}%` : '—'}
+                    </td>
+                    <td style={{ ...S.tdNum, color: r.total_analysts != null ? '#94a3b8' : '#444' }}>
+                      {r.total_analysts ?? '—'}
+                    </td>
+                    <td style={{ ...S.tdNum,
+                      color: r.revision_score == null ? '#444' : r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#f59e0b',
+                      fontWeight: 700,
+                    }}>{r.revision_score != null ? (r.revision_score > 0 ? `+${r.revision_score}` : r.revision_score) : '—'}</td>
+                  </>)}
                 </tr>
                 );
               })}
@@ -1004,12 +1056,10 @@ export default function App() {
       </nav>
 
       {/* Body: sidebar + main */}
-      <div style={{ display:'flex', maxWidth:1400, margin:'0 auto' }}>
-        {showSidebar && !sidebarCollapsed && (
-          <div style={{ flexShrink:0 }}>
-            <Sidebar refreshKey={refreshKey} />
-          </div>
-        )}
+      <div style={{ display:'flex', maxWidth:1600, margin:'0 auto' }}>
+        <div style={{ flexShrink:0, display: showSidebar && !sidebarCollapsed ? 'block' : 'none' }}>
+          <Sidebar refreshKey={refreshKey} />
+        </div>
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
           <div style={{ display: page==='screener' ? 'block' : 'none' }}>
             <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />
@@ -1045,7 +1095,7 @@ const S = {
   dropdownItem:{ display:'flex', alignItems:'center', gap:12, padding:'10px 16px', cursor:'pointer', borderBottom:'1px solid #1f1f1f' },
   select:      { padding:'8px 12px', borderRadius:2, border:'1px solid #2a2a2a', fontSize:12, background:'#141414', color:'#ccc', cursor:'pointer', outline:'none', fontFamily:'monospace' },
   table:       { width:'100%', borderCollapse:'separate', borderSpacing:0, fontSize:12, fontFamily:'monospace' },
-  th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5 },
+  th:          { textAlign:'left', padding:'8px 12px', background:'#0a0a0a', color:'#f97316', fontSize:10, fontWeight:700, borderBottom:'1px solid #2a2a2a', whiteSpace:'nowrap', textTransform:'uppercase', letterSpacing:0.5, position:'sticky', top:0, zIndex:1 },
   td:          { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', color:'#ccc', whiteSpace:'nowrap' },
   tdNum:       { padding:'9px 12px', borderBottom:'1px solid #1a1a1a', textAlign:'right', fontFamily:'monospace', fontSize:12, whiteSpace:'nowrap', color:'#e5e5e5' },
   tooltip:     { background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:12, color:'#e5e5e5', fontFamily:'monospace' },
