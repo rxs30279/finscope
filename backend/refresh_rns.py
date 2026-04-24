@@ -20,7 +20,7 @@ load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 import time
 import traceback
 
-from rns import _run_ingest, _backfill_summaries
+from rns import _run_ingest, _backfill_summaries, _prune_old
 from rns_llm import _rank_pending
 
 
@@ -45,9 +45,11 @@ if __name__ == "__main__":
     ingest   = _stage("ingest",    _run_ingest, max_pages=5, stop_on_known=True, sleep_s=1.5)
     summary  = _stage("summaries", _backfill_summaries, limit=50, sleep_s=1.0, tiers=("A", "B"))
     ranking  = _stage("rank",      _rank_pending, limit=50, tiers=("A", "B"), hours=48)
+    prune    = _stage("prune",     _prune_old, days=14)
 
     total = round(time.time() - t_start, 1)
     print(f"[rns-pipeline] complete in {total}s")
     print(f"  ingest:    {ingest}")
     print(f"  summaries: {summary}")
     print(f"  ranking:   {ranking}")
+    print(f"  prune:     {prune}")

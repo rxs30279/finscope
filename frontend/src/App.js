@@ -89,9 +89,15 @@ function CompanyDetail({ symbol, onBack }) {
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:16, marginBottom:28 }}>
         <div>
           <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:10 }}>
-            <div style={{ background:'#6366f1', color:'#fff', borderRadius:10, width:50, height:50, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'DM Serif Display,serif', fontSize:13, fontWeight:700 }}>
+            <a
+              href={`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="View on Yahoo Finance"
+              style={{ background:'#6366f1', color:'#fff', borderRadius:10, width:50, height:50, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'DM Serif Display,serif', fontSize:13, fontWeight:700, textDecoration:'none', cursor:'pointer' }}
+            >
               {symbol.replace('.L','').slice(0,4)}
-            </div>
+            </a>
             <div>
               <h1 style={{ margin:0, fontFamily:'DM Serif Display,serif', fontSize:26, color:'#f1f5f9' }}>{meta?.name || symbol}</h1>
               <div style={{ display:'flex', gap:6, marginTop:5, flexWrap:'wrap' }}>
@@ -908,7 +914,32 @@ export default function App() {
     setShowSearch(false);
     setSearchQ('');
     setSearchResults([]);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ page: 'company', symbol: sym }, '', `#company/${encodeURIComponent(sym)}`);
+    }
   };
+
+  const goBack = () => {
+    setPage('screener');
+    if (typeof window !== 'undefined' && window.location.hash) {
+      window.history.pushState({ page: 'screener' }, '', window.location.pathname + window.location.search);
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onPop = (e) => {
+      const st = e.state;
+      if (st && st.page === 'company' && st.symbol) {
+        setSelectedSymbol(st.symbol);
+        setPage('company');
+      } else {
+        setPage('screener');
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const highlightInScreener = (sym) => {
     setHighlightSymbol(sym);
@@ -1072,9 +1103,9 @@ export default function App() {
           {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}
           {page==='signals'        && <SignalsTab refreshKey={refreshKey} />}
           {page==='analyst-monitor' && <AnalystMonitorTab refreshKey={refreshKey} onSelect={selectCompany} />}
-          {page==='rns'             && <RnsTab refreshKey={refreshKey} />}
+          {page==='rns'             && <RnsTab refreshKey={refreshKey} onSelect={selectCompany} />}
           {page==='company' && selectedSymbol && (
-            <CompanyDetail symbol={selectedSymbol} onBack={()=>setPage('screener')} />
+            <CompanyDetail symbol={selectedSymbol} onBack={goBack} />
           )}
         </main>
       </div>

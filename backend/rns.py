@@ -502,6 +502,27 @@ def _build_row(raw: dict) -> dict:
     }
 
 
+def _prune_old(days: int = 14) -> dict:
+    """Hard-delete rns_announcements older than `days` (by published_at).
+
+    Keeps storage bounded — RNS volume is a few hundred rows/day and the UI
+    only ever reads the most recent window, so older rows have no value.
+    """
+    pool = _get_pool()
+    conn = pool.getconn()
+    conn.autocommit = True
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM rns_announcements WHERE published_at < NOW() - (%s || ' days')::interval",
+            (str(days),)
+        )
+        deleted = cur.rowcount
+        return {"deleted": deleted, "older_than_days": days}
+    finally:
+        pool.putconn(conn)
+
+
 def _run_ingest(max_pages: int = 7, stop_on_known: bool = True,
                 sleep_s: float = 2.0) -> dict:
     """Fetch up to max_pages of the feed, classify, and upsert.

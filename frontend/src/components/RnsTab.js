@@ -118,7 +118,7 @@ function KeywordTags({ hits }) {
   );
 }
 
-export default function RnsTab({ refreshKey }) {
+export default function RnsTab({ refreshKey, onSelect }) {
   const [rows, setRows]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -249,7 +249,16 @@ export default function RnsTab({ refreshKey }) {
       <td style={{ ...S.td, color: '#666', whiteSpace: 'nowrap' }}>{fmtTime(r.published_at)}</td>
       <td style={S.td}><TierBadge tier={r.tier} /></td>
       <td style={{ ...S.td, fontWeight: 700, whiteSpace: 'nowrap' }}>
-        {r.ticker || '—'}
+        {r.ticker
+          ? (r.symbol
+              ? <span onClick={() => onSelect?.(r.symbol)}
+                      title={`View ${r.symbol}`}
+                      style={{ color: '#e5e5e5', cursor: 'pointer', textDecoration: 'none' }}>
+                  {r.ticker}
+                  <span style={{ color: '#6366f1', marginLeft: 4, fontWeight: 400, fontSize: 10 }}>↗</span>
+                </span>
+              : r.ticker)
+          : '—'}
       </td>
       <td style={{ ...S.td, color: '#94a3b8', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {r.company_name || '—'}
