@@ -10,6 +10,8 @@ import os
 from market import router as market_router
 from prices import router as prices_router, _attach_momentum
 from analysts import router as analysts_router
+from rns import router as rns_router
+from rns_llm import router as rns_llm_router
 
 load_dotenv()
 
@@ -20,6 +22,8 @@ app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=
 app.include_router(market_router)
 app.include_router(prices_router)
 app.include_router(analysts_router)
+app.include_router(rns_router)
+app.include_router(rns_llm_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),

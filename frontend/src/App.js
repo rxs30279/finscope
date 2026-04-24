@@ -12,6 +12,7 @@ import CrossAssetTab from './components/CrossAssetTab';
 import SignalsTab from './components/SignalsTab';
 import AnalystTab from './components/AnalystTab';
 import AnalystMonitorTab from './components/AnalystMonitorTab';
+import RnsTab from './components/RnsTab';
 
 
 function MetricCard({ label, value, color }) {
@@ -941,6 +942,7 @@ export default function App() {
   const NAV_GROUPS = [
     { id: 'screener',        label: 'Screener' },
     { id: 'analyst-monitor', label: 'Analysts' },
+    { id: 'rns',             label: 'RNS News' },
     { id: 'sector-analysis', label: 'Sector Analysis', children: [
       { id: 'rotation', label: 'Rotation'   },
       { id: 'breadth',  label: 'Breadth'    },
@@ -1070,6 +1072,7 @@ export default function App() {
           {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}
           {page==='signals'        && <SignalsTab refreshKey={refreshKey} />}
           {page==='analyst-monitor' && <AnalystMonitorTab refreshKey={refreshKey} />}
+          {page==='rns'             && <RnsTab refreshKey={refreshKey} />}
           {page==='company' && selectedSymbol && (
             <CompanyDetail symbol={selectedSymbol} onBack={()=>setPage('screener')} />
           )}
