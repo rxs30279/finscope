@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer
@@ -8,7 +8,7 @@ import { API } from '../utils';
 function AssetCard({ label, item, decimals = 2, prefix = '', suffix = '' }) {
   if (!item) return (
     <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:2, padding:16 }}>
-      <div style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
+      <div style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
       <div style={{ color:'#333', fontSize:18, fontWeight:700, fontFamily:'monospace' }}>—</div>
     </div>
   );
@@ -19,7 +19,7 @@ function AssetCard({ label, item, decimals = 2, prefix = '', suffix = '' }) {
 
   return (
     <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:2, padding:16 }}>
-      <div style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
+      <div style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
       <div style={{ color:'#e5e5e5', fontSize:20, fontWeight:700, fontFamily:'monospace' }}>
         {value !== null && value !== undefined ? `${prefix}${value.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}${suffix}` : '—'}
       </div>
@@ -28,22 +28,22 @@ function AssetCard({ label, item, decimals = 2, prefix = '', suffix = '' }) {
           ? `${pct_change > 0 ? '+' : ''}${(pct_change * 100).toFixed(2)}%${arrow}`
           : '—'}
       </div>
-      {bias && <div style={{ color:'#555', fontSize:9, marginTop:4 }}>{bias}</div>}
+      {bias && <div style={{ color:'#94a3b8', fontSize:9, marginTop:4 }}>{bias}</div>}
     </div>
   );
 }
 
 function ZScoreCard({ label, item }) {
-  if (!item) return <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:2, padding:16 }}><div style={{ color:'#444', fontSize:9 }}>{label}</div><div style={{ color:'#333' }}>—</div></div>;
+  if (!item) return <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:2, padding:16 }}><div style={{ color:'#94a3b8', fontSize:9 }}>{label}</div><div style={{ color:'#555' }}>—</div></div>;
   const { zscore, bias } = item;
   const color = zscore === null ? '#555' : zscore < -1 ? '#ef4444' : zscore > 1 ? '#10b981' : '#f59e0b';
   return (
     <div style={{ background: zscore !== null && zscore < -1 ? '#1a0a0a' : '#141414', border:`1px solid ${zscore !== null && zscore < -1 ? '#3a1a1a' : '#2a2a2a'}`, borderRadius:2, padding:16 }}>
-      <div style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
+      <div style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
       <div style={{ color, fontSize:20, fontWeight:700, fontFamily:'monospace' }}>
         {zscore !== null && zscore !== undefined ? `${zscore > 0 ? '+' : ''}${zscore.toFixed(2)}σ` : '—'}
       </div>
-      {bias && <div style={{ color:'#555', fontSize:9, marginTop:4 }}>{bias}</div>}
+      {bias && <div style={{ color:'#94a3b8', fontSize:9, marginTop:4 }}>{bias}</div>}
     </div>
   );
 }
@@ -105,17 +105,72 @@ function GiltSnapshotChart({ snapshot }) {
 }
 
 const RANGE_DAYS = { '1Y': 365, '2Y': 730, '3Y': 1095, '5Y': 1825 };
+const DETAIL_DAYS = 30;
+
+// Keep daily points for the last 30 days, collapse older to one per ISO week.
+// Cuts 5Y × 5 maturities from ~6,500 SVG nodes to ~1,400 — major perf win for recharts.
+function downsample(history) {
+  if (!history || history.length === 0) return [];
+  const recentCutoff = Date.now() - DETAIL_DAYS * 86400000;
+  const out = [];
+  const seenWeeks = new Set();
+  for (const d of history) {
+    const ts = new Date(d.date).getTime();
+    if (Number.isNaN(ts)) continue;
+    if (ts >= recentCutoff) {
+      out.push(d);
+      continue;
+    }
+    // ISO week key: Monday of the week containing this date (UTC).
+    const date = new Date(ts);
+    const day  = date.getUTCDay();               // 0 = Sunday … 6 = Saturday
+    const monOffset = day === 0 ? -6 : 1 - day;  // shift to Monday
+    const monday = new Date(date.getTime() + monOffset * 86400000);
+    const weekKey = monday.toISOString().slice(0, 10);
+    if (!seenWeeks.has(weekKey)) {
+      seenWeeks.add(weekKey);
+      out.push(d);
+    }
+  }
+  return out;
+}
 
 function GiltHistoryChart({ history }) {
   const [hidden, setHidden] = useState({});
   const [range, setRange]   = useState('5Y');
 
+  const filtered = useMemo(() => {
+    if (!history || history.length === 0) return [];
+    const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
+    const inRange = history.filter(d => new Date(d.date).getTime() >= cutoff);
+    return downsample(inRange);
+  }, [history, range]);
+
+  // Find the most recent date where each maturity has a non-null value.
+  // Used to surface the 2Y/30Y publication lag in the UI footnote.
+  const lastDates = useMemo(() => {
+    const out = {};
+    if (!history || history.length === 0) return out;
+    for (const { key } of MATURITIES) out[key] = null;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const row = history[i];
+      for (const { key } of MATURITIES) {
+        if (out[key] == null && row[key] != null) out[key] = row.date;
+      }
+      if (MATURITIES.every(m => out[m.key] != null)) break;
+    }
+    return out;
+  }, [history]);
+
+  const monthEndMaturities = ['y2', 'y30'].filter(k => lastDates[k]);
+  const monthEndAsOf = monthEndMaturities.length
+    ? lastDates[monthEndMaturities[0]]
+    : null;
+  const dailyAsOf = lastDates.y10 || lastDates.y5 || lastDates.y20;
+
   if (!history || history.length === 0) {
     return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No history available</div>;
   }
-
-  const cutoff = new Date(Date.now() - RANGE_DAYS[range] * 86400000);
-  const filtered = history.filter(d => new Date(d.date) >= cutoff);
 
   const toggleLine = (key) => setHidden(h => ({ ...h, [key]: !h[key] }));
 
@@ -138,18 +193,23 @@ function GiltHistoryChart({ history }) {
           ))}
         </div>
         <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-          {MATURITIES.map(({ key, label }) => (
-            <button key={key} onClick={() => toggleLine(key)} style={{
-              cursor:'pointer', fontSize:9, fontFamily:'monospace', padding:'2px 7px', borderRadius:3,
-              border: `1px solid ${hidden[key] ? '#2a2a2a' : MATURITY_COLORS[key]}`,
-              background: hidden[key] ? 'transparent' : `${MATURITY_COLORS[key]}22`,
-              color: hidden[key] ? '#444' : MATURITY_COLORS[key],
-              userSelect:'none', display:'flex', alignItems:'center', gap:4,
-            }}>
-              <span style={{ width:6, height:6, borderRadius:'50%', background: hidden[key] ? '#333' : MATURITY_COLORS[key], display:'inline-block', flexShrink:0 }}/>
-              {label}
-            </button>
-          ))}
+          {MATURITIES.map(({ key, label }) => {
+            const isMonthEnd = key === 'y2' || key === 'y30';
+            return (
+              <button key={key} onClick={() => toggleLine(key)}
+                title={isMonthEnd ? 'Month-end data from BoE zip, publishes ~3-4 weeks in arrears' : ''}
+                style={{
+                cursor:'pointer', fontSize:9, fontFamily:'monospace', padding:'2px 7px', borderRadius:3,
+                border: `1px solid ${hidden[key] ? '#2a2a2a' : MATURITY_COLORS[key]}`,
+                background: hidden[key] ? 'transparent' : `${MATURITY_COLORS[key]}22`,
+                color: hidden[key] ? '#444' : MATURITY_COLORS[key],
+                userSelect:'none', display:'flex', alignItems:'center', gap:4,
+              }}>
+                <span style={{ width:6, height:6, borderRadius:'50%', background: hidden[key] ? '#333' : MATURITY_COLORS[key], display:'inline-block', flexShrink:0 }}/>
+                {label}{isMonthEnd ? '*' : ''}
+              </button>
+            );
+          })}
         </div>
       </div>
       <ResponsiveContainer width="100%" height={200}>
@@ -165,10 +225,19 @@ function GiltHistoryChart({ history }) {
           {MATURITIES.map(({ key }) => (
             <Line key={key} type="monotone" dataKey={key}
               stroke={hidden[key] ? 'transparent' : MATURITY_COLORS[key]}
-              strokeWidth={1.5} dot={false} connectNulls={false} hide={hidden[key]} />
+              strokeWidth={1.5} dot={false} connectNulls={false} hide={hidden[key]}
+              isAnimationActive={false} />
           ))}
         </LineChart>
       </ResponsiveContainer>
+      <div style={{ color:'#555', fontSize:9, fontFamily:'monospace', marginTop:6, lineHeight:1.6 }}>
+        {dailyAsOf && (
+          <div>5Y / 10Y / 20Y: daily from BoE IADB (1-2 day settlement lag). Latest: {dailyAsOf}.</div>
+        )}
+        {monthEndAsOf && (
+          <div>* 2Y and 30Y: BoE month-end daily data (published ~3-4 weeks in arrears). Latest: {monthEndAsOf}.</div>
+        )}
+      </div>
     </div>
   );
 }

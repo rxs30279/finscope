@@ -32,3 +32,18 @@ export const pctColor = (v) => {
   if (v < -0.005) return '#ef4444';
   return '#f59e0b';
 };
+
+export const WATCHLIST_KEY = 'stock_screener_watchlist';
+
+export const loadWatchlist = () => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(WATCHLIST_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+export const saveWatchlist = (symbols) => {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(symbols)); } catch {}
+};

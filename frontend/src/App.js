@@ -3,7 +3,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
-import { API, fmt, gc, currSym } from './utils';
+import { API, fmt, gc, currSym, loadWatchlist, saveWatchlist } from './utils';
 import Sidebar from './components/Sidebar';
 import RotationTab from './components/RotationTab';
 import BreadthTab from './components/BreadthTab';
@@ -13,6 +13,8 @@ import SignalsTab from './components/SignalsTab';
 import AnalystTab from './components/AnalystTab';
 import AnalystMonitorTab from './components/AnalystMonitorTab';
 import RnsTab from './components/RnsTab';
+import AnalyticsTab from './components/AnalyticsTab';
+import NewsTab from './components/NewsTab';
 
 
 function MetricCard({ label, value, color }) {
@@ -79,7 +81,7 @@ function CompanyDetail({ symbol, onBack }) {
     eps:        r.eps_diluted,
   }));
 
-  const tabs = ['chart','overview','financials','valuation','health','growth','analysts'];
+  const tabs = ['chart','overview','financials','valuation','health','growth','analysts','news'];
 
   return (
     <div>
@@ -389,6 +391,11 @@ function CompanyDetail({ symbol, onBack }) {
       {tab==='analysts' && (
         <AnalystTab symbol={symbol} />
       )}
+
+      {/* NEWS */}
+      {tab==='news' && (
+        <NewsTab symbol={symbol} />
+      )}
     </div>
   );
 }
@@ -542,6 +549,7 @@ const FUND_COLS = [
   ['Symbol',false,'symbol'],['Name',false,'name'],['Sector',false,'sector'],['Index',false,'ftse_index'],
   ['Mkt Cap',true,'market_cap'],['P/E',true,'price_to_earnings'],['P/B',true,'price_to_book'],
   ['ROE',true,'roe'],['Rev Growth',true,'revenue_growth'],['D/E',true,'debt_to_equity'],
+  ['PEGY',true,'pegy'],
   ['Momentum',true,'momentum_score'],['Quality',true,'quality_score'],['Value',true,'piotroski_score'],['Risk',true,'risk_score'],
 ];
 const ANALYST_COLS = [
@@ -550,7 +558,25 @@ const ANALYST_COLS = [
   ['Buy%',true,'buy_pct'],['# Analysts',true,'total_analysts'],['Rev Score',true,'revision_score'],
 ];
 
-function Screener({ onSelect, highlightSymbol }) {
+function StarButton({ active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      title={active ? 'Remove from watchlist' : 'Add to watchlist'}
+      style={{
+        background:'none', border:'none', cursor:'pointer', padding:'0 6px 0 0',
+        color: active ? '#f59e0b' : '#3a3a3a',
+        fontSize: 14, lineHeight: 1,
+      }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.color = '#7c6a3a'; }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.color = '#3a3a3a'; }}
+    >
+      {active ? '★' : '☆'}
+    </button>
+  );
+}
+
+function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, watchlistMode = false }) {
   const [filters, setFilters]       = useState(EMPTY_FILTERS);
   const [selectModes, setSelectModes] = useState(EMPTY_MODES);
   const [filterOpts, setFilterOpts] = useState({ sectors:[], countries:[] });
@@ -621,7 +647,9 @@ function Screener({ onSelect, highlightSymbol }) {
 
   const updateScore = (k, v) => setScoreFilters(sf => ({ ...sf, [k]: v }));
 
+  const watchlistSet = watchlist instanceof Set ? watchlist : new Set(watchlist || []);
   const displayed = results.filter(r => {
+    if (watchlistMode && !watchlistSet.has(r.symbol)) return false;
     const sf = scoreFilters;
     if (sf.min_momentum  && (r.momentum_score  == null || r.momentum_score  < +sf.min_momentum))  return false;
     if (sf.min_quality   && (r.quality_score   == null || r.quality_score   < +sf.min_quality))   return false;
@@ -650,14 +678,19 @@ function Screener({ onSelect, highlightSymbol }) {
 
   return (
     <div>
-      <h2 style={{ fontFamily:'DM Serif Display,serif', fontSize:26, color:'#f1f5f9', marginBottom:4 }}>Stock Screener</h2>
+      <h2 style={{ fontFamily:'DM Serif Display,serif', fontSize:26, color:'#f1f5f9', marginBottom:4 }}>{watchlistMode ? 'Watchlist' : 'Stock Screener'}</h2>
       <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
-        <div style={{ fontSize:13, color:'#64748b' }}>{filters.ftse_index || 'All indices'}{filters.sector ? ` · ${filters.sector}` : ''}</div>
+        <div style={{ fontSize:13, color:'#64748b' }}>
+          {watchlistMode
+            ? (watchlistSet.size === 0 ? 'No companies saved yet' : `${watchlistSet.size} saved`)
+            : `${filters.ftse_index || 'All indices'}${filters.sector ? ` · ${filters.sector}` : ''}`}
+        </div>
         <div style={{ background:'#334155', color:'#cbd5e1', borderRadius:20, padding:'2px 12px', fontSize:13, fontWeight:600 }}>
           {displayed.length !== results.length ? `${displayed.length} / ${results.length}` : displayed.length} companies
         </div>
       </div>
 
+      {!watchlistMode && (
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8, alignItems:'center' }}>
         <select style={S.select} value={filters.sector} onChange={e=>update('sector',e.target.value)}>
           <option value="">All Sectors</option>
@@ -700,8 +733,9 @@ function Screener({ onSelect, highlightSymbol }) {
           </button>
         )}
       </div>
+      )}
 
-      {showAdvanced && (
+      {!watchlistMode && showAdvanced && (
         <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8 }}>
           <select style={S.select} value={scoreFilters.min_momentum} onChange={e=>updateScore('min_momentum',e.target.value)}>
             <option value="">Momentum</option>
@@ -801,7 +835,12 @@ function Screener({ onSelect, highlightSymbol }) {
         ))}
       </div>
 
-      {loading ? <div style={S.loading}>Screening…</div> : (
+      {loading ? <div style={S.loading}>Screening…</div> : watchlistMode && watchlistSet.size === 0 ? (
+        <div style={{ textAlign:'center', padding:64, color:'#64748b', fontFamily:'monospace', fontSize:13, lineHeight:1.8 }}>
+          Your watchlist is empty.<br />
+          Go to the <span style={{ color:'#f97316' }}>Screener</span> and click the <span style={{ color:'#f59e0b', fontSize:16 }}>☆</span> next to a ticker to add it.
+        </div>
+      ) : (
         <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 280px)', scrollbarGutter: 'stable' }}>
           <table style={{ ...S.table, minWidth: tableView==='analysts' ? 700 : 900 }}>
             <thead>
@@ -826,7 +865,15 @@ function Screener({ onSelect, highlightSymbol }) {
                   onMouseEnter={e=>e.currentTarget.style.background='#334155'}
                   onMouseLeave={e=>e.currentTarget.style.background=baseBg}>
                   {/* Shared columns */}
-                  <td style={{ ...S.td, fontFamily:'monospace', fontWeight:700, color:'#818cf8' }}>{r.symbol.replace('.L','')}</td>
+                  <td style={{ ...S.td, fontFamily:'monospace', fontWeight:700, color: watchlistSet.has(r.symbol) ? '#f59e0b' : '#818cf8' }}>
+                    <span style={{ display:'inline-flex', alignItems:'center' }}>
+                      <StarButton
+                        active={watchlistSet.has(r.symbol)}
+                        onClick={e => { e.stopPropagation(); onToggleWatchlist && onToggleWatchlist(r.symbol); }}
+                      />
+                      {r.symbol.replace('.L','')}
+                    </span>
+                  </td>
                   <td style={S.td}>{r.name?.slice(0,26)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.sector?.slice(0,18)}</td>
                   <td style={{ ...S.td, color:'#64748b' }}>{r.ftse_index?.replace('FTSE ','')}</td>
@@ -837,6 +884,9 @@ function Screener({ onSelect, highlightSymbol }) {
                     <td style={{ ...S.tdNum, color:gc(r.roe) }}>{fmt(r.roe,'pct')}</td>
                     <td style={{ ...S.tdNum, color:gc(r.revenue_growth) }}>{fmt(r.revenue_growth,'pct')}</td>
                     <td style={{ ...S.tdNum, color: r.debt_to_equity>2?'#ef4444':'#ccc' }}>{fmt(r.debt_to_equity,'ratio')}</td>
+                    <td style={{ ...S.tdNum,
+                      color: r.pegy == null ? '#444' : r.pegy < 1 ? '#10b981' : r.pegy <= 2 ? '#f59e0b' : '#ef4444',
+                    }}>{r.pegy ?? '—'}</td>
                     <td style={{ ...S.tdNum,
                       color: r.momentum_score == null ? '#444' : r.momentum_score >= 7 ? '#10b981' : r.momentum_score >= 4 ? '#f59e0b' : '#ef4444',
                       fontWeight: 700,
@@ -890,8 +940,19 @@ function Screener({ onSelect, highlightSymbol }) {
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage]           = useState('screener'); // screener | rotation | breadth | cross-asset | signals | company
+  const [page, setPage]           = useState('screener'); // screener | watchlist | rotation | breadth | cross-asset | signals | company
   const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const [watchlist, setWatchlist] = useState(() => new Set(loadWatchlist()));
+
+  useEffect(() => { saveWatchlist([...watchlist]); }, [watchlist]);
+
+  const toggleWatchlist = useCallback((symbol) => {
+    setWatchlist(prev => {
+      const next = new Set(prev);
+      if (next.has(symbol)) next.delete(symbol); else next.add(symbol);
+      return next;
+    });
+  }, []);
   const [highlightSymbol, setHighlightSymbol] = useState(null);
   const [searchQ, setSearchQ]     = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -972,16 +1033,17 @@ export default function App() {
 
   const NAV_GROUPS = [
     { id: 'screener',        label: 'Screener' },
+    { id: 'watchlist',       label: 'Watchlist' },
     { id: 'analyst-monitor', label: 'Analysts' },
     { id: 'rns',             label: 'RNS News' },
-    { id: 'sector-analysis', label: 'Sector Analysis', children: [
-      { id: 'rotation', label: 'Rotation'   },
-      { id: 'breadth',  label: 'Breadth'    },
-      { id: 'signals',  label: 'Signal Log' },
-    ]},
+    { id: 'analytics',       label: 'Analytics' },
     { id: 'markets', label: 'Markets', children: [
       { id: 'fear-greed',  label: 'Fear & Greed' },
       { id: 'cross-asset', label: 'Cross-Asset'  },
+      { heading: 'Sector Analysis' },
+      { id: 'rotation', label: 'Rotation'   },
+      { id: 'breadth',  label: 'Breadth'    },
+      { id: 'signals',  label: 'Signal Log' },
     ]},
   ];
   const [openMenu, setOpenMenu] = useState(null);
@@ -1005,8 +1067,18 @@ export default function App() {
             <line x1="11" y1="17" x2="16" y2="17" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round"/>
           </svg>
         </button>
-        <div style={{ fontFamily:'monospace', fontSize:16, fontWeight:700, color:'#f97316', marginRight:32, cursor:'pointer', letterSpacing:2, textTransform:'uppercase' }} onClick={()=>setPage('screener')}>
-          Egg Basket
+        <div
+          onClick={()=>setPage('screener')}
+          style={{
+            fontFamily:'"DM Sans", sans-serif', fontSize:12, fontWeight:600,
+            color:'#f97316', letterSpacing:2, textTransform:'uppercase',
+            marginRight:32, cursor:'pointer',
+            padding:'4px 10px', borderRadius:4,
+            background:'linear-gradient(135deg, #2a1a00 0%, #1a1200 100%)',
+            boxShadow:'0 0 12px rgba(249, 115, 22, 0.15)',
+          }}
+        >
+          Alpha Move AI
         </div>
         <div style={{ display:'flex', gap:2 }}>
           {NAV_GROUPS.map(g => {
@@ -1026,14 +1098,26 @@ export default function App() {
                   {g.label} <span style={{ fontSize:8, opacity:0.6 }}>▾</span>
                 </button>
                 {openMenu === g.id && (
-                  <div style={{ position:'absolute', top:'100%', left:0, background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, minWidth:140, zIndex:200, boxShadow:'0 8px 24px rgba(0,0,0,0.8)' }}>
-                    {g.children.map(c => (
-                      <button key={c.id}
-                        onClick={() => { setPage(c.id); setOpenMenu(null); }}
-                        style={{ ...S.navBtn, ...(page===c.id ? S.navBtnActive : {}), display:'block', width:'100%', textAlign:'left', borderRadius:0, padding:'10px 16px' }}>
-                        {c.label}
-                      </button>
-                    ))}
+                  <div style={{ position:'absolute', top:'100%', left:0, background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, minWidth:160, zIndex:200, boxShadow:'0 8px 24px rgba(0,0,0,0.8)', paddingBottom:4 }}>
+                    {g.children.map((c, idx) => {
+                      if (c.heading) {
+                        return (
+                          <div key={'h-'+idx} style={{
+                            padding:'10px 16px 4px', color:'#555', fontSize:9,
+                            fontFamily:'monospace', textTransform:'uppercase', letterSpacing:1.5,
+                            borderTop: idx === 0 ? 'none' : '1px solid #1f1f1f',
+                            marginTop: idx === 0 ? 0 : 4,
+                          }}>{c.heading}</div>
+                        );
+                      }
+                      return (
+                        <button key={c.id}
+                          onClick={() => { setPage(c.id); setOpenMenu(null); }}
+                          style={{ ...S.navBtn, ...(page===c.id ? S.navBtnActive : {}), display:'block', width:'100%', textAlign:'left', borderRadius:0, padding:'10px 16px' }}>
+                          {c.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1095,7 +1179,12 @@ export default function App() {
         </div>
         <main style={{ flex:1, padding:'32px 24px', minWidth:0 }}>
           <div style={{ display: page==='screener' ? 'block' : 'none' }}>
-            <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol} />
+            <Screener onSelect={selectCompany} highlightSymbol={highlightSymbol}
+              watchlist={watchlist} onToggleWatchlist={toggleWatchlist} />
+          </div>
+          <div style={{ display: page==='watchlist' ? 'block' : 'none' }}>
+            <Screener onSelect={selectCompany}
+              watchlist={watchlist} onToggleWatchlist={toggleWatchlist} watchlistMode />
           </div>
           {page==='rotation'    && <RotationTab refreshKey={refreshKey} />}
           {page==='breadth'     && <BreadthTab refreshKey={refreshKey} />}
@@ -1104,6 +1193,7 @@ export default function App() {
           {page==='signals'        && <SignalsTab refreshKey={refreshKey} />}
           {page==='analyst-monitor' && <AnalystMonitorTab refreshKey={refreshKey} onSelect={selectCompany} />}
           {page==='rns'             && <RnsTab refreshKey={refreshKey} onSelect={selectCompany} />}
+          {page==='analytics'       && <AnalyticsTab refreshKey={refreshKey} onSelect={selectCompany} />}
           {page==='company' && selectedSymbol && (
             <CompanyDetail symbol={selectedSymbol} onBack={goBack} />
           )}
