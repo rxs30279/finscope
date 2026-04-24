@@ -26,13 +26,27 @@ function UpsideCell({ value }) {
   return <span style={{ color, fontFamily: 'monospace', fontSize: 12 }}>{value >= 0 ? '+' : ''}{value.toFixed(1)}%</span>;
 }
 
-// Composite bullish score: buy% + upside (capped at 100, halved) + revision_score * 10
+// Composite bullish score: shrunk-buy% + upside (capped at 100, halved) + revision_score * 10
+// Shrinkage pulls buy_pct toward a neutral 50% prior with weight k=5, so a 1-analyst
+// "100% bullish" stock counts as ~58%, while well-covered names stay close to their raw value.
+const SHRINK_K = 5;
+const shrunkBuyPct = (r) => {
+  const n = r.total_analysts || 0;
+  const raw = r.buy_pct || 0;
+  if (n === 0) return 50;
+  return (raw * n + 50 * SHRINK_K) / (n + SHRINK_K);
+};
+
 const compositeScore = (r) =>
-  (r.buy_pct || 0) +
+  shrunkBuyPct(r) +
   Math.min(Math.max(r.upside_pct || 0, -50), 100) * 0.5 +
   (r.revision_score || 0) * 10;
 
-export default function AnalystMonitorTab({ refreshKey }) {
+export default function AnalystMonitorTab({ refreshKey, onSelect }) {
+  const tickerLink = {
+    color: '#e5e5e5', fontFamily: 'monospace', fontWeight: 700,
+    cursor: 'pointer', textDecoration: 'none',
+  };
   const [latest, setLatest]   = useState([]);
   const [changes, setChanges] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -89,12 +103,23 @@ export default function AnalystMonitorTab({ refreshKey }) {
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(r =>
-        r.symbol?.toLowerCase().includes(q) || r.name?.toLowerCase().includes(q)
+        r.symbol?.toLowerCase().includes(q) ||
+        r.name?.toLowerCase().includes(q) ||
+        r.sector?.toLowerCase().includes(q) ||
+        r.ftse_index?.toLowerCase().includes(q)
       );
     }
+    const isStringKey = sortKey === 'name' || sortKey === 'sector' || sortKey === 'ftse_index';
+    const getNum = sortKey === 'buy_pct' ? shrunkBuyPct : (r) => r[sortKey];
     return [...rows].sort((a, b) => {
-      const av = a[sortKey] ?? -Infinity;
-      const bv = b[sortKey] ?? -Infinity;
+      if (isStringKey) {
+        const av = (a[sortKey] || '').toLowerCase();
+        const bv = (b[sortKey] || '').toLowerCase();
+        if (av === bv) return 0;
+        return sortDir === 'desc' ? (av < bv ? 1 : -1) : (av < bv ? -1 : 1);
+      }
+      const av = getNum(a) ?? -Infinity;
+      const bv = getNum(b) ?? -Infinity;
       return sortDir === 'desc' ? bv - av : av - bv;
     });
   }, [stocksWithData, search, sortKey, sortDir]);
@@ -148,13 +173,38 @@ export default function AnalystMonitorTab({ refreshKey }) {
             <div style={{ fontSize: 10, color: accent, textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace', marginBottom: 12 }}>{title}</div>
             {stocks.length === 0 && <div style={{ color: '#444', fontSize: 11 }}>No data yet</div>}
             {stocks.map(r => (
-              <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1a1a1a' }}>
-                <div>
-                  <span style={{ color: '#e5e5e5', fontFamily: 'monospace', fontSize: 12, fontWeight: 700 }}>{r.symbol}</span>
-                  {' '}
-                  <ConsensusBadge value={r.consensus} />
+              <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: '1px solid #1a1a1a' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div>
+                    <span
+                      onClick={() => onSelect?.(r.symbol)}
+                      style={{ ...tickerLink, fontSize: 12 }}
+                    >
+                      {r.symbol}
+                    </span>
+                    {r.name && (
+                      <span
+                        onClick={() => onSelect?.(r.symbol)}
+                        style={{ color: '#cbd5e1', fontFamily: 'monospace', fontSize: 11, marginLeft: 8, cursor: 'pointer' }}
+                      >
+                        {r.name}
+                      </span>
+                    )}
+                    {' '}
+                    <ConsensusBadge value={r.consensus} />
+                  </div>
+                  {r.sector && (
+                    <div style={{ color: '#64748b', fontFamily: 'monospace', fontSize: 10, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.sector}
+                    </div>
+                  )}
                 </div>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
+                  {r.total_analysts != null && (
+                    <span title="Number of analysts" style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>
+                      {r.total_analysts}a
+                    </span>
+                  )}
                   <UpsideCell value={r.upside_pct} />
                   {r.revision_score != null && (
                     <span style={{ fontSize: 10, color: r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#555', fontFamily: 'monospace' }}>
@@ -177,7 +227,7 @@ export default function AnalystMonitorTab({ refreshKey }) {
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Filter by symbol or name…"
+              placeholder="Filter by symbol, name, sector or market…"
               style={{ background: '#0a0a0a', border: '1px solid #2a2a2a', color: '#e5e5e5', padding: '6px 10px', borderRadius: 2, fontFamily: 'monospace', fontSize: 11, width: '100%', boxSizing: 'border-box' }}
             />
           </div>
@@ -186,9 +236,22 @@ export default function AnalystMonitorTab({ refreshKey }) {
               <thead>
                 <tr style={{ borderBottom: '1px solid #2a2a2a' }}>
                   <th style={S.th}>Symbol</th>
+                  <th style={{ ...colStyle('name'), textAlign: 'left' }} onClick={() => toggleSort('name')}>
+                    Name {sortKey === 'name' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                  </th>
+                  <th style={{ ...colStyle('sector'), textAlign: 'left' }} onClick={() => toggleSort('sector')}>
+                    Sector {sortKey === 'sector' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                  </th>
+                  <th style={{ ...colStyle('ftse_index'), textAlign: 'left' }} onClick={() => toggleSort('ftse_index')}>
+                    Market {sortKey === 'ftse_index' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                  </th>
                   <th style={S.th}>Consensus</th>
-                  <th style={{ ...colStyle('buy_pct'), textAlign: 'right' }} onClick={() => toggleSort('buy_pct')}>
-                    Buy% {sortKey === 'buy_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                  <th
+                    style={{ ...colStyle('buy_pct'), textAlign: 'right' }}
+                    onClick={() => toggleSort('buy_pct')}
+                    title="Buy % adjusted for analyst coverage (shrunk toward 50% with k=5)"
+                  >
+                    Buy% (adj) {sortKey === 'buy_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
                   </th>
                   <th style={{ ...colStyle('upside_pct'), textAlign: 'right' }} onClick={() => toggleSort('upside_pct')}>
                     Upside {sortKey === 'upside_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
@@ -203,15 +266,27 @@ export default function AnalystMonitorTab({ refreshKey }) {
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={6} style={{ ...S.td, color: '#444', textAlign: 'center', padding: 24 }}>No results</td></tr>
+                  <tr><td colSpan={9} style={{ ...S.td, color: '#444', textAlign: 'center', padding: 24 }}>No results</td></tr>
                 )}
                 {filtered.map(r => (
                   <tr key={r.symbol} style={{ borderBottom: '1px solid #141414' }}>
                     <td style={S.td}>
-                      <span style={{ fontWeight: 700 }}>{r.symbol}</span>
+                      <span onClick={() => onSelect?.(r.symbol)} style={{ ...tickerLink, fontSize: 12 }}>
+                        {r.symbol}
+                      </span>
                     </td>
+                    <td
+                      onClick={() => onSelect?.(r.symbol)}
+                      style={{ ...S.td, color: '#cbd5e1', cursor: 'pointer' }}
+                    >
+                      {r.name || '—'}
+                    </td>
+                    <td style={{ ...S.td, color: '#94a3b8' }}>{r.sector || '—'}</td>
+                    <td style={{ ...S.td, color: '#64748b' }}>{r.ftse_index?.replace('FTSE ', '') || '—'}</td>
                     <td style={S.td}><ConsensusBadge value={r.consensus} /></td>
-                    <td style={S.tdR}>{r.buy_pct != null ? `${r.buy_pct.toFixed(1)}%` : '—'}</td>
+                    <td style={S.tdR} title={r.buy_pct != null ? `Raw: ${r.buy_pct.toFixed(1)}% over ${r.total_analysts ?? 0} analysts` : ''}>
+                      {r.buy_pct != null ? `${shrunkBuyPct(r).toFixed(1)}%` : '—'}
+                    </td>
                     <td style={S.tdR}><UpsideCell value={r.upside_pct} /></td>
                     <td style={{ ...S.tdR, color: r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#555' }}>
                       {r.revision_score != null ? (r.revision_score > 0 ? `+${r.revision_score}` : r.revision_score) : '—'}
@@ -237,7 +312,9 @@ export default function AnalystMonitorTab({ refreshKey }) {
           {changes.map((c, i) => (
             <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid #1a1a1a' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                <span style={{ color: '#e5e5e5', fontFamily: 'monospace', fontSize: 12, fontWeight: 700 }}>{c.symbol}</span>
+                <span onClick={() => onSelect?.(c.symbol)} style={{ ...tickerLink, fontSize: 12 }}>
+                  {c.symbol}
+                </span>
                 <span style={{ color: '#444', fontSize: 10, fontFamily: 'monospace' }}>{c.snapshot_date}</span>
               </div>
               {c.prev_consensus !== c.consensus && (
@@ -245,6 +322,20 @@ export default function AnalystMonitorTab({ refreshKey }) {
                   <span style={{ color: '#666' }}>{c.prev_consensus || '—'}</span>
                   {' → '}
                   <span style={{ color: CONSENSUS_COLORS[c.consensus]?.color || '#94a3b8' }}>{c.consensus}</span>
+                </div>
+              )}
+              {c.buy_pct != null && c.prev_buy_pct != null &&
+               Math.abs(c.buy_pct - c.prev_buy_pct) > 5 && (
+                <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                  <span style={{ color: '#555' }}>Bullish </span>
+                  <span style={{ color: '#666' }}>{c.prev_buy_pct.toFixed(0)}%</span>
+                  {' → '}
+                  <span style={{ color: c.buy_pct >= c.prev_buy_pct ? '#10b981' : '#ef4444' }}>
+                    {c.buy_pct.toFixed(0)}%
+                  </span>
+                  <span style={{ color: c.buy_pct >= c.prev_buy_pct ? '#10b981' : '#ef4444', marginLeft: 4 }}>
+                    ({c.buy_pct >= c.prev_buy_pct ? '+' : ''}{(c.buy_pct - c.prev_buy_pct).toFixed(1)}pts)
+                  </span>
                 </div>
               )}
               {c.upside_pct != null && (

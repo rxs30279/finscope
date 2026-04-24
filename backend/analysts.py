@@ -231,30 +231,65 @@ def _upsert_snapshot(row):
 
 # ── Refresh logic (shared by script and endpoint) ─────────────────────────────
 
-def _fetch_one(symbol):
-    """Fetch all yfinance analyst data for one symbol. Returns parsed row dict or None."""
+_RATE_LIMIT_PHRASES = ('429', 'too many requests', 'rate limit')
+
+def _fetch_one(symbol, max_retries=3):
+    """Fetch all yfinance analyst data for one symbol. Returns parsed row dict or None.
+
+    Retries up to max_retries times with exponential backoff on rate-limit errors.
+    """
+    delay = 30  # initial backoff in seconds
+    for attempt in range(max_retries + 1):
+        try:
+            t = yf.Ticker(symbol)
+            row = _parse_snapshot(
+                symbol,
+                t.recommendations,
+                t.analyst_price_targets,
+                t.earnings_estimate,
+                t.revenue_estimate,
+                t.eps_revisions,
+                t.growth_estimates,
+            )
+            return row
+        except Exception as e:
+            msg = str(e).lower()
+            is_rate_limit = any(p in msg for p in _RATE_LIMIT_PHRASES)
+            if is_rate_limit and attempt < max_retries:
+                print(f"[analysts] rate-limited on {symbol}, retry {attempt + 1}/{max_retries} in {delay}s")
+                time.sleep(delay)
+                delay *= 2  # exponential backoff: 5s → 10s → 20s
+            else:
+                if is_rate_limit:
+                    print(f"[analysts] skip {symbol}: rate limit, max retries exceeded")
+                else:
+                    print(f"[analysts] skip {symbol}: {e}")
+                return None
+
+_LOG_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+_LOG_FILE = os.path.join(_LOG_DIR, "analysts_refresh.log")
+
+
+def _append_log(line: str) -> None:
+    """Append a line to the refresh log. Swallows IO errors — logging never blocks the job."""
     try:
-        t = yf.Ticker(symbol)
-        row = _parse_snapshot(
-            symbol,
-            t.recommendations,
-            t.analyst_price_targets,
-            t.earnings_estimate,
-            t.revenue_estimate,
-            t.eps_revisions,
-            t.growth_estimates,
-        )
-        return row
+        os.makedirs(_LOG_DIR, exist_ok=True)
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line.rstrip() + "\n")
     except Exception as e:
-        print(f"[analysts] skip {symbol}: {e}")
-        return None
+        print(f"[analysts] log write failed: {e}")
+
 
 def _run_refresh():
     """Fetch analyst data for all symbols and upsert. Called by script and refresh endpoint."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    t0 = time.time()
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0))
     symbols = [r['symbol'] for r in _query("SELECT symbol FROM company_metadata ORDER BY symbol")]
+    total = len(symbols)
     processed = skipped = errors = 0
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    # Sequential (1 worker) + 1.5s delay — Yahoo rate-limits concurrent bursts
+    with ThreadPoolExecutor(max_workers=1) as ex:
         futures = {ex.submit(_fetch_one, sym): sym for sym in symbols}
         for i, fut in enumerate(as_completed(futures)):
             sym = futures[fut]
@@ -268,32 +303,58 @@ def _run_refresh():
             except Exception as e:
                 errors += 1
                 print(f"[analysts] error {sym}: {e}")
-            # Rate-limit: sleep 0.5s every 10 stocks
-            if (i + 1) % 10 == 0:
-                time.sleep(0.5)
+            # 1.5s between each request — keeps well under Yahoo's rate limit
+            time.sleep(1.5)
+
+    elapsed = round(time.time() - t0, 1)
+    finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     print(f"[analysts] refresh done — processed={processed} skipped={skipped} errors={errors}")
-    return {'processed': processed, 'skipped': skipped, 'errors': errors}
+    _append_log(
+        f"{finished_at}  started={started_at}  elapsed={elapsed}s  "
+        f"total={total}  updated={processed}  skipped={skipped}  errors={errors}"
+    )
+    return {
+        'processed':   processed,
+        'skipped':     skipped,
+        'errors':      errors,
+        'total':       total,
+        'elapsed_s':   elapsed,
+        'started_at':  started_at,
+        'finished_at': finished_at,
+    }
+
+
+@router.get("/refresh-log")
+def get_refresh_log(lines: int = 20):
+    """Return the last N lines of the refresh log (oldest → newest)."""
+    try:
+        with open(_LOG_FILE, "r", encoding="utf-8") as f:
+            return {"lines": f.read().splitlines()[-max(1, min(lines, 500)):]}
+    except FileNotFoundError:
+        return {"lines": []}
 
 
 # ── API endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/latest")
 def get_latest():
-    """Latest analyst snapshot for every stock."""
+    """Latest analyst snapshot for every stock, with company metadata."""
     return _query("""
-        SELECT DISTINCT ON (symbol)
-            symbol, snapshot_date, consensus, buy_pct, total_analysts,
-            price_target_mean, price_target_high, price_target_low, price_target_median,
-            current_price, upside_pct, revision_score,
-            eps_est_current_yr, eps_est_next_yr, rev_est_current_yr, rev_est_next_yr,
-            eps_growth_current_yr, eps_growth_next_yr
-        FROM analyst_snapshots
-        ORDER BY symbol, snapshot_date DESC
+        SELECT DISTINCT ON (s.symbol)
+            s.symbol, s.snapshot_date, s.consensus, s.buy_pct, s.total_analysts,
+            s.price_target_mean, s.price_target_high, s.price_target_low, s.price_target_median,
+            s.current_price, s.upside_pct, s.revision_score,
+            s.eps_est_current_yr, s.eps_est_next_yr, s.rev_est_current_yr, s.rev_est_next_yr,
+            s.eps_growth_current_yr, s.eps_growth_next_yr,
+            m.name, m.sector, m.ftse_index
+        FROM analyst_snapshots s
+        LEFT JOIN company_metadata m ON m.symbol = s.symbol
+        ORDER BY s.symbol, s.snapshot_date DESC
     """)
 
 @router.get("/changes")
 def get_changes():
-    """Stocks where consensus changed or upside_pct shifted >5pts since prior snapshot."""
+    """Stocks where consensus changed, buy_pct shifted >5pts, or upside_pct shifted >5pts since prior snapshot."""
     return _query("""
         WITH ranked AS (
             SELECT *,
@@ -310,11 +371,13 @@ def get_changes():
             cur.upside_pct,
             prev.upside_pct  AS prev_upside,
             cur.buy_pct,
+            prev.buy_pct     AS prev_buy_pct,
             cur.revision_score
         FROM cur
         JOIN prev ON prev.symbol = cur.symbol
         WHERE cur.consensus IS DISTINCT FROM prev.consensus
            OR ABS(COALESCE(cur.upside_pct,0) - COALESCE(prev.upside_pct,0)) > 5
+           OR ABS(COALESCE(cur.buy_pct,0)    - COALESCE(prev.buy_pct,0))    > 5
         ORDER BY cur.snapshot_date DESC
     """)
 

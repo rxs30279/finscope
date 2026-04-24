@@ -1071,7 +1071,7 @@ export default function App() {
           {page==='fear-greed'  && <FearGreedTab refreshKey={refreshKey} />}
           {page==='cross-asset' && <CrossAssetTab refreshKey={refreshKey} />}
           {page==='signals'        && <SignalsTab refreshKey={refreshKey} />}
-          {page==='analyst-monitor' && <AnalystMonitorTab refreshKey={refreshKey} />}
+          {page==='analyst-monitor' && <AnalystMonitorTab refreshKey={refreshKey} onSelect={selectCompany} />}
           {page==='rns'             && <RnsTab refreshKey={refreshKey} />}
           {page==='company' && selectedSymbol && (
             <CompanyDetail symbol={selectedSymbol} onBack={()=>setPage('screener')} />
