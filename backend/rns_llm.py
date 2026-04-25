@@ -5,7 +5,9 @@ structured score + thesis + action + risks. Context assembled per-row:
   - headline, category, tier, keyword_hits, rules score
   - investegate AI summary (scraped via rns._fetch_summary)
   - company_metadata: sector, industry, country, ftse_index
-  - ttm_fundamentals: market_cap
+  - ttm_financials: market_cap, P/E, dividend yield
+  - analyst_snapshots: consensus, buy %, upside %, # analysts
+  - price_history: 1-month and 6-month price change
   - recent RNS history for the same ticker (last 60 days)
 
 Uses DeepSeek's OpenAI-compatible API. Requires DEEPSEEK_API_KEY in env.
@@ -46,24 +48,64 @@ def _get_client():
 # ── Context assembly ──────────────────────────────────────────────────────────
 
 def _load_candidate(row_id: int) -> Optional[dict]:
-    """Load the announcement plus enrichment (company, market cap, history)."""
+    """Load the announcement plus enrichment (company, fundamentals, analysts)."""
     rows = _query("""
         SELECT a.id, a.published_at, a.wire, a.ticker, a.symbol, a.company_name,
                a.headline, a.headline_slug, a.url, a.tier, a.category,
                a.keyword_hits, a.score, a.summary,
                m.sector, m.industry, m.country, m.ftse_index,
-               t.market_cap
+               t.market_cap,
+               CASE WHEN t.price_to_earnings > 999 OR t.price_to_earnings <= 0
+                    THEN NULL ELSE t.price_to_earnings END AS price_to_earnings,
+               CASE WHEN t.period_end_price > 0 AND t.dividends_per_share > 0
+                    THEN t.dividends_per_share / t.period_end_price
+                    ELSE NULL END AS dividend_yield,
+               s.consensus, s.buy_pct, s.upside_pct, s.total_analysts
         FROM rns_announcements a
         LEFT JOIN company_metadata m ON m.symbol = a.symbol
         LEFT JOIN LATERAL (
-            SELECT market_cap FROM ttm_financials
+            SELECT market_cap, price_to_earnings, dividends_per_share, period_end_price
+            FROM ttm_financials
             WHERE company_symbol = a.symbol
             ORDER BY period_end_date DESC NULLS LAST
             LIMIT 1
         ) t ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT consensus, buy_pct, upside_pct, total_analysts
+            FROM analyst_snapshots
+            WHERE symbol = a.symbol
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+        ) s ON TRUE
         WHERE a.id = %s
     """, (row_id,))
     return rows[0] if rows else None
+
+
+def _load_price_change(symbol: Optional[str]) -> dict:
+    """Compute 1-month and 6-month price changes, plus latest close."""
+    if not symbol:
+        return {}
+    rows = _query("""
+        SELECT
+            (SELECT close FROM price_history WHERE symbol = %s
+             ORDER BY date DESC LIMIT 1) AS latest,
+            (SELECT close FROM price_history WHERE symbol = %s
+             AND date <= CURRENT_DATE - INTERVAL '30 days'
+             ORDER BY date DESC LIMIT 1) AS m1,
+            (SELECT close FROM price_history WHERE symbol = %s
+             AND date <= CURRENT_DATE - INTERVAL '180 days'
+             ORDER BY date DESC LIMIT 1) AS m6
+    """, (symbol, symbol, symbol))
+    if not rows:
+        return {}
+    r = rows[0]
+    out = {"latest": r.get("latest")}
+    if r.get("latest") and r.get("m1") and r["m1"] > 0:
+        out["chg_1m"] = (r["latest"] - r["m1"]) / r["m1"]
+    if r.get("latest") and r.get("m6") and r["m6"] > 0:
+        out["chg_6m"] = (r["latest"] - r["m6"]) / r["m6"]
+    return out
 
 
 def _load_history(symbol: Optional[str], limit: int = 10) -> list[dict]:
@@ -91,7 +133,19 @@ def _format_market_cap(mc: Optional[float]) -> str:
     return f"£{mc:.0f}"
 
 
-def _build_messages(cand: dict, history: list[dict]) -> list[dict]:
+def _fmt_pct(v: Optional[float]) -> str:
+    if v is None:
+        return "n/a"
+    return f"{v * 100:+.1f}%"
+
+
+def _fmt_num(v: Optional[float], decimals: int = 1) -> str:
+    if v is None:
+        return "n/a"
+    return f"{v:.{decimals}f}"
+
+
+def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
     """Construct the DeepSeek chat messages. Forces JSON output via prompt."""
     system = (
         "You rank UK stock announcements (RNS feed) on how likely they are to "
@@ -99,7 +153,10 @@ def _build_messages(cand: dict, history: list[dict]) -> list[dict]:
         "noise. An item is only 'high-impact' if it changes the investment case "
         "(earnings, M&A, strategy, solvency). Routine updates are low-impact. "
         "Always weigh company size: a £50m contract is transformational for a "
-        "£100m microcap, trivial for a FTSE100. Return STRICT JSON only."
+        "£100m microcap, trivial for a FTSE100. Use positioning context too — "
+        "news that contradicts analyst consensus has more surprise; news that "
+        "confirms a stock that's already rallied or fallen sharply is largely "
+        "priced in. Return STRICT JSON only."
     )
 
     hist_lines = (
@@ -108,6 +165,31 @@ def _build_messages(cand: dict, history: list[dict]) -> list[dict]:
             f"{h['category'] or '?'}: {h['headline']}"
             for h in history
         ) or "  (no prior tier A/B items in last 60 days)"
+    )
+
+    pe = cand.get('price_to_earnings')
+    dy = cand.get('dividend_yield')
+    consensus = cand.get('consensus')
+    buy_pct = cand.get('buy_pct')
+    upside = cand.get('upside_pct')
+    n_analysts = cand.get('total_analysts')
+
+    valuation_line = (
+        f"P/E {_fmt_num(pe)}, "
+        f"div yield {_fmt_pct(dy)}"
+    )
+    if consensus or n_analysts:
+        analyst_line = (
+            f"{consensus or '?'} (buy {_fmt_pct(buy_pct/100 if buy_pct is not None else None)}, "
+            f"upside {_fmt_pct(upside/100 if upside is not None else None)}, "
+            f"{n_analysts or 0} analysts)"
+        )
+    else:
+        analyst_line = "(no analyst coverage)"
+
+    price_line = (
+        f"1m {_fmt_pct(price.get('chg_1m'))}, "
+        f"6m {_fmt_pct(price.get('chg_6m'))}"
     )
 
     user = f"""Announcement
@@ -123,6 +205,11 @@ def _build_messages(cand: dict, history: list[dict]) -> list[dict]:
   Headline:     {cand.get('headline')}
   Rules tier:   {cand.get('tier')}  (category={cand.get('category')}, rules_score={cand.get('score')})
   Keyword hits: {', '.join(cand.get('keyword_hits') or []) or '(none)'}
+
+Market context
+  Valuation:    {valuation_line}
+  Analysts:     {analyst_line}
+  Price change: {price_line}
 
 Investegate AI summary
 {cand.get('summary') or '(not available)'}
@@ -205,7 +292,8 @@ def _rank_one(row_id: int) -> dict:
     if cand is None:
         raise ValueError(f"row {row_id} not found")
     history = _load_history(cand.get("symbol"))
-    messages = _build_messages(cand, history)
+    price = _load_price_change(cand.get("symbol"))
+    messages = _build_messages(cand, history, price)
     result = _call_deepseek(messages)
     _save_ranking(row_id, result, _DEEPSEEK_MODEL)
     return {"id": row_id, **result}
