@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
@@ -540,7 +540,7 @@ function PriceChart({ symbol }) {
 }
 
 // ── Screener ──────────────────────────────────────────────────────────────────
-const EMPTY_FILTERS = { sector:'', ftse_index:'', min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'', consensus:'', min_upside_pct:'' };
+const EMPTY_FILTERS = { sector:'', exclude_sectors:'', ftse_index:'', min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'', consensus:'', min_upside_pct:'' };
 const EMPTY_MODES   = { min_market_cap:'', max_pe:'', min_roe:'', min_revenue_growth:'' };
 const EMPTY_SCORE_FILTERS = { min_momentum:'', min_quality:'', min_piotroski:'', max_risk:'' };
 
@@ -557,6 +557,74 @@ const ANALYST_COLS = [
   ['Mkt Cap',true,'market_cap'],['Consensus',false,'consensus'],['Upside',true,'upside_pct'],
   ['Buy%',true,'buy_pct'],['# Analysts',true,'total_analysts'],['Rev Score',true,'revision_score'],
 ];
+
+function SectorDropdown({ sectors, value, excluded, onSelect, onToggleExclude }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const label = value
+    ? value
+    : excluded.length ? `All Sectors (−${excluded.length})` : 'All Sectors';
+
+  return (
+    <div ref={ref} style={{ position:'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ ...S.select, minWidth:170, textAlign:'left', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
+        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</span>
+        <span style={{ fontSize:8, opacity:0.6 }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position:'absolute', top:'100%', left:0, marginTop:4, background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, minWidth:260, zIndex:200, boxShadow:'0 8px 24px rgba(0,0,0,0.8)', maxHeight:360, overflowY:'auto' }}>
+          <div
+            onClick={() => { onSelect(''); setOpen(false); }}
+            style={{
+              padding:'8px 12px', cursor:'pointer', fontFamily:'monospace', fontSize:12,
+              color: value === '' ? '#f97316' : '#cbd5e1',
+              borderBottom:'1px solid #1f1f1f',
+            }}>
+            All Sectors
+          </div>
+          {sectors.map(s => {
+            const isExcluded = excluded.includes(s);
+            const isSelected = value === s;
+            return (
+              <div key={s} style={{ display:'flex', alignItems:'stretch', borderBottom:'1px solid #1f1f1f' }}>
+                <div
+                  onClick={() => { if (!isExcluded) { onSelect(s); setOpen(false); } }}
+                  style={{
+                    flex:1, padding:'8px 8px 8px 12px',
+                    cursor: isExcluded ? 'not-allowed' : 'pointer',
+                    fontFamily:'monospace', fontSize:12,
+                    color: isSelected ? '#f97316' : isExcluded ? '#555' : '#cbd5e1',
+                    textDecoration: isExcluded ? 'line-through' : 'none',
+                  }}>
+                  {s}
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onToggleExclude(s); }}
+                  title={isExcluded ? 'Stop excluding' : 'Exclude this sector'}
+                  style={{
+                    background:'none', border:'none', padding:'0 12px',
+                    cursor:'pointer', fontSize:13, lineHeight:1,
+                    color: isExcluded ? '#ef4444' : '#555',
+                  }}>
+                  ⊘
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function StarButton({ active, onClick }) {
   return (
@@ -604,6 +672,7 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
     setLoading(true);
     const p = new URLSearchParams();
     if (f.sector)             p.set('sector', f.sector);
+    if (f.exclude_sectors)    p.set('exclude_sectors', f.exclude_sectors);
     if (f.country)            p.set('country', f.country);
     if (f.ftse_index)         p.set('ftse_index', f.ftse_index);
     if (f.min_market_cap)     p.set('min_market_cap', f.min_market_cap);
@@ -623,6 +692,23 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
     const f = { ...filters, [k]: v };
     setFilters(f);
     runScreener(f);
+  };
+
+  const updateMany = (patch) => {
+    const f = { ...filters, ...patch };
+    setFilters(f);
+    runScreener(f);
+  };
+
+  const excludedSectors = filters.exclude_sectors ? filters.exclude_sectors.split(',').filter(Boolean) : [];
+
+  const toggleExcludeSector = (s) => {
+    const set = new Set(excludedSectors);
+    const wasExcluded = set.has(s);
+    if (wasExcluded) set.delete(s); else set.add(s);
+    const patch = { exclude_sectors: Array.from(set).join(',') };
+    if (!wasExcluded && filters.sector === s) patch.sector = '';
+    updateMany(patch);
   };
 
   // Called when a HybridSelect dropdown changes (preset or 'custom')
@@ -692,10 +778,13 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
 
       {!watchlistMode && (
       <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8, alignItems:'center' }}>
-        <select style={S.select} value={filters.sector} onChange={e=>update('sector',e.target.value)}>
-          <option value="">All Sectors</option>
-          {filterOpts.sectors.map(s=><option key={s} value={s}>{s}</option>)}
-        </select>
+        <SectorDropdown
+          sectors={filterOpts.sectors}
+          value={filters.sector}
+          excluded={excludedSectors}
+          onSelect={v => update('sector', v)}
+          onToggleExclude={toggleExcludeSector}
+        />
         <select style={S.select} value={filters.ftse_index} onChange={e=>update('ftse_index',e.target.value)}>
           <option value="">FTSE Market</option>
           <option value="FTSE 100">FTSE 100</option>
@@ -817,6 +906,27 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
             <option value="10">Upside &gt; 10%</option>
             <option value="20">Upside &gt; 20%</option>
           </select>
+        </div>
+      )}
+
+      {!watchlistMode && excludedSectors.length > 0 && (
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, alignItems:'center', marginBottom:8 }}>
+          <span style={{ fontFamily:'monospace', fontSize:10, color:'#666', textTransform:'uppercase', letterSpacing:1 }}>Excluded:</span>
+          {excludedSectors.map(s => (
+            <span key={s} style={{
+              display:'inline-flex', alignItems:'center', gap:6,
+              background:'#2a0d0d', color:'#fca5a5', border:'1px solid #4a1c1c',
+              padding:'2px 4px 2px 8px', borderRadius:2, fontSize:11, fontFamily:'monospace',
+            }}>
+              {s}
+              <button
+                onClick={() => toggleExcludeSector(s)}
+                title="Remove exclusion"
+                style={{ background:'none', border:'none', color:'#fca5a5', cursor:'pointer', padding:'0 4px', fontSize:12, lineHeight:1 }}>
+                ✕
+              </button>
+            </span>
+          ))}
         </div>
       )}
 
@@ -1211,7 +1321,7 @@ const S = {
   badge:       { background:'#1f1f1f', color:'#888', fontSize:11, padding:'3px 10px', borderRadius:2, fontFamily:'monospace' },
   tab:         { background:'none', border:'none', padding:'10px 18px', color:'#666', cursor:'pointer', borderBottom:'2px solid transparent', transition:'all 0.15s', fontSize:12, fontFamily:'monospace', textTransform:'uppercase', letterSpacing:0.5 },
   tabActive:   { color:'#f97316', borderBottom:'2px solid #f97316', fontWeight:700 },
-  navBtn:      { background:'none', border:'none', padding:'6px 14px', color:'#666', cursor:'pointer', borderRadius:2, fontSize:12, fontFamily:'monospace' },
+  navBtn:      { background:'none', border:'none', padding:'6px 14px', color:'#999', cursor:'pointer', borderRadius:2, fontSize:12, fontFamily:'monospace' },
   navBtnActive:{ color:'#f97316', background:'#1f1200', fontWeight:700 },
   backBtn:     { background:'none', border:'none', color:'#f97316', cursor:'pointer', padding:'0 0 16px', display:'block', fontSize:13, fontFamily:'monospace' },
   searchInput: { width:260, padding:'8px 14px', borderRadius:2, border:'1px solid #2a2a2a', fontSize:13, outline:'none', background:'#0a0a0a', color:'#e5e5e5', fontFamily:'monospace' },

@@ -418,6 +418,7 @@ def _attach_risk_score(results):
 @app.get("/api/screener")
 def screener(
     sector: Optional[str]=None,
+    exclude_sectors: Optional[str]=None,
     country: Optional[str]=None,
     ftse_index: Optional[str]=None,
     min_market_cap: Optional[float]=None,
@@ -431,6 +432,11 @@ def screener(
     wheres = ["1=1"]
     params = []
     if sector: wheres.append("m.sector = %s"); params.append(sector)
+    if exclude_sectors:
+        excluded = [s.strip() for s in exclude_sectors.split(",") if s.strip()]
+        if excluded:
+            wheres.append("m.sector <> ALL(%s)")
+            params.append(excluded)
     if country: wheres.append("m.country = %s"); params.append(country)
     if ftse_index:
         if ftse_index == 'FTSE 350':
