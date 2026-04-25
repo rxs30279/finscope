@@ -6,4 +6,6 @@ yfinance
 fear-and-greed
 openpyxl
 beautifulsoup4
+lxml
+curl_cffi
 openai

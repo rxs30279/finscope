@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 import logging
 import warnings
 
+import lse_scraper
+
 load_dotenv()
 
 warnings.filterwarnings("ignore")
@@ -178,8 +180,8 @@ def process_stock(symbol: str):
         info = ticker.info or {}
 
         if inc_a is None or inc_a.empty:
-            log.warning(f"  No income data for {symbol}")
-            return 0
+            log.warning(f"  No yfinance income data for {symbol} — will try LSE")
+            inc_a = pd.DataFrame()
 
         yahoo_market_cap = info.get("marketCap")
         yahoo_trailing_pe = info.get("trailingPE")
@@ -192,19 +194,19 @@ def process_stock(symbol: str):
             if revenue_check and revenue_check > 0:
                 valid_cols.append(col)
 
-        if not valid_cols:
-            log.warning(f"  No valid data columns for {symbol}")
-            return 0
-
-        most_recent_col = valid_cols[0]
-        log.info(
-            f"  Most recent data year: {most_recent_col.year if hasattr(most_recent_col, 'year') else most_recent_col}"
-        )
-
-        try:
-            hist = ticker.history(period="10y", interval="1mo")
-            hist.index = hist.index.tz_localize(None) if hist.index.tz else hist.index
-        except:
+        if valid_cols:
+            most_recent_col = valid_cols[0]
+            log.info(
+                f"  Most recent data year: {most_recent_col.year if hasattr(most_recent_col, 'year') else most_recent_col}"
+            )
+            try:
+                hist = ticker.history(period="10y", interval="1mo")
+                hist.index = hist.index.tz_localize(None) if hist.index.tz else hist.index
+            except:
+                hist = None
+        else:
+            log.warning(f"  No valid yfinance columns for {symbol} — relying on LSE")
+            most_recent_col = None
             hist = None
 
         def get_price_at_date(target_date):
@@ -459,6 +461,7 @@ def process_stock(symbol: str):
                     "eps_diluted": eps_diluted,
                     "shares_basic": shares_basic,
                     "shares_diluted": shares_diluted,
+                    "dividends_per_share": None,
                     "cash_and_equiv": cash,
                     "total_current_assets": curr_assets,
                     "total_current_liabilities": curr_liab,
@@ -539,11 +542,26 @@ def process_stock(symbol: str):
                 log.error(f"  Error processing {col} for {symbol}: {e}")
                 continue
 
-        if not annual_rows:
-            log.warning(f"  No annual rows built for {symbol}")
-            return 0
+        if annual_rows:
+            annual_rows.sort(key=lambda r: r["period_end_date"])
 
-        annual_rows.sort(key=lambda r: r["period_end_date"])
+        # Merge LSE.co.uk fundamentals: fill nulls in yf rows and synthesize
+        # rows for fiscal years yf hasn't picked up yet. Best-effort — never
+        # fail the yf updater because of LSE issues.
+        try:
+            lse_data = lse_scraper.fetch_fundamentals(symbol)
+            if lse_data:
+                before = len(annual_rows)
+                annual_rows = lse_scraper.merge(annual_rows, lse_data, symbol)
+                annual_rows.sort(key=lambda r: r["period_end_date"])
+                added = len(annual_rows) - before
+                log.info(f"  LSE merge: {len(lse_data)} FY found, {added} new row(s) added")
+        except Exception as e:
+            log.warning(f"  LSE merge failed for {symbol}: {e}")
+
+        if not annual_rows:
+            log.warning(f"  No data from yfinance or LSE for {symbol}")
+            return 0
 
         for i in range(1, len(annual_rows)):
             cur_r = annual_rows[i]
