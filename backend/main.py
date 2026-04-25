@@ -12,6 +12,7 @@ from prices import router as prices_router, _attach_momentum
 from analysts import router as analysts_router
 from rns import router as rns_router
 from rns_llm import router as rns_llm_router
+from news import router as news_router
 
 load_dotenv()
 
@@ -24,6 +25,7 @@ app.include_router(prices_router)
 app.include_router(analysts_router)
 app.include_router(rns_router)
 app.include_router(rns_llm_router)
+app.include_router(news_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
@@ -283,6 +285,40 @@ def _blend_risk(altman_component, vol_component):
     return None
 
 
+def _attach_pegy(results):
+    """Add pegy ratio to each screener result row.
+
+    PEGY = P/E / (growth% + dividend yield%). Lower = cheaper relative to growth+income.
+    Growth prefers forward analyst EPS (needs >=3 analysts), falls back to 10Y EPS CAGR.
+    Yield derived from dividends_per_share / period_end_price (same vintage as P/E).
+    Returns None when inputs are missing or the denominator is too small to be meaningful.
+    """
+    def _f(x):
+        return float(x) if x is not None else None
+
+    for r in results:
+        r['pegy'] = None
+        pe = _f(r.get('price_to_earnings'))
+        if pe is None or pe <= 0:
+            continue
+
+        fwd = _f(r.get('eps_growth_next_yr'))
+        total = r.get('total_analysts') or 0
+        growth = fwd if (fwd is not None and total >= 3) else _f(r.get('eps_cagr_10'))
+        if growth is None:
+            continue
+
+        dps = _f(r.get('dividends_per_share')) or 0.0
+        price = _f(r.get('period_end_price')) or 0.0
+        yld = (dps / price) if price > 0 else 0.0
+
+        denom_pct = (growth + yld) * 100
+        if denom_pct < 2:
+            continue
+        r['pegy'] = round(pe / denom_pct, 2)
+    return results
+
+
 def _attach_piotroski(results):
     """Add piotroski_score to each screener result row."""
     if not results:
@@ -419,15 +455,17 @@ def screener(
                t.revenue_growth, t.eps_diluted_growth, t.fcf_growth,
                t.debt_to_equity, t.current_ratio, t.fcf, t.ebitda,
                t.revenue_cagr_10, t.eps_cagr_10, t.period_end_date,
-               t.fcf_margin,
+               t.fcf_margin, t.dividends_per_share, t.period_end_price,
                t.gross_margin_median, t.operating_margin_median,
                t.net_margin_median, t.roe_median, t.roic_median,
-               a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score
+               a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score,
+               a.eps_growth_next_yr
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
         LEFT JOIN (
             SELECT DISTINCT ON (symbol)
-                symbol, consensus, buy_pct, upside_pct, total_analysts, revision_score
+                symbol, consensus, buy_pct, upside_pct, total_analysts, revision_score,
+                eps_growth_next_yr
             FROM analyst_snapshots
             ORDER BY symbol, snapshot_date DESC
         ) a ON a.symbol = m.symbol
@@ -438,6 +476,7 @@ def screener(
     results = query(sql, params)
     for r in results:
         r['quality_score'] = _quality_score(r)
+    _attach_pegy(results)
     _attach_momentum(results)
     _attach_piotroski(results)
     return _attach_risk_score(results)
