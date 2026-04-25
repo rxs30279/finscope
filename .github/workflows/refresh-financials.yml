@@ -1,0 +1,47 @@
+name: refresh-financials
+
+# Rotates 25 stocks per run through the full FTSE list (~350 stocks),
+# pulling annual + quarterly financials from yfinance and computing
+# margins, growth, ROIC/ROE/ROCE, CAGRs, valuation ratios. Picks the
+# 25 oldest by company_metadata.financials_updated, so the cycle is
+# self-balancing — full coverage every ~14 days.
+
+on:
+  schedule:
+    # 03:30 UTC daily — sits ~1h after refresh-analysts (02:17 UTC)
+    # so the two yfinance jobs don't burst together against Yahoo.
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: refresh-financials
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DB_HOST:     ${{ secrets.DB_HOST }}
+      DB_PORT:     ${{ secrets.DB_PORT }}
+      DB_NAME:     ${{ secrets.DB_NAME }}
+      DB_USER:     ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run financials updater
+        working-directory: backend
+        run: python updater.py
