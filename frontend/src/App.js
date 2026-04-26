@@ -673,7 +673,7 @@ function TargetInput({ symbol, target, current, onCommit }) {
       onKeyDown={e => { if (e.key === 'Enter') { commit(); e.currentTarget.blur(); } }}
       onClick={e => e.stopPropagation()}
       style={{
-        width: 80, textAlign: 'right',
+        width: 56, textAlign: 'right',
         background: '#0d0d0d', border: '1px solid #2a2a2a', borderRadius: 2,
         padding: '3px 6px', fontFamily: 'monospace', fontSize: 12, fontWeight: 700,
         color,
