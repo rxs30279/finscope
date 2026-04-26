@@ -1,0 +1,66 @@
+name: email-rns-digest
+
+# Sends the RNS morning digest at 07:30 Europe/London, weekdays.
+# GitHub cron runs in UTC and never auto-shifts for BST/GMT, so we fire
+# at both candidate UTC times and let a UK-time guard pick the one that
+# actually corresponds to 07:30 UK. The cron firing at the wrong UK hour
+# short-circuits the rest of the job.
+#
+# Read-only by design: this job does NOT trigger ingest or DeepSeek.
+# It just queries rows the refresh-rns workflow has already populated.
+
+on:
+  schedule:
+    - cron: '30 6 * * 1-5'   # 06:30 UTC = 07:30 BST (summer)
+    - cron: '30 7 * * 1-5'   # 07:30 UTC = 07:30 GMT (winter)
+  workflow_dispatch:
+
+concurrency:
+  group: email-rns-digest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DB_HOST:        ${{ secrets.DB_HOST }}
+      DB_PORT:        ${{ secrets.DB_PORT }}
+      DB_NAME:        ${{ secrets.DB_NAME }}
+      DB_USER:        ${{ secrets.DB_USER }}
+      DB_PASSWORD:    ${{ secrets.DB_PASSWORD }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+    steps:
+      - name: Check UK time
+        id: uk
+        run: |
+          uk_hm=$(TZ=Europe/London date +%H:%M)
+          echo "UK time is $uk_hm"
+          if [ "$uk_hm" = "07:30" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "send=false" >> "$GITHUB_OUTPUT"
+            echo "Not 07:30 UK — the other seasonal cron will handle this run."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.uk.outputs.send == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.uk.outputs.send == 'true'
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        if: steps.uk.outputs.send == 'true'
+        run: pip install -r backend/requirements.txt
+
+      - name: Send RNS digest
+        if: steps.uk.outputs.send == 'true'
+        working-directory: backend
+        run: python email_rns_digest.py
