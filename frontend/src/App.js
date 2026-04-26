@@ -557,7 +557,7 @@ const FUND_COLS = [
 ];
 const WATCHLIST_FUND_COLS = [
   ...FUND_COLS_BASE,
-  ['Price',true,'current_price'],['Target',true,'target_price'],
+  ['Price',true,'current_price'],['Target buy',true,'target_price'],
 ];
 const ANALYST_COLS = [
   ['Symbol',false,'symbol'],['Name',false,'name'],['Sector',false,'sector'],['Index',false,'ftse_index'],
