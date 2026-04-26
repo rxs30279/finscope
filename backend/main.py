@@ -465,7 +465,8 @@ def screener(
                t.gross_margin_median, t.operating_margin_median,
                t.net_margin_median, t.roe_median, t.roic_median,
                a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score,
-               a.eps_growth_next_yr
+               a.eps_growth_next_yr,
+               COALESCE(p.latest_close, t.period_end_price) AS current_price
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
         LEFT JOIN (
@@ -475,6 +476,11 @@ def screener(
             FROM analyst_snapshots
             ORDER BY symbol, snapshot_date DESC
         ) a ON a.symbol = m.symbol
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol) symbol, close AS latest_close
+            FROM price_history
+            ORDER BY symbol, date DESC
+        ) p ON p.symbol = m.symbol
         WHERE {' AND '.join(wheres)}
         ORDER BY t.market_cap DESC NULLS LAST
         LIMIT %s
@@ -486,6 +492,47 @@ def screener(
     _attach_momentum(results)
     _attach_piotroski(results)
     return _attach_risk_score(results)
+
+_quote_cache: dict = {}
+_QUOTE_TTL = 60  # seconds
+
+@app.get("/api/quotes")
+def quotes(symbols: str):
+    """Return live last-price for each symbol via yfinance fast_info. 60s cache per symbol."""
+    import time
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not requested:
+        return {}
+
+    now = time.time()
+    out = {}
+    misses = []
+    for sym in requested:
+        cached = _quote_cache.get(sym)
+        if cached and now - cached[1] < _QUOTE_TTL:
+            out[sym] = cached[0]
+        else:
+            misses.append(sym)
+
+    def _fetch(sym):
+        try:
+            fi = yf.Ticker(sym).fast_info
+            price = fi.get("last_price") if hasattr(fi, "get") else getattr(fi, "last_price", None)
+            return sym, float(price) if price is not None else None
+        except Exception:
+            return sym, None
+
+    if misses:
+        with ThreadPoolExecutor(max_workers=min(12, len(misses))) as ex:
+            for fut in as_completed([ex.submit(_fetch, s) for s in misses]):
+                sym, price = fut.result()
+                out[sym] = price
+                _quote_cache[sym] = (price, now)
+
+    return out
 
 @app.get("/api/filters")
 def filters():

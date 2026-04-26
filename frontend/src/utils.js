@@ -47,3 +47,19 @@ export const saveWatchlist = (symbols) => {
   if (typeof window === 'undefined') return;
   try { window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(symbols)); } catch {}
 };
+
+export const TARGETS_KEY = 'stock_screener_target_prices';
+
+export const loadTargets = () => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(TARGETS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+};
+
+export const saveTargets = (targets) => {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(TARGETS_KEY, JSON.stringify(targets)); } catch {}
+};

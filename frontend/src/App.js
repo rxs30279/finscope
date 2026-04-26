@@ -3,7 +3,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
-import { API, fmt, gc, currSym, loadWatchlist, saveWatchlist } from './utils';
+import { API, fmt, gc, currSym, loadWatchlist, saveWatchlist, loadTargets, saveTargets } from './utils';
 import Sidebar from './components/Sidebar';
 import RotationTab from './components/RotationTab';
 import BreadthTab from './components/BreadthTab';
@@ -545,12 +545,19 @@ const EMPTY_MODES   = { min_market_cap:'', max_pe:'', min_roe:'', min_revenue_gr
 const EMPTY_SCORE_FILTERS = { min_momentum:'', min_quality:'', min_piotroski:'', max_risk:'' };
 
 // [label, rightAlign, sortKey]
-const FUND_COLS = [
+const FUND_COLS_BASE = [
   ['Symbol',false,'symbol'],['Name',false,'name'],['Sector',false,'sector'],['Index',false,'ftse_index'],
   ['Mkt Cap',true,'market_cap'],['P/E',true,'price_to_earnings'],['P/B',true,'price_to_book'],
   ['ROE',true,'roe'],['Rev Growth',true,'revenue_growth'],['D/E',true,'debt_to_equity'],
   ['PEGY',true,'pegy'],
+];
+const FUND_COLS = [
+  ...FUND_COLS_BASE,
   ['Momentum',true,'momentum_score'],['Quality',true,'quality_score'],['Value',true,'piotroski_score'],['Risk',true,'risk_score'],
+];
+const WATCHLIST_FUND_COLS = [
+  ...FUND_COLS_BASE,
+  ['Price',true,'current_price'],['Target',true,'target_price'],
 ];
 const ANALYST_COLS = [
   ['Symbol',false,'symbol'],['Name',false,'name'],['Sector',false,'sector'],['Index',false,'ftse_index'],
@@ -644,6 +651,35 @@ function StarButton({ active, onClick }) {
   );
 }
 
+function TargetInput({ symbol, target, current, onCommit }) {
+  const [draft, setDraft] = useState(target != null ? String(target) : '');
+  useEffect(() => { setDraft(target != null ? String(target) : ''); }, [target]);
+  const reached = target != null && current != null && Number(current) >= Number(target);
+  const commit = () => {
+    if (draft === '' && target == null) return;
+    if (draft !== (target != null ? String(target) : '')) onCommit(symbol, draft);
+  };
+  return (
+    <input
+      type="number"
+      step="0.01"
+      value={draft}
+      placeholder="—"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') { commit(); e.currentTarget.blur(); } }}
+      onClick={e => e.stopPropagation()}
+      style={{
+        width: 80, textAlign: 'right',
+        background: '#0d0d0d', border: '1px solid #2a2a2a', borderRadius: 2,
+        padding: '3px 6px', fontFamily: 'monospace', fontSize: 12, fontWeight: 700,
+        color: reached ? '#10b981' : '#cbd5e1',
+        outline: 'none',
+      }}
+    />
+  );
+}
+
 function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, watchlistMode = false }) {
   const [filters, setFilters]       = useState(EMPTY_FILTERS);
   const [selectModes, setSelectModes] = useState(EMPTY_MODES);
@@ -655,6 +691,35 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
   const [tableView, setTableView] = useState('fundamentals');
   const [sortCol, setSortCol]     = useState(null);
   const [sortDir, setSortDir]     = useState('desc');
+  const [targets, setTargets]     = useState(() => loadTargets());
+  const [liveQuotes, setLiveQuotes] = useState({});
+
+  useEffect(() => {
+    if (!watchlistMode) return;
+    const symbols = [...(watchlist instanceof Set ? watchlist : new Set(watchlist || []))];
+    if (symbols.length === 0) { setLiveQuotes({}); return; }
+    let cancelled = false;
+    const fetchQuotes = () => {
+      fetch(`${API}/quotes?symbols=${encodeURIComponent(symbols.join(','))}`)
+        .then(r => r.json())
+        .then(d => { if (!cancelled && d && typeof d === 'object') setLiveQuotes(d); })
+        .catch(() => {});
+    };
+    fetchQuotes();
+    const id = setInterval(fetchQuotes, 60000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [watchlistMode, watchlist]);
+
+  const setTarget = (symbol, value) => {
+    setTargets(prev => {
+      const next = { ...prev };
+      const num = parseFloat(value);
+      if (!Number.isFinite(num) || num <= 0) delete next[symbol];
+      else next[symbol] = num;
+      saveTargets(next);
+      return next;
+    });
+  };
 
   useEffect(() => {
     fetch(`${API}/filters`).then(r=>r.json()).then(setFilterOpts);
@@ -753,8 +818,13 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
     else { setSortCol(key); setSortDir('desc'); }
   };
 
+  const lookup = (r, key) => {
+    if (key === 'target_price') return targets[r.symbol];
+    if (key === 'current_price') return liveQuotes[r.symbol] ?? r.current_price;
+    return r[key];
+  };
   const sorted = sortCol == null ? displayed : [...displayed].sort((a, b) => {
-    const av = a[sortCol], bv = b[sortCol];
+    const av = lookup(a, sortCol), bv = lookup(b, sortCol);
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
     if (bv == null) return -1;
@@ -955,7 +1025,7 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
           <table style={{ ...S.table, minWidth: tableView==='analysts' ? 700 : 900 }}>
             <thead>
               <tr>
-                {(tableView === 'fundamentals' ? FUND_COLS : ANALYST_COLS).map(([h,num,key])=>(
+                {(tableView === 'fundamentals' ? (watchlistMode ? WATCHLIST_FUND_COLS : FUND_COLS) : ANALYST_COLS).map(([h,num,key])=>(
                   <th key={h} onClick={() => handleSort(key)} style={{
                     ...S.th, textAlign: num?'right':'left', cursor:'pointer', userSelect:'none',
                     color: sortCol===key ? '#fb923c' : '#f97316',
@@ -997,6 +1067,26 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
                     <td style={{ ...S.tdNum,
                       color: r.pegy == null ? '#444' : r.pegy < 1 ? '#10b981' : r.pegy <= 2 ? '#f59e0b' : '#ef4444',
                     }}>{r.pegy ?? '—'}</td>
+                    {watchlistMode ? (() => {
+                      const live = liveQuotes[r.symbol];
+                      const price = live != null ? live : r.current_price;
+                      const isLive = live != null;
+                      return (<>
+                        <td style={{ ...S.tdNum, color: isLive ? '#10b981' : '#cbd5e1', fontWeight:700 }}
+                            title={isLive ? 'Live (yfinance, 60s cache)' : 'Last close'}>
+                          {price != null ? Number(price).toFixed(2) : '—'}
+                          {isLive && <span style={{ marginLeft:4, fontSize:9, color:'#10b981' }}>●</span>}
+                        </td>
+                        <td style={{ ...S.tdNum }} onClick={e => e.stopPropagation()}>
+                          <TargetInput
+                            symbol={r.symbol}
+                            target={targets[r.symbol]}
+                            current={price}
+                            onCommit={setTarget}
+                          />
+                        </td>
+                      </>);
+                    })() : (<>
                     <td style={{ ...S.tdNum,
                       color: r.momentum_score == null ? '#444' : r.momentum_score >= 7 ? '#10b981' : r.momentum_score >= 4 ? '#f59e0b' : '#ef4444',
                       fontWeight: 700,
@@ -1013,6 +1103,7 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
                       color: r.risk_score == null ? '#444' : r.risk_score <= 3 ? '#10b981' : r.risk_score <= 6 ? '#f59e0b' : '#ef4444',
                       fontWeight: 700,
                     }}>{r.risk_score ?? '—'}</td>
+                    </>)}
                   </>) : (<>
                     <td style={S.td}>
                       {r.consensus
