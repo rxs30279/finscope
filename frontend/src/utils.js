@@ -49,13 +49,25 @@ export const saveWatchlist = (symbols) => {
 };
 
 export const TARGETS_KEY = 'stock_screener_target_prices';
+const TARGETS_UNIT_V2 = 'stock_screener_targets_unit_v2_pounds';
 
 export const loadTargets = () => {
   if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(TARGETS_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    let parsed = raw ? JSON.parse(raw) : {};
+    if (!parsed || typeof parsed !== 'object') parsed = {};
+    if (!window.localStorage.getItem(TARGETS_UNIT_V2)) {
+      const migrated = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > 0) migrated[k] = n / 100;
+      }
+      window.localStorage.setItem(TARGETS_KEY, JSON.stringify(migrated));
+      window.localStorage.setItem(TARGETS_UNIT_V2, '1');
+      return migrated;
+    }
+    return parsed;
   } catch { return {}; }
 };
 

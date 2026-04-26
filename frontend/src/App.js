@@ -1069,19 +1069,20 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
                     }}>{r.pegy ?? '—'}</td>
                     {watchlistMode ? (() => {
                       const live = liveQuotes[r.symbol];
-                      const price = live != null ? live : r.current_price;
+                      const pence = live != null ? live : r.current_price;
+                      const pounds = pence != null ? pence / 100 : null;
                       const isLive = live != null;
                       return (<>
                         <td style={{ ...S.tdNum, color: isLive ? '#10b981' : '#cbd5e1', fontWeight:700 }}
                             title={isLive ? 'Live (yfinance, 60s cache)' : 'Last close'}>
-                          {price != null ? Number(price).toFixed(2) : '—'}
+                          {pounds != null ? `£${pounds.toFixed(2)}` : '—'}
                           {isLive && <span style={{ marginLeft:4, fontSize:9, color:'#10b981' }}>●</span>}
                         </td>
                         <td style={{ ...S.tdNum }} onClick={e => e.stopPropagation()}>
                           <TargetInput
                             symbol={r.symbol}
                             target={targets[r.symbol]}
-                            current={price}
+                            current={pounds}
                             onCommit={setTarget}
                           />
                         </td>
