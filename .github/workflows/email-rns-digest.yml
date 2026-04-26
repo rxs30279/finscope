@@ -33,6 +33,7 @@ jobs:
       DB_USER:        ${{ secrets.DB_USER }}
       DB_PASSWORD:    ${{ secrets.DB_PASSWORD }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      DIGEST_FROM:    "Alpha Move AI <digest@alphamoveai.co.uk>"
     steps:
       - name: Check UK time
         id: uk
