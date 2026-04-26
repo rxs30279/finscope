@@ -518,12 +518,22 @@ def quotes(symbols: str):
             misses.append(sym)
 
     def _fetch(sym):
-        try:
-            fi = yf.Ticker(sym).fast_info
-            price = fi.get("last_price") if hasattr(fi, "get") else getattr(fi, "last_price", None)
-            return sym, float(price) if price is not None else None
-        except Exception:
-            return sym, None
+        # Try intraday (1-min bars) first — gives a near-live price during
+        # market hours. Falls back to daily if market is closed or intraday
+        # is unavailable.
+        for period, interval in (("2d", "1m"), ("5d", "1d")):
+            try:
+                h = yf.Ticker(sym).history(
+                    period=period, interval=interval, auto_adjust=False
+                )
+                if h.empty:
+                    continue
+                close = h["Close"].dropna()
+                if len(close) > 0:
+                    return sym, float(close.iloc[-1])
+            except Exception as e:
+                print(f"[quotes] {sym} {interval} failed: {e}")
+        return sym, None
 
     if misses:
         with ThreadPoolExecutor(max_workers=min(12, len(misses))) as ex:
