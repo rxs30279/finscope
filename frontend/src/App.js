@@ -654,7 +654,10 @@ function StarButton({ active, onClick }) {
 function TargetInput({ symbol, target, current, onCommit }) {
   const [draft, setDraft] = useState(target != null ? String(target) : '');
   useEffect(() => { setDraft(target != null ? String(target) : ''); }, [target]);
-  const reached = target != null && current != null && Number(current) >= Number(target);
+  let color = '#cbd5e1';
+  if (target != null && current != null) {
+    color = Number(target) >= Number(current) ? '#10b981' : '#ef4444';
+  }
   const commit = () => {
     if (draft === '' && target == null) return;
     if (draft !== (target != null ? String(target) : '')) onCommit(symbol, draft);
@@ -673,7 +676,7 @@ function TargetInput({ symbol, target, current, onCommit }) {
         width: 80, textAlign: 'right',
         background: '#0d0d0d', border: '1px solid #2a2a2a', borderRadius: 2,
         padding: '3px 6px', fontFamily: 'monospace', fontSize: 12, fontWeight: 700,
-        color: reached ? '#10b981' : '#cbd5e1',
+        color,
         outline: 'none',
       }}
     />
@@ -1073,7 +1076,7 @@ function Screener({ onSelect, highlightSymbol, watchlist, onToggleWatchlist, wat
                       const pounds = pence != null ? pence / 100 : null;
                       const isLive = live != null;
                       return (<>
-                        <td style={{ ...S.tdNum, color: isLive ? '#10b981' : '#cbd5e1', fontWeight:700 }}
+                        <td style={{ ...S.tdNum, color: '#f1f5f9', fontWeight:700 }}
                             title={isLive ? 'Live (yfinance, 60s cache)' : 'Last close'}>
                           {pounds != null ? `£${pounds.toFixed(2)}` : '—'}
                           {isLive && <span style={{ marginLeft:4, fontSize:9, color:'#10b981' }}>●</span>}
