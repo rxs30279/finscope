@@ -306,7 +306,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {toast && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{toast}</span>}
-          <button onClick={handleRefresh} disabled={refreshing}
+          <button
+            onClick={(e) => { if (e.ctrlKey || e.metaKey) handleRefresh(); }}
+            disabled={refreshing}
             style={{
               background: refreshing ? '#1f1200' : '#1a1a1a',
               color:      refreshing ? '#f97316' : '#f97316',

@@ -169,9 +169,8 @@ export default function NewsTab({ symbol }) {
               </span>
             )}
             <button
-              onClick={generateSummary}
+              onClick={(e) => { if (e.ctrlKey || e.metaKey) generateSummary(); }}
               disabled={summarising}
-              title={summary ? 'Regenerate from latest news' : 'Generate AI summary'}
               style={{
                 background: summarising ? '#2e1065' : '#1a1a1a',
                 color:      summarising ? '#c4b5fd' : '#a78bfa',
