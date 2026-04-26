@@ -664,8 +664,8 @@ function TargetInput({ symbol, target, current, onCommit }) {
   };
   return (
     <input
-      type="number"
-      step="0.01"
+      type="text"
+      inputMode="decimal"
       value={draft}
       placeholder="—"
       onChange={e => setDraft(e.target.value)}
