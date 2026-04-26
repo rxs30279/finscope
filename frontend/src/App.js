@@ -656,7 +656,7 @@ function TargetInput({ symbol, target, current, onCommit }) {
   useEffect(() => { setDraft(target != null ? String(target) : ''); }, [target]);
   let color = '#cbd5e1';
   if (target != null && current != null) {
-    color = Number(target) >= Number(current) ? '#ef4444' : '#10b981';
+    color = Number(target) >= Number(current) ? '#10b981' : '#ef4444';
   }
   const commit = () => {
     if (draft === '' && target == null) return;
