@@ -215,6 +215,10 @@ def _send_via_resend(subject: str, html_body: str, to_addr: str, from_addr: str,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
+            # Resend is fronted by Cloudflare; the default urllib UA
+            # ("Python-urllib/3.x") trips bot protection (CF error 1010).
+            "User-Agent":    "FINScope-RNS-Digest/1.0",
+            "Accept":        "application/json",
         },
         method="POST",
     )
