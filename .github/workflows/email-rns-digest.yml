@@ -1,16 +1,18 @@
 name: email-rns-digest
 
-# Sends the RNS morning digest at 07:30 Europe/London, weekdays.
+# Sends the RNS morning digest at 06:55 and 07:30 Europe/London, weekdays.
 # GitHub cron runs in UTC and never auto-shifts for BST/GMT, so we fire
-# at both candidate UTC times and let a UK-time guard pick the one that
-# actually corresponds to 07:30 UK. The cron firing at the wrong UK hour
-# short-circuits the rest of the job.
+# at both candidate UTC times per slot and let a UK-time guard pick the
+# one that actually corresponds to a UK send time. Crons firing at the
+# wrong UK hour short-circuit the rest of the job.
 #
 # Read-only by design: this job does NOT trigger ingest or DeepSeek.
 # It just queries rows the refresh-rns workflow has already populated.
 
 on:
   schedule:
+    - cron: '55 5 * * 1-5'   # 05:55 UTC = 06:55 BST (summer)
+    - cron: '55 6 * * 1-5'   # 06:55 UTC = 06:55 GMT (winter)
     - cron: '30 6 * * 1-5'   # 06:30 UTC = 07:30 BST (summer)
     - cron: '30 7 * * 1-5'   # 07:30 UTC = 07:30 GMT (winter)
   workflow_dispatch:
@@ -40,11 +42,11 @@ jobs:
         run: |
           uk_hm=$(TZ=Europe/London date +%H:%M)
           echo "UK time is $uk_hm"
-          if [ "$uk_hm" = "07:30" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$uk_hm" = "06:55" ] || [ "$uk_hm" = "07:30" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "send=true" >> "$GITHUB_OUTPUT"
           else
             echo "send=false" >> "$GITHUB_OUTPUT"
-            echo "Not 07:30 UK — the other seasonal cron will handle this run."
+            echo "Not a configured send time (06:55 or 07:30 UK) — the other seasonal cron will handle this run."
           fi
 
       - uses: actions/checkout@v4
