@@ -15,9 +15,10 @@ import re
 import time
 import urllib.request
 import urllib.error
-import json as _json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
+
+import gh_actions
 from zoneinfo import ZoneInfo
 
 _UK_TZ = ZoneInfo("Europe/London")
@@ -719,59 +720,17 @@ def backfill_summaries(background_tasks: BackgroundTasks,
 # ── Pipeline trigger via GitHub Actions ──────────────────────────────────────
 #
 # The full pipeline (multi-page scrape + DeepSeek calls) takes minutes and
-# can't run inside a Vercel serverless function — `BackgroundTasks` is killed
-# when the response returns, function timeouts cap at 10-60s, and module-level
-# state isn't shared across cold-started instances. So the user-triggered
-# refresh dispatches the same `refresh-rns.yml` workflow that runs on cron;
-# /pipeline/status reads the run state back via the GitHub REST API.
+# can't run inside a Vercel serverless function. The refresh button dispatches
+# the same refresh-rns.yml workflow that runs on cron; the UI polls run state
+# back via the GitHub REST API. See gh_actions.py for the helpers.
 
-_GH_REPO     = os.environ.get("GH_REPO", "rxs30279/finscope")
-_GH_WORKFLOW = "refresh-rns.yml"
-_GH_REF      = os.environ.get("GH_REF", "main")
-_GH_API      = "https://api.github.com"
-
-# GitHub run statuses that mean "still working".
-_GH_ACTIVE_STATUSES = ("queued", "in_progress", "waiting", "requested", "pending")
-
-
-def _gh_request(method: str, path: str, body: Optional[dict] = None) -> Optional[dict]:
-    token = os.environ.get("GH_DISPATCH_TOKEN")
-    if not token:
-        raise RuntimeError("GH_DISPATCH_TOKEN env var not set")
-    data = _json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(
-        f"{_GH_API}{path}",
-        data=data,
-        method=method,
-        headers={
-            "Authorization":        f"Bearer {token}",
-            "Accept":               "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent":           "alpha-move-ai-rns",
-            "Content-Type":         "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        raw = resp.read()
-        if not raw:
-            return None
-        return _json.loads(raw.decode())
+_RNS_WORKFLOW = "refresh-rns.yml"
 
 
 @router.post("/pipeline")
 def pipeline():
-    """Dispatch the refresh-rns GitHub Actions workflow.
-
-    Returns `dispatched_at` so the UI can echo it back via /pipeline/status?since=,
-    distinguishing this run from older completed dispatches in the API list.
-    """
-    dispatched_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     try:
-        _gh_request(
-            "POST",
-            f"/repos/{_GH_REPO}/actions/workflows/{_GH_WORKFLOW}/dispatches",
-            body={"ref": _GH_REF},
-        )
+        dispatched_at = gh_actions.dispatch(_RNS_WORKFLOW)
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace") if getattr(e, "fp", None) else str(e)
         raise HTTPException(status_code=502, detail=f"GitHub dispatch failed ({e.code}): {detail}")
@@ -783,63 +742,4 @@ def pipeline():
 @router.get("/pipeline/status")
 def pipeline_status(since: Optional[str] = Query(None,
                     description="ISO timestamp of dispatch — only runs started >= this are considered ours")):
-    """Report the latest workflow_dispatch run of refresh-rns.
-
-    `since` lets the UI ignore older completed runs while GitHub is still
-    queueing the run we just dispatched. Empty/error → return a dormant
-    status so the polling UI doesn't crash on transient API hiccups.
-    """
-    empty = {"running": False, "stage": None, "started_at": None,
-             "finished_at": None, "stages": {}}
-    try:
-        data = _gh_request(
-            "GET",
-            f"/repos/{_GH_REPO}/actions/workflows/{_GH_WORKFLOW}/runs?event=workflow_dispatch&per_page=1",
-        )
-    except Exception:
-        return empty
-
-    runs = (data or {}).get("workflow_runs") or []
-    run  = runs[0] if runs else None
-
-    since_dt = None
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-        except ValueError:
-            pass
-
-    started_dt = None
-    started_iso = None
-    if run:
-        started_iso = run.get("run_started_at") or run.get("created_at")
-        if started_iso:
-            try:
-                started_dt = datetime.fromisoformat(started_iso.replace("Z", "+00:00"))
-            except ValueError:
-                pass
-
-    is_ours = (run is not None and started_dt is not None
-               and (since_dt is None or started_dt >= since_dt))
-
-    if not is_ours:
-        # Our dispatch may still be queueing on GitHub's side. Hold the UI in
-        # "queueing" for ~90s after dispatch instead of false-firing "complete".
-        if since_dt is not None:
-            age = (datetime.now(timezone.utc) - since_dt).total_seconds()
-            if age < 90:
-                return {"running": True, "stage": "queueing", "started_at": since,
-                        "finished_at": None, "stages": {}}
-        return empty
-
-    status  = run.get("status") or ""
-    running = status in _GH_ACTIVE_STATUSES
-    return {
-        "running":     running,
-        "stage":       status if running else None,
-        "started_at":  started_iso,
-        "finished_at": run.get("updated_at") if not running else None,
-        "stages":      {},
-        "conclusion":  run.get("conclusion"),
-        "html_url":    run.get("html_url"),
-    }
+    return gh_actions.pipeline_status(_RNS_WORKFLOW, since)

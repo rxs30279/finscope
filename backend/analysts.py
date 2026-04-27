@@ -1,5 +1,7 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fastapi import APIRouter, BackgroundTasks
+import urllib.error
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
@@ -9,6 +11,8 @@ import time
 import threading
 from datetime import date
 from dotenv import load_dotenv
+
+import gh_actions
 
 load_dotenv()
 
@@ -381,11 +385,28 @@ def get_changes():
         ORDER BY cur.snapshot_date DESC
     """)
 
+# Refresh dispatches the refresh-analysts.yml GitHub Actions workflow rather
+# than running _run_refresh in-process: yfinance pulls for ~350 stocks take
+# minutes and Vercel kills serverless functions when the response returns.
+_ANALYSTS_WORKFLOW = "refresh-analysts.yml"
+
+
 @router.post("/refresh")
-def refresh(background_tasks: BackgroundTasks):
-    """Trigger a full analyst data refresh in the background."""
-    background_tasks.add_task(_run_refresh)
-    return {'status': 'refresh started'}
+def refresh():
+    try:
+        dispatched_at = gh_actions.dispatch(_ANALYSTS_WORKFLOW)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace") if getattr(e, "fp", None) else str(e)
+        raise HTTPException(status_code=502, detail=f"GitHub dispatch failed ({e.code}): {detail}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"GitHub dispatch failed: {e}")
+    return {"status": "dispatched", "dispatched_at": dispatched_at}
+
+
+@router.get("/refresh/status")
+def refresh_status(since: Optional[str] = Query(None,
+                   description="ISO timestamp of dispatch — only runs started >= this are considered ours")):
+    return gh_actions.pipeline_status(_ANALYSTS_WORKFLOW, since)
 
 @router.get("/{symbol}")
 def get_history(symbol: str):

@@ -155,11 +155,12 @@ def test_get_analyst_changes_returns_list(client):
     assert r.status_code == 200
     assert r.json()[0]['symbol'] == 'AZN.L'
 
-def test_refresh_endpoint_returns_started(client):
-    with patch('analysts._run_refresh') as mock_refresh:
+def test_refresh_endpoint_dispatches_workflow(client):
+    with patch('analysts.gh_actions.dispatch', return_value='2026-04-27T07:00:00Z') as mock_dispatch:
         r = client.post('/api/analysts/refresh')
     assert r.status_code == 200
-    assert r.json() == {'status': 'refresh started'}
+    assert r.json() == {'status': 'dispatched', 'dispatched_at': '2026-04-27T07:00:00Z'}
+    mock_dispatch.assert_called_once_with('refresh-analysts.yml')
 
 
 # ── Screener analyst integration ───────────────────────────────────────────────
