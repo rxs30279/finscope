@@ -1,9 +1,10 @@
 name: refresh-rns
 
 # RNS pipeline: investegate ingest → AI summaries → DeepSeek rank.
-# Cron is UTC + best-effort (5-15 min slip during peak load is normal);
-# refresh_rns.py has smart catch-up so missed slots self-heal up to ~2.5
-# trading days (investegate's listing retention).
+# Cron is UTC + best-effort (5-15 min slip during peak load is normal,
+# occasionally hours under heavy GitHub Actions load); refresh_rns.py
+# has smart catch-up so missed slots self-heal up to ~2.5 trading days
+# (investegate's listing retention).
 
 on:
   schedule:
