@@ -8,14 +8,17 @@ name: refresh-rns
 
 on:
   schedule:
-    # 06:00-09:45 UTC weekdays — covers the RNS drop window in both
+    # 06:00-09:45 UTC daily — covers the RNS drop window in both
     # BST (07:00-10:45 BST) and GMT (06:00-09:45 GMT).
-    - cron: '*/15 6-9 * * 1-5'
+    # Daily (not 1-5) because GitHub Actions silently drops weekday-only
+    # schedules added over a weekend; refresh_rns.py is a near no-op when
+    # there are no new announcements, so weekend runs are cheap.
+    - cron: '*/15 6-9 * * *'
     # 10:00 UTC tick — final slot of the GMT-season window.
-    - cron: '0 10 * * 1-5'
+    - cron: '0 10 * * *'
     # Afternoon catch-up: 16:00 + 17:00 UTC
     # (= 17:00/18:00 BST or 16:00/17:00 GMT).
-    - cron: '0 16,17 * * 1-5'
+    - cron: '0 16,17 * * *'
   workflow_dispatch:
 
 # Serialise overlapping firings. New runs queue (not cancel) so each

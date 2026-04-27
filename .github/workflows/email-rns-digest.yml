@@ -11,10 +11,13 @@ name: email-rns-digest
 
 on:
   schedule:
-    - cron: '55 5 * * 1-5'   # 05:55 UTC = 06:55 BST (summer)
-    - cron: '55 6 * * 1-5'   # 06:55 UTC = 06:55 GMT (winter)
-    - cron: '30 6 * * 1-5'   # 06:30 UTC = 07:30 BST (summer)
-    - cron: '30 7 * * 1-5'   # 07:30 UTC = 07:30 GMT (winter)
+    # Daily (not 1-5) because GitHub Actions silently drops weekday-only
+    # schedules added over a weekend. The Check UK time step short-circuits
+    # weekend firings so no email is sent Sat/Sun.
+    - cron: '55 5 * * *'   # 05:55 UTC = 06:55 BST (summer)
+    - cron: '55 6 * * *'   # 06:55 UTC = 06:55 GMT (winter)
+    - cron: '30 6 * * *'   # 06:30 UTC = 07:30 BST (summer)
+    - cron: '30 7 * * *'   # 07:30 UTC = 07:30 GMT (winter)
   workflow_dispatch:
 
 concurrency:
@@ -41,8 +44,14 @@ jobs:
         id: uk
         run: |
           uk_hm=$(TZ=Europe/London date +%H:%M)
-          echo "UK time is $uk_hm"
-          if [ "$uk_hm" = "06:55" ] || [ "$uk_hm" = "07:30" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          uk_dow=$(TZ=Europe/London date +%u)   # 1=Mon … 7=Sun
+          echo "UK time is $uk_hm (day $uk_dow)"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+          elif [ "$uk_dow" -gt 5 ]; then
+            echo "send=false" >> "$GITHUB_OUTPUT"
+            echo "Weekend in UK — skipping digest."
+          elif [ "$uk_hm" = "06:55" ] || [ "$uk_hm" = "07:30" ]; then
             echo "send=true" >> "$GITHUB_OUTPUT"
           else
             echo "send=false" >> "$GITHUB_OUTPUT"
