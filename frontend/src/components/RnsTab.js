@@ -122,7 +122,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const [rows, setRows]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [pipelineStage, setPipelineStage] = useState(null);   // 'ingest' | 'summaries' | 'rank' | null
+  const [pipelineStage, setPipelineStage] = useState(null);   // 'queueing' | 'queued' | 'in_progress' | null
   const [elapsed, setElapsed]   = useState(0);                // seconds since refresh start
   const [toast, setToast]       = useState(null);
   const [hours, setHours]       = useState(72);
@@ -145,12 +145,16 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const handleRefresh = async () => {
     setRefreshing(true);
     setElapsed(0);
-    setPipelineStage('ingest');
+    setPipelineStage('queueing');
     const startedAt = Date.now();
     const elapsedTimer = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 500);
 
+    let dispatchedAt;
     try {
-      await fetch(`${API}/rns/pipeline?rank_hours=${hours}`, { method: 'POST' });
+      const r = await fetch(`${API}/rns/pipeline`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      dispatchedAt = j.dispatched_at;
+      if (!r.ok) throw new Error(j.detail || 'dispatch failed');
     } catch {
       clearInterval(elapsedTimer);
       setRefreshing(false);
@@ -160,11 +164,13 @@ export default function RnsTab({ refreshKey, onSelect }) {
       return;
     }
 
-    // Poll pipeline status until it reports not running. Timeout at 3 min.
+    // Poll GitHub Actions run status. Timeout at 8 min — covers queue + setup
+    // (typically 30-90s) plus the pipeline run (2-5 min).
     const startedPollMs = Date.now();
     const poll = setInterval(async () => {
       try {
-        const s = await fetch(`${API}/rns/pipeline/status`).then(r => r.json());
+        const q = dispatchedAt ? `?since=${encodeURIComponent(dispatchedAt)}` : '';
+        const s = await fetch(`${API}/rns/pipeline/status${q}`).then(r => r.json());
         setPipelineStage(s.stage);
         if (!s.running) {
           clearInterval(poll);
@@ -172,24 +178,23 @@ export default function RnsTab({ refreshKey, onSelect }) {
           setRefreshing(false);
           setPipelineStage(null);
           setToast(`Refresh complete in ${Math.round((Date.now() - startedAt) / 1000)}s — reloading…`);
-          // reload the feed
           fetch(`${API}/rns/latest?min_score=${minScore}&hours=${hours}&limit=500`)
             .then(r => r.json())
             .then(d => setRows(Array.isArray(d) ? d : []))
             .catch(() => {});
           setTimeout(() => setToast(null), 4000);
-        } else if (Date.now() - startedPollMs > 180000) {
+        } else if (Date.now() - startedPollMs > 480000) {
           clearInterval(poll);
           clearInterval(elapsedTimer);
           setRefreshing(false);
           setPipelineStage(null);
-          setToast('Refresh timed out — check backend logs');
+          setToast('Refresh timed out — check GitHub Actions');
           setTimeout(() => setToast(null), 6000);
         }
       } catch {
         // transient poll failure — keep trying
       }
-    }, 2000);
+    }, 4000);
   };
 
   const filtered = useMemo(() => {
