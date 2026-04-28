@@ -14,10 +14,10 @@ on:
     # Daily (not 1-5) because GitHub Actions silently drops weekday-only
     # schedules added over a weekend. The Check UK time step short-circuits
     # weekend firings so no email is sent Sat/Sun.
-    - cron: '55 5 * * *'   # 05:55 UTC = 06:55 BST (summer)
-    - cron: '55 6 * * *'   # 06:55 UTC = 06:55 GMT (winter)
-    - cron: '30 6 * * *'   # 06:30 UTC = 07:30 BST (summer)
-    - cron: '30 7 * * *'   # 07:30 UTC = 07:30 GMT (winter)
+    - cron: "55 5 * * *" # 05:55 UTC = 06:55 BST (summer)
+    - cron: "55 6 * * *" # 06:55 UTC = 06:55 GMT (winter)
+    - cron: "30 6 * * *" # 06:30 UTC = 07:30 BST (summer)
+    - cron: "30 7 * * *" # 07:30 UTC = 07:30 GMT (winter)
   workflow_dispatch:
 
 concurrency:
@@ -32,30 +32,51 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      DB_HOST:        ${{ secrets.DB_HOST }}
-      DB_PORT:        ${{ secrets.DB_PORT }}
-      DB_NAME:        ${{ secrets.DB_NAME }}
-      DB_USER:        ${{ secrets.DB_USER }}
-      DB_PASSWORD:    ${{ secrets.DB_PASSWORD }}
+      DB_HOST: ${{ secrets.DB_HOST }}
+      DB_PORT: ${{ secrets.DB_PORT }}
+      DB_NAME: ${{ secrets.DB_NAME }}
+      DB_USER: ${{ secrets.DB_USER }}
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-      DIGEST_FROM:    "Alpha Move AI <digest@alphamoveai.co.uk>"
+      DIGEST_FROM: "Alpha Move AI <digest@alphamoveai.co.uk>"
     steps:
       - name: Check UK time
         id: uk
         run: |
-          uk_hm=$(TZ=Europe/London date +%H:%M)
-          uk_dow=$(TZ=Europe/London date +%u)   # 1=Mon … 7=Sun
-          echo "UK time is $uk_hm (day $uk_dow)"
+          SCHEDULE="${{ github.event.schedule }}"
+          OFFSET=$(TZ=Europe/London date +%z)
+          UK_DOW=$(TZ=Europe/London date +%u)
+
+          echo "Schedule: $SCHEDULE"
+          echo "UK offset: $OFFSET (day $UK_DOW)"
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "send=true" >> "$GITHUB_OUTPUT"
-          elif [ "$uk_dow" -gt 5 ]; then
+
+          elif [ "$UK_DOW" -gt 5 ]; then
             echo "send=false" >> "$GITHUB_OUTPUT"
             echo "Weekend in UK — skipping digest."
-          elif [ "$uk_hm" = "06:55" ] || [ "$uk_hm" = "07:30" ]; then
-            echo "send=true" >> "$GITHUB_OUTPUT"
+
           else
-            echo "send=false" >> "$GITHUB_OUTPUT"
-            echo "Not a configured send time (06:55 or 07:30 UK) — the other seasonal cron will handle this run."
+            SHOULD_SEND=false
+
+            if [ "$OFFSET" = "+0100" ]; then
+              # BST
+              if [ "$SCHEDULE" = "55 5 * * *" ] || [ "$SCHEDULE" = "30 6 * * *" ]; then
+                SHOULD_SEND=true
+              fi
+            else
+              # GMT
+              if [ "$SCHEDULE" = "55 6 * * *" ] || [ "$SCHEDULE" = "30 7 * * *" ]; then
+                SHOULD_SEND=true
+              fi
+            fi
+
+            echo "send=$SHOULD_SEND" >> "$GITHUB_OUTPUT"
+
+            if [ "$SHOULD_SEND" != "true" ]; then
+              echo "Seasonal duplicate cron — skipping."
+            fi
           fi
 
       - uses: actions/checkout@v4
@@ -64,7 +85,7 @@ jobs:
       - uses: actions/setup-python@v5
         if: steps.uk.outputs.send == 'true'
         with:
-          python-version: '3.11'
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
