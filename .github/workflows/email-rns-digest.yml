@@ -1,23 +1,9 @@
 name: email-rns-digest
 
-# Sends the RNS morning digest at 06:55 and 07:30 Europe/London, weekdays.
-# GitHub cron runs in UTC and never auto-shifts for BST/GMT, so we fire
-# at both candidate UTC times per slot and let a UK-time guard pick the
-# one that actually corresponds to a UK send time. Crons firing at the
-# wrong UK hour short-circuit the rest of the job.
-#
-# Read-only by design: this job does NOT trigger ingest or DeepSeek.
-# It just queries rows the refresh-rns workflow has already populated.
-
+# Runs frequently, but only sends at exact UK times (06:30 & 07:30)
 on:
   schedule:
-    # Daily (not 1-5) because GitHub Actions silently drops weekday-only
-    # schedules added over a weekend. The Check UK time step short-circuits
-    # weekend firings so no email is sent Sat/Sun.
-    - cron: "55 5 * * *" # 05:55 UTC = 06:55 BST (summer)
-    - cron: "55 6 * * *" # 06:55 UTC = 06:55 GMT (winter)
-    - cron: "30 6 * * *" # 06:30 UTC = 07:30 BST (summer)
-    - cron: "30 7 * * *" # 07:30 UTC = 07:30 GMT (winter)
+    - cron: "*/5 5-8 * * *"  # every 5 mins between 05:00–08:59 UTC
   workflow_dispatch:
 
 concurrency:
@@ -39,44 +25,30 @@ jobs:
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
       RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
       DIGEST_FROM: "Alpha Move AI <digest@alphamoveai.co.uk>"
+
     steps:
       - name: Check UK time
         id: uk
         run: |
-          SCHEDULE="${{ github.event.schedule }}"
-          OFFSET=$(TZ=Europe/London date +%z)
+          UK_TIME=$(TZ=Europe/London date +%H:%M)
           UK_DOW=$(TZ=Europe/London date +%u)
 
-          echo "Schedule: $SCHEDULE"
-          echo "UK offset: $OFFSET (day $UK_DOW)"
+          echo "UK time: $UK_TIME (day $UK_DOW)"
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "send=true" >> "$GITHUB_OUTPUT"
 
           elif [ "$UK_DOW" -gt 5 ]; then
             echo "send=false" >> "$GITHUB_OUTPUT"
-            echo "Weekend in UK — skipping digest."
+            echo "Weekend — skipping."
+
+          elif [ "$UK_TIME" = "06:30" ] || [ "$UK_TIME" = "07:30" ]; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+            echo "Matched send time."
 
           else
-            SHOULD_SEND=false
-
-            if [ "$OFFSET" = "+0100" ]; then
-              # BST
-              if [ "$SCHEDULE" = "55 5 * * *" ] || [ "$SCHEDULE" = "30 6 * * *" ]; then
-                SHOULD_SEND=true
-              fi
-            else
-              # GMT
-              if [ "$SCHEDULE" = "55 6 * * *" ] || [ "$SCHEDULE" = "30 7 * * *" ]; then
-                SHOULD_SEND=true
-              fi
-            fi
-
-            echo "send=$SHOULD_SEND" >> "$GITHUB_OUTPUT"
-
-            if [ "$SHOULD_SEND" != "true" ]; then
-              echo "Seasonal duplicate cron — skipping."
-            fi
+            echo "send=false" >> "$GITHUB_OUTPUT"
+            echo "Not a send time."
           fi
 
       - uses: actions/checkout@v4

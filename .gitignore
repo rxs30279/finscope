@@ -27,3 +27,15 @@ Thumbs.db
 
 # Crash dumps
 *.stackdump
+
+# Microsoft Office temporary files
+~$*
+*.tmp
+~*.docx
+~*.xlsx
+~*.pptx
+
+# Generated/exported documents (if you don't want to track them)
+*.docx
+*.pdf
+*.xlsx
