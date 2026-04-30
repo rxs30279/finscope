@@ -1,4 +1,6 @@
-import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sys, os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
@@ -13,13 +15,19 @@ from analysts import router as analysts_router
 from rns import router as rns_router
 from rns_llm import router as rns_llm_router
 from news import router as news_router
+from email_rns_digest import main as run_digest
 
 load_dotenv()
 
 app = FastAPI(title="Finance API")
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
-app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(market_router)
 app.include_router(prices_router)
 app.include_router(analysts_router)
@@ -33,16 +41,18 @@ DB_CONFIG = {
     "password": os.environ.get("DB_PASSWORD", ""),
     "host": os.environ.get("DB_HOST", ""),
     "port": os.environ.get("DB_PORT", "5432"),
-    "sslmode": "require"
+    "sslmode": "require",
 }
 
 _pool = None
+
 
 def get_pool():
     global _pool
     if _pool is None:
         _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **DB_CONFIG)
     return _pool
+
 
 def query(sql, params=None):
     pool = get_pool()
@@ -65,82 +75,117 @@ def query(sql, params=None):
     finally:
         pool.putconn(conn)
 
+
 @app.get("/api/search")
 def search(q: str = Query(..., min_length=1)):
-    return query("""
+    return query(
+        """
         SELECT symbol, name, sector, industry, exchange, country
         FROM company_metadata
         WHERE symbol ILIKE %s OR name ILIKE %s
         ORDER BY symbol LIMIT 20
-    """, (f"{q}%", f"%{q}%"))
+    """,
+        (f"{q}%", f"%{q}%"),
+    )
+
 
 @app.get("/api/company")
 def company(symbol: str = Query(...)):
     rows = query("SELECT * FROM company_metadata WHERE symbol = %s", (symbol,))
-    if not rows: raise HTTPException(404, "Not found")
+    if not rows:
+        raise HTTPException(404, "Not found")
     return rows[0]
+
 
 @app.get("/api/snapshot")
 def snapshot(symbol: str = Query(...)):
     rows = query("SELECT * FROM ttm_financials WHERE company_symbol = %s", (symbol,))
-    if not rows: raise HTTPException(404, "No data")
+    if not rows:
+        raise HTTPException(404, "No data")
     row = rows[0]
     # _attach_risk_score expects a 'symbol' key (screener convention)
-    row['symbol'] = symbol
+    row["symbol"] = symbol
     _attach_risk_score([row])
-    row.pop('symbol', None)
+    row.pop("symbol", None)
     return row
+
 
 @app.get("/api/annual")
 def annual(symbol: str = Query(...)):
-    return query("""
+    return query(
+        """
         SELECT * FROM annual_financials
         WHERE company_symbol = %s
         ORDER BY period_end_date ASC
-    """, (symbol,))
+    """,
+        (symbol,),
+    )
+
 
 @app.get("/api/quarterly")
 def quarterly(symbol: str = Query(...)):
-    return query("""
+    return query(
+        """
         SELECT * FROM quarterly_financials
         WHERE company_symbol = %s
         ORDER BY period_end_date ASC
         LIMIT 20
-    """, (symbol,))
+    """,
+        (symbol,),
+    )
+
 
 def _piotroski_score(row):
     """Compute Piotroski F-Score (0-9) from an annual_financials row pair."""
     score = 0
-    roa_cur   = row.get('roa_cur')
-    roa_prev  = row.get('roa_prev')
-    cfo       = row.get('cf_cfo')
-    ta_cur    = row.get('ta_cur') or 0
-    de_cur    = row.get('de_cur')
-    de_prev   = row.get('de_prev')
-    cr_cur    = row.get('cr_cur')
-    cr_prev   = row.get('cr_prev')
-    sh_cur    = row.get('sh_cur')
-    sh_prev   = row.get('sh_prev')
-    gm_cur    = row.get('gm_cur')
-    gm_prev   = row.get('gm_prev')
-    rev_cur   = row.get('rev_cur')
-    rev_prev  = row.get('rev_prev')
-    ta_prev   = row.get('ta_prev') or 0
+    roa_cur = row.get("roa_cur")
+    roa_prev = row.get("roa_prev")
+    cfo = row.get("cf_cfo")
+    ta_cur = row.get("ta_cur") or 0
+    de_cur = row.get("de_cur")
+    de_prev = row.get("de_prev")
+    cr_cur = row.get("cr_cur")
+    cr_prev = row.get("cr_prev")
+    sh_cur = row.get("sh_cur")
+    sh_prev = row.get("sh_prev")
+    gm_cur = row.get("gm_cur")
+    gm_prev = row.get("gm_prev")
+    rev_cur = row.get("rev_cur")
+    rev_prev = row.get("rev_prev")
+    ta_prev = row.get("ta_prev") or 0
 
     # Profitability
-    if roa_cur  is not None and roa_cur > 0:                              score += 1  # F1
-    if cfo      is not None and cfo > 0:                                  score += 1  # F2
-    if roa_cur  is not None and roa_prev is not None and roa_cur > roa_prev: score += 1  # F3
-    if cfo is not None and ta_cur > 0 and roa_cur is not None and (cfo / ta_cur) > roa_cur: score += 1  # F4 accruals
+    if roa_cur is not None and roa_cur > 0:
+        score += 1  # F1
+    if cfo is not None and cfo > 0:
+        score += 1  # F2
+    if roa_cur is not None and roa_prev is not None and roa_cur > roa_prev:
+        score += 1  # F3
+    if (
+        cfo is not None
+        and ta_cur > 0
+        and roa_cur is not None
+        and (cfo / ta_cur) > roa_cur
+    ):
+        score += 1  # F4 accruals
     # Leverage / liquidity
-    if de_cur   is not None and de_prev  is not None and de_cur < de_prev: score += 1  # F5
-    if cr_cur   is not None and cr_prev  is not None and cr_cur > cr_prev: score += 1  # F6
-    if sh_cur   is not None and sh_prev  is not None and sh_cur <= sh_prev: score += 1  # F7 no dilution
+    if de_cur is not None and de_prev is not None and de_cur < de_prev:
+        score += 1  # F5
+    if cr_cur is not None and cr_prev is not None and cr_cur > cr_prev:
+        score += 1  # F6
+    if sh_cur is not None and sh_prev is not None and sh_cur <= sh_prev:
+        score += 1  # F7 no dilution
     # Efficiency
-    if gm_cur   is not None and gm_prev  is not None and gm_cur > gm_prev: score += 1  # F8
-    if (rev_cur is not None and ta_cur > 0 and                                          # F9 asset turnover
-        rev_prev is not None and ta_prev > 0 and
-        rev_cur / ta_cur > rev_prev / ta_prev):                           score += 1
+    if gm_cur is not None and gm_prev is not None and gm_cur > gm_prev:
+        score += 1  # F8
+    if (
+        rev_cur is not None
+        and ta_cur > 0  # F9 asset turnover
+        and rev_prev is not None
+        and ta_prev > 0
+        and rev_cur / ta_cur > rev_prev / ta_prev
+    ):
+        score += 1
 
     return score
 
@@ -148,28 +193,43 @@ def _piotroski_score(row):
 def _quality_score(r):
     """Quality score 0-10: rewards high AND consistent returns/margins."""
     score = 0
-    roic   = r.get('roic');            roic_med = r.get('roic_median')
-    roe    = r.get('roe');             roe_med  = r.get('roe_median')
-    gm     = r.get('gross_margin');    gm_med   = r.get('gross_margin_median')
-    om     = r.get('operating_margin');om_med   = r.get('operating_margin_median')
-    fcfm   = r.get('fcf_margin')
-    nm     = r.get('net_income_margin');nm_med  = r.get('net_margin_median')
+    roic = r.get("roic")
+    roic_med = r.get("roic_median")
+    roe = r.get("roe")
+    roe_med = r.get("roe_median")
+    gm = r.get("gross_margin")
+    gm_med = r.get("gross_margin_median")
+    om = r.get("operating_margin")
+    om_med = r.get("operating_margin_median")
+    fcfm = r.get("fcf_margin")
+    nm = r.get("net_income_margin")
+    nm_med = r.get("net_margin_median")
 
     if roic is not None:
-        if roic > 0.10: score += 1
-        if roic_med is not None and roic >= roic_med: score += 1
+        if roic > 0.10:
+            score += 1
+        if roic_med is not None and roic >= roic_med:
+            score += 1
     if roe is not None:
-        if roe > 0.15: score += 1
-        if roe_med is not None and roe >= roe_med: score += 1
+        if roe > 0.15:
+            score += 1
+        if roe_med is not None and roe >= roe_med:
+            score += 1
     if gm is not None:
-        if gm > 0.30: score += 1
-        if gm_med is not None and gm >= gm_med: score += 1
+        if gm > 0.30:
+            score += 1
+        if gm_med is not None and gm >= gm_med:
+            score += 1
     if om is not None:
-        if om > 0.10: score += 1
-        if om_med is not None and om >= om_med: score += 1
+        if om > 0.10:
+            score += 1
+        if om_med is not None and om >= om_med:
+            score += 1
     if fcfm is not None:
-        if fcfm > 0.05: score += 1
-        if nm is not None and nm_med is not None and nm >= nm_med: score += 1
+        if fcfm > 0.05:
+            score += 1
+        if nm is not None and nm_med is not None and nm >= nm_med:
+            score += 1
 
     return score
 
@@ -188,10 +248,10 @@ def _altman_z(row, total_assets):
     if not total_assets or total_assets <= 0:
         return None
 
-    mc       = row.get('market_cap')
-    revenue  = row.get('revenue')
-    op_margin = row.get('operating_margin')
-    p2b      = row.get('price_to_book')
+    mc = row.get("market_cap")
+    revenue = row.get("revenue")
+    op_margin = row.get("operating_margin")
+    p2b = row.get("price_to_book")
 
     z = 0.0
     computed_terms = 0
@@ -293,29 +353,30 @@ def _attach_pegy(results):
     Yield derived from dividends_per_share / period_end_price (same vintage as P/E).
     Returns None when inputs are missing or the denominator is too small to be meaningful.
     """
+
     def _f(x):
         return float(x) if x is not None else None
 
     for r in results:
-        r['pegy'] = None
-        pe = _f(r.get('price_to_earnings'))
+        r["pegy"] = None
+        pe = _f(r.get("price_to_earnings"))
         if pe is None or pe <= 0:
             continue
 
-        fwd = _f(r.get('eps_growth_next_yr'))
-        total = r.get('total_analysts') or 0
-        growth = fwd if (fwd is not None and total >= 3) else _f(r.get('eps_cagr_10'))
+        fwd = _f(r.get("eps_growth_next_yr"))
+        total = r.get("total_analysts") or 0
+        growth = fwd if (fwd is not None and total >= 3) else _f(r.get("eps_cagr_10"))
         if growth is None:
             continue
 
-        dps = _f(r.get('dividends_per_share')) or 0.0
-        price = _f(r.get('period_end_price')) or 0.0
+        dps = _f(r.get("dividends_per_share")) or 0.0
+        price = _f(r.get("period_end_price")) or 0.0
         yld = (dps / price) if price > 0 else 0.0
 
         denom_pct = (growth + yld) * 100
         if denom_pct < 2:
             continue
-        r['pegy'] = round(pe / denom_pct, 2)
+        r["pegy"] = round(pe / denom_pct, 2)
     return results
 
 
@@ -323,8 +384,9 @@ def _attach_piotroski(results):
     """Add piotroski_score to each screener result row."""
     if not results:
         return results
-    symbols = [r['symbol'] for r in results]
-    rows = query("""
+    symbols = [r["symbol"] for r in results]
+    rows = query(
+        """
         WITH ranked AS (
             SELECT *,
                    ROW_NUMBER() OVER (PARTITION BY company_symbol ORDER BY period_end_date DESC) AS rn
@@ -345,11 +407,13 @@ def _attach_piotroski(results):
         LEFT JOIN ranked prv
                ON prv.company_symbol = cur.company_symbol AND prv.rn = 2
         WHERE cur.rn = 1
-    """, (symbols,))
+    """,
+        (symbols,),
+    )
 
-    scores = {r['company_symbol']: _piotroski_score(r) for r in rows}
+    scores = {r["company_symbol"]: _piotroski_score(r) for r in rows}
     for r in results:
-        r['piotroski_score'] = scores.get(r['symbol'])
+        r["piotroski_score"] = scores.get(r["symbol"])
     return results
 
 
@@ -362,10 +426,11 @@ def _attach_risk_score(results):
     if not results:
         return results
 
-    symbols = [r['symbol'] for r in results]
+    symbols = [r["symbol"] for r in results]
 
     # 1. Fetch most recent total_assets per symbol from annual_financials
-    ta_rows = query("""
+    ta_rows = query(
+        """
         WITH ranked AS (
             SELECT company_symbol, total_assets,
                    ROW_NUMBER() OVER (PARTITION BY company_symbol ORDER BY period_end_date DESC) AS rn
@@ -373,12 +438,15 @@ def _attach_risk_score(results):
             WHERE company_symbol = ANY(%s)
         )
         SELECT company_symbol, total_assets FROM ranked WHERE rn = 1
-    """, (symbols,))
-    total_assets_map = {r['company_symbol']: r['total_assets'] for r in ta_rows}
+    """,
+        (symbols,),
+    )
+    total_assets_map = {r["company_symbol"]: r["total_assets"] for r in ta_rows}
 
     # 2. Fetch up to 252 most recent closes per symbol, oldest-first for log-return ordering
     #    rn=1 is the latest date; ORDER BY rn DESC puts oldest (largest rn) first.
-    price_rows = query("""
+    price_rows = query(
+        """
         WITH numbered AS (
             SELECT symbol, close,
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
@@ -389,68 +457,87 @@ def _attach_risk_score(results):
         FROM numbered
         WHERE rn <= 252
         ORDER BY symbol, rn DESC
-    """, (symbols,))
+    """,
+        (symbols,),
+    )
 
     # Group closes by symbol (list is already oldest-first within each symbol)
     closes_map = {}
     for r in price_rows:
-        closes_map.setdefault(r['symbol'], []).append(float(r['close']))
+        closes_map.setdefault(r["symbol"], []).append(float(r["close"]))
 
     # 3. Compute and attach scores
     for r in results:
-        sym = r['symbol']
-        ta  = total_assets_map.get(sym)
+        sym = r["symbol"]
+        ta = total_assets_map.get(sym)
 
-        z                = _altman_z(r, ta)
+        z = _altman_z(r, ta)
         altman_component = _z_to_risk(z)
 
         closes = closes_map.get(sym, [])
-        vol    = _annualised_vol(closes) if len(closes) >= 63 else None
+        vol = _annualised_vol(closes) if len(closes) >= 63 else None
         vol_component = _vol_to_score(vol)
 
-        r['risk_score']            = _blend_risk(altman_component, vol_component)
-        r['altman_z']              = z
-        r['volatility_annualised'] = round(vol * 100, 1) if vol is not None else None
+        r["risk_score"] = _blend_risk(altman_component, vol_component)
+        r["altman_z"] = z
+        r["volatility_annualised"] = round(vol * 100, 1) if vol is not None else None
 
     return results
 
 
 @app.get("/api/screener")
 def screener(
-    sector: Optional[str]=None,
-    exclude_sectors: Optional[str]=None,
-    country: Optional[str]=None,
-    ftse_index: Optional[str]=None,
-    min_market_cap: Optional[float]=None,
-    max_pe: Optional[float]=None,
-    min_roe: Optional[float]=None,
-    min_revenue_growth: Optional[float]=None,
-    consensus: Optional[str]=None,
-    min_upside_pct: Optional[float]=None,
-    limit: int=100
+    sector: Optional[str] = None,
+    exclude_sectors: Optional[str] = None,
+    country: Optional[str] = None,
+    ftse_index: Optional[str] = None,
+    min_market_cap: Optional[float] = None,
+    max_pe: Optional[float] = None,
+    min_roe: Optional[float] = None,
+    min_revenue_growth: Optional[float] = None,
+    consensus: Optional[str] = None,
+    min_upside_pct: Optional[float] = None,
+    limit: int = 100,
 ):
     wheres = ["1=1"]
     params = []
-    if sector: wheres.append("m.sector = %s"); params.append(sector)
+    if sector:
+        wheres.append("m.sector = %s")
+        params.append(sector)
     if exclude_sectors:
         excluded = [s.strip() for s in exclude_sectors.split(",") if s.strip()]
         if excluded:
             wheres.append("m.sector <> ALL(%s)")
             params.append(excluded)
-    if country: wheres.append("m.country = %s"); params.append(country)
+    if country:
+        wheres.append("m.country = %s")
+        params.append(country)
     if ftse_index:
-        if ftse_index == 'FTSE 350':
+        if ftse_index == "FTSE 350":
             wheres.append("m.ftse_index IN ('FTSE 100', 'FTSE 250')")
-        elif ftse_index == 'FTSE All-Share':
+        elif ftse_index == "FTSE All-Share":
             wheres.append("m.ftse_index IN ('FTSE 100', 'FTSE 250', 'FTSE SmallCap')")
         else:
-            wheres.append("m.ftse_index = %s"); params.append(ftse_index)
-    if min_market_cap: wheres.append("t.market_cap >= %s"); params.append(min_market_cap)
-    if max_pe: wheres.append("t.price_to_earnings <= %s AND t.price_to_earnings > 0"); params.append(max_pe)
-    if min_roe: wheres.append("t.roe >= %s"); params.append(min_roe)
-    if min_revenue_growth: wheres.append("t.revenue_growth >= %s"); params.append(min_revenue_growth)
-    if consensus:      wheres.append("a.consensus = %s");    params.append(consensus)
-    if min_upside_pct: wheres.append("a.upside_pct >= %s");  params.append(min_upside_pct)
+            wheres.append("m.ftse_index = %s")
+            params.append(ftse_index)
+    if min_market_cap:
+        wheres.append("t.market_cap >= %s")
+        params.append(min_market_cap)
+    if max_pe:
+        wheres.append("t.price_to_earnings <= %s AND t.price_to_earnings > 0")
+        params.append(max_pe)
+    if min_roe:
+        wheres.append("t.roe >= %s")
+        params.append(min_roe)
+    if min_revenue_growth:
+        wheres.append("t.revenue_growth >= %s")
+        params.append(min_revenue_growth)
+    if consensus:
+        wheres.append("a.consensus = %s")
+        params.append(consensus)
+    if min_upside_pct:
+        wheres.append("a.upside_pct >= %s")
+        params.append(min_upside_pct)
     params.append(limit)
     sql = f"""
         SELECT m.symbol, m.name, m.sector, m.country, m.exchange, m.ftse_index, m.financial_currency,
@@ -487,14 +574,16 @@ def screener(
     """
     results = query(sql, params)
     for r in results:
-        r['quality_score'] = _quality_score(r)
+        r["quality_score"] = _quality_score(r)
     _attach_pegy(results)
     _attach_momentum(results)
     _attach_piotroski(results)
     return _attach_risk_score(results)
 
+
 _quote_cache: dict = {}
 _QUOTE_TTL = 60  # seconds
+
 
 @app.get("/api/quotes")
 def quotes(symbols: str):
@@ -544,11 +633,40 @@ def quotes(symbols: str):
 
     return out
 
+
 @app.get("/api/filters")
 def filters():
-    sectors  = query("SELECT DISTINCT sector FROM company_metadata WHERE sector IS NOT NULL ORDER BY sector")
-    countries = query("SELECT DISTINCT country FROM company_metadata WHERE country IS NOT NULL ORDER BY country")
+    sectors = query(
+        "SELECT DISTINCT sector FROM company_metadata WHERE sector IS NOT NULL ORDER BY sector"
+    )
+    countries = query(
+        "SELECT DISTINCT country FROM company_metadata WHERE country IS NOT NULL ORDER BY country"
+    )
     return {
-        "sectors":  [r["sector"] for r in sectors],
+        "sectors": [r["sector"] for r in sectors],
         "countries": [r["country"] for r in countries],
     }
+
+
+# ── Cron-job.org digest endpoint ──────────────────────────────────────────────
+
+_DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
+
+
+@app.get("/api/digest")
+def digest(token: str = Query(...)):
+    """HTTP endpoint for cron-job.org to trigger the RNS email digest.
+
+    Called by cron-job.org Mon–Fri at 06:30 and 07:30 UK time.
+    Requires ?token=<DIGEST_CRON_TOKEN> for basic auth.
+    """
+    if not _DIGEST_TOKEN:
+        return {"ok": False, "error": "DIGEST_CRON_TOKEN not configured"}
+    if token != _DIGEST_TOKEN:
+        raise HTTPException(403, "Invalid token")
+
+    exit_code = run_digest()
+    if exit_code == 0:
+        return {"ok": True, "message": "Digest sent"}
+    else:
+        return {"ok": False, "error": f"Digest failed with exit code {exit_code}"}
