@@ -201,7 +201,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
         const data = Array.isArray(d) ? d : [];
         setRows(data);
         setLoading(false);
-        // After initial render, fetch market caps for rows missing them
+        // After initial render, try to fill in market caps for rows that
+        // don't have one in the DB. The backend returns {} if no Yahoo
+        // Finance API key is configured — the column shows "—" in that case.
         fetch(`${API}/rns/market-caps?min_score=${minScore}&hours=${hours}`)
           .then((r) => r.json())
           .then((mcMap) => {

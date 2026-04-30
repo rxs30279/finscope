@@ -1178,71 +1178,17 @@ def get_market_caps(
     hours: int = Query(72, ge=1, le=168),
     min_score: int = Query(0, ge=0, le=100),
 ):
-    """Fetch market caps from yfinance for rows that don't have one yet.
+    """Fetch market caps for rows that don't have one in the DB yet.
 
     Returns a dict of {ticker_or_symbol: market_cap} for rows in the given
     window that are missing market_cap. The frontend calls this after the
     initial page load to fill in the column without blocking the main query.
+
+    Currently returns {} — market caps come from the DB (ttm_financials) or
+    are filled client-side. Yahoo Finance lookups were removed because they
+    caused timeouts on the server.
     """
-    rows = _query(
-        """
-        SELECT r.id, r.ticker, r.symbol
-        FROM rns_announcements r
-        LEFT JOIN ttm_financials f ON f.company_symbol = r.symbol
-        WHERE r.published_at >= NOW() - (%s || ' hours')::interval
-          AND r.score >= %s
-          AND f.market_cap IS NULL
-        ORDER BY r.published_at DESC
-    """,
-        (str(hours), min_score),
-    )
-
-    if not rows:
-        return {}
-
-    import yfinance as yf
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    # Collect unique candidates: resolved symbols first, then ticker.L
-    candidates = set()
-    for r in rows:
-        if r.get("symbol"):
-            candidates.add(r["symbol"])
-        elif r.get("ticker"):
-            t = r["ticker"].rstrip(".")
-            candidates.add(f"{t}.L")
-
-    mc_map = {}
-
-    def _fetch_mc(sym):
-        try:
-            t = yf.Ticker(sym)
-            info = t.fast_info
-            mc = getattr(info, "market_cap", None)
-            return sym, mc
-        except Exception:
-            return sym, None
-
-    with ThreadPoolExecutor(max_workers=min(12, len(candidates))) as ex:
-        for fut in as_completed([ex.submit(_fetch_mc, s) for s in candidates]):
-            sym, mc = fut.result()
-            if mc is not None:
-                mc_map[sym] = mc
-
-    # Map back to ticker/symbol keys the frontend can use
-    result = {}
-    for r in rows:
-        key = r["symbol"] or r["ticker"]
-        if key and key not in result:
-            if r.get("symbol") and r["symbol"] in mc_map:
-                result[key] = mc_map[r["symbol"]]
-            elif r.get("ticker"):
-                t = r["ticker"].rstrip(".")
-                sym = f"{t}.L"
-                if sym in mc_map:
-                    result[key] = mc_map[sym]
-
-    return result
+    return {}
 
 
 @router.get("/pipeline/status")

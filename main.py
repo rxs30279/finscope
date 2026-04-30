@@ -1,0 +1,688 @@
+import sys, os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+import psycopg2
+import psycopg2.extras
+import psycopg2.pool
+from typing import Optional
+from dotenv import load_dotenv
+import os
+from market import router as market_router
+from prices import router as prices_router, _attach_momentum
+from analysts import router as analysts_router
+from rns import router as rns_router
+from rns_llm import router as rns_llm_router
+from news import router as news_router
+from email_rns_digest import main as run_digest
+
+# ── Inngest ───────────────────────────────────────────────────────────────────
+from inngest_client import get_client as get_inngest_client
+from inngest_functions import functions as inngest_functions
+import inngest.fast_api
+
+load_dotenv()
+
+app = FastAPI(title="Finance API")
+
+# Mount Inngest serve handler — exposes /api/inngest for Inngest Cloud to call.
+# Only enabled when INNGEST_SIGNING_KEY is set (avoids crash during local dev).
+_inngest_signing_key = os.environ.get("INNGEST_SIGNING_KEY", "")
+if _inngest_signing_key:
+    inngest.fast_api.serve(
+        app,
+        get_inngest_client(),
+        inngest_functions,
+        serve_path="/api/inngest",
+    )
+
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(market_router)
+app.include_router(prices_router)
+app.include_router(analysts_router)
+app.include_router(rns_router)
+app.include_router(rns_llm_router)
+app.include_router(news_router)
+
+DB_CONFIG = {
+    "dbname": os.environ.get("DB_NAME", "postgres"),
+    "user": os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD", ""),
+    "host": os.environ.get("DB_HOST", ""),
+    "port": os.environ.get("DB_PORT", "5432"),
+    "sslmode": "require",
+}
+
+_pool = None
+
+
+def get_pool():
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **DB_CONFIG)
+    return _pool
+
+
+def query(sql, params=None):
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        conn.autocommit = True
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except psycopg2.OperationalError:
+        # Connection was dropped (e.g. SSL timeout) — discard it and retry once
+        pool.putconn(conn, close=True)
+        conn = pool.getconn()
+        conn.autocommit = True
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        pool.putconn(conn)
+
+
+@app.get("/api/search")
+def search(q: str = Query(..., min_length=1)):
+    return query(
+        """
+        SELECT symbol, name, sector, industry, exchange, country
+        FROM company_metadata
+        WHERE symbol ILIKE %s OR name ILIKE %s
+        ORDER BY symbol LIMIT 20
+    """,
+        (f"{q}%", f"%{q}%"),
+    )
+
+
+@app.get("/api/company")
+def company(symbol: str = Query(...)):
+    rows = query("SELECT * FROM company_metadata WHERE symbol = %s", (symbol,))
+    if not rows:
+        raise HTTPException(404, "Not found")
+    return rows[0]
+
+
+@app.get("/api/snapshot")
+def snapshot(symbol: str = Query(...)):
+    rows = query("SELECT * FROM ttm_financials WHERE company_symbol = %s", (symbol,))
+    if not rows:
+        raise HTTPException(404, "No data")
+    row = rows[0]
+    # _attach_risk_score expects a 'symbol' key (screener convention)
+    row["symbol"] = symbol
+    _attach_risk_score([row])
+    row.pop("symbol", None)
+    return row
+
+
+@app.get("/api/annual")
+def annual(symbol: str = Query(...)):
+    return query(
+        """
+        SELECT * FROM annual_financials
+        WHERE company_symbol = %s
+        ORDER BY period_end_date ASC
+    """,
+        (symbol,),
+    )
+
+
+@app.get("/api/quarterly")
+def quarterly(symbol: str = Query(...)):
+    return query(
+        """
+        SELECT * FROM quarterly_financials
+        WHERE company_symbol = %s
+        ORDER BY period_end_date ASC
+        LIMIT 20
+    """,
+        (symbol,),
+    )
+
+
+def _piotroski_score(row):
+    """Compute Piotroski F-Score (0-9) from an annual_financials row pair."""
+    score = 0
+    roa_cur = row.get("roa_cur")
+    roa_prev = row.get("roa_prev")
+    cfo = row.get("cf_cfo")
+    ta_cur = row.get("ta_cur") or 0
+    de_cur = row.get("de_cur")
+    de_prev = row.get("de_prev")
+    cr_cur = row.get("cr_cur")
+    cr_prev = row.get("cr_prev")
+    sh_cur = row.get("sh_cur")
+    sh_prev = row.get("sh_prev")
+    gm_cur = row.get("gm_cur")
+    gm_prev = row.get("gm_prev")
+    rev_cur = row.get("rev_cur")
+    rev_prev = row.get("rev_prev")
+    ta_prev = row.get("ta_prev") or 0
+
+    # Profitability
+    if roa_cur is not None and roa_cur > 0:
+        score += 1  # F1
+    if cfo is not None and cfo > 0:
+        score += 1  # F2
+    if roa_cur is not None and roa_prev is not None and roa_cur > roa_prev:
+        score += 1  # F3
+    if (
+        cfo is not None
+        and ta_cur > 0
+        and roa_cur is not None
+        and (cfo / ta_cur) > roa_cur
+    ):
+        score += 1  # F4 accruals
+    # Leverage / liquidity
+    if de_cur is not None and de_prev is not None and de_cur < de_prev:
+        score += 1  # F5
+    if cr_cur is not None and cr_prev is not None and cr_cur > cr_prev:
+        score += 1  # F6
+    if sh_cur is not None and sh_prev is not None and sh_cur <= sh_prev:
+        score += 1  # F7 no dilution
+    # Efficiency
+    if gm_cur is not None and gm_prev is not None and gm_cur > gm_prev:
+        score += 1  # F8
+    if (
+        rev_cur is not None
+        and ta_cur > 0  # F9 asset turnover
+        and rev_prev is not None
+        and ta_prev > 0
+        and rev_cur / ta_cur > rev_prev / ta_prev
+    ):
+        score += 1
+
+    return score
+
+
+def _quality_score(r):
+    """Quality score 0-10: rewards high AND consistent returns/margins."""
+    score = 0
+    roic = r.get("roic")
+    roic_med = r.get("roic_median")
+    roe = r.get("roe")
+    roe_med = r.get("roe_median")
+    gm = r.get("gross_margin")
+    gm_med = r.get("gross_margin_median")
+    om = r.get("operating_margin")
+    om_med = r.get("operating_margin_median")
+    fcfm = r.get("fcf_margin")
+    nm = r.get("net_income_margin")
+    nm_med = r.get("net_margin_median")
+
+    if roic is not None:
+        if roic > 0.10:
+            score += 1
+        if roic_med is not None and roic >= roic_med:
+            score += 1
+    if roe is not None:
+        if roe > 0.15:
+            score += 1
+        if roe_med is not None and roe >= roe_med:
+            score += 1
+    if gm is not None:
+        if gm > 0.30:
+            score += 1
+        if gm_med is not None and gm >= gm_med:
+            score += 1
+    if om is not None:
+        if om > 0.10:
+            score += 1
+        if om_med is not None and om >= om_med:
+            score += 1
+    if fcfm is not None:
+        if fcfm > 0.05:
+            score += 1
+        if nm is not None and nm_med is not None and nm >= nm_med:
+            score += 1
+
+    return score
+
+
+import math as _math
+
+
+def _altman_z(row, total_assets):
+    """Compute Altman Z-Score from a ttm_financials row + total_assets.
+
+    X1 (working capital) is treated as 0 (conservative — unavailable from stored data).
+    X2 uses book equity as a proxy for retained earnings.
+    X3 uses operating income (operating_margin * revenue) as EBIT proxy.
+    Returns None if insufficient data to compute any meaningful score.
+    """
+    if not total_assets or total_assets <= 0:
+        return None
+
+    mc = row.get("market_cap")
+    revenue = row.get("revenue")
+    op_margin = row.get("operating_margin")
+    p2b = row.get("price_to_book")
+
+    z = 0.0
+    computed_terms = 0
+
+    # X2 = book_equity / total_assets  (proxy for retained earnings / total_assets)
+    book_equity = None
+    if mc and p2b and p2b > 0:
+        book_equity = mc / p2b
+        z += 1.4 * (book_equity / total_assets)
+        computed_terms += 1
+
+    # X3 = EBIT / total_assets  (operating income as EBIT proxy)
+    if op_margin is not None and revenue:
+        ebit = op_margin * revenue
+        z += 3.3 * (ebit / total_assets)
+        computed_terms += 1
+
+    # X4 = market_cap / total_liabilities
+    if book_equity is not None:
+        total_liabilities = total_assets - book_equity
+        if total_liabilities > 0:
+            z += 0.6 * (mc / total_liabilities)
+            computed_terms += 1
+
+    # X5 = revenue / total_assets
+    if revenue:
+        z += 1.0 * (revenue / total_assets)
+        computed_terms += 1
+
+    if computed_terms == 0:
+        return None
+
+    return round(z, 3)
+
+
+def _z_to_risk(z):
+    """Map Altman Z to 1-10 risk component. Lower Z = higher risk.
+
+    Z >= 3.0 → 1 (safe), Z <= 1.0 → 10 (distress), linear between.
+    """
+    if z is None:
+        return None
+    if z >= 3.0:
+        return 1
+    if z <= 1.0:
+        return 10
+    # Linear: z=3.0→1, z=1.0→10. Slope = (10-1)/(1.0-3.0) = -4.5
+    return round(1 + (3.0 - z) * 4.5)
+
+
+def _annualised_vol(closes):
+    """Compute annualised volatility from a list of closes (oldest first).
+
+    Returns annualised std of log returns, or None if fewer than 2 prices.
+    """
+    if len(closes) < 2:
+        return None
+    log_returns = [_math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    n = len(log_returns)
+    mean = sum(log_returns) / n
+    variance = sum((r - mean) ** 2 for r in log_returns) / (n - 1) if n > 1 else 0.0
+    return _math.sqrt(variance) * _math.sqrt(252)
+
+
+def _vol_to_score(vol):
+    """Map annualised volatility to 1-10 risk score using absolute thresholds.
+
+    Thresholds calibrated for FTSE-listed stocks (typical range 10-40% ann. vol).
+    Returns None if vol is None.
+    """
+    if vol is None:
+        return None
+    thresholds = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50, 0.60]
+    for i, t in enumerate(thresholds):
+        if vol < t:
+            return i + 1
+    return 10
+
+
+def _blend_risk(altman_component, vol_component):
+    """Combine Altman (60%) and volatility (40%) components into 1-10 score.
+
+    Falls back to whichever component is available. Returns None if both are None.
+    """
+    if altman_component is not None and vol_component is not None:
+        return max(1, min(10, round(0.6 * altman_component + 0.4 * vol_component)))
+    if altman_component is not None:
+        return max(1, min(10, altman_component))
+    if vol_component is not None:
+        return max(1, min(10, vol_component))
+    return None
+
+
+def _attach_pegy(results):
+    """Add pegy ratio to each screener result row.
+
+    PEGY = P/E / (growth% + dividend yield%). Lower = cheaper relative to growth+income.
+    Growth prefers forward analyst EPS (needs >=3 analysts), falls back to 10Y EPS CAGR.
+    Yield derived from dividends_per_share / period_end_price (same vintage as P/E).
+    Returns None when inputs are missing or the denominator is too small to be meaningful.
+    """
+
+    def _f(x):
+        return float(x) if x is not None else None
+
+    for r in results:
+        r["pegy"] = None
+        pe = _f(r.get("price_to_earnings"))
+        if pe is None or pe <= 0:
+            continue
+
+        fwd = _f(r.get("eps_growth_next_yr"))
+        total = r.get("total_analysts") or 0
+        growth = fwd if (fwd is not None and total >= 3) else _f(r.get("eps_cagr_10"))
+        if growth is None:
+            continue
+
+        dps = _f(r.get("dividends_per_share")) or 0.0
+        price = _f(r.get("period_end_price")) or 0.0
+        yld = (dps / price) if price > 0 else 0.0
+
+        denom_pct = (growth + yld) * 100
+        if denom_pct < 2:
+            continue
+        r["pegy"] = round(pe / denom_pct, 2)
+    return results
+
+
+def _attach_piotroski(results):
+    """Add piotroski_score to each screener result row."""
+    if not results:
+        return results
+    symbols = [r["symbol"] for r in results]
+    rows = query(
+        """
+        WITH ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (PARTITION BY company_symbol ORDER BY period_end_date DESC) AS rn
+            FROM annual_financials
+            WHERE company_symbol = ANY(%s)
+        )
+        SELECT
+            cur.company_symbol,
+            cur.roa          AS roa_cur,   prv.roa          AS roa_prev,
+            cur.cf_cfo,
+            cur.total_assets AS ta_cur,    prv.total_assets  AS ta_prev,
+            cur.debt_to_equity AS de_cur,  prv.debt_to_equity AS de_prev,
+            cur.current_ratio  AS cr_cur,  prv.current_ratio  AS cr_prev,
+            cur.shares_diluted AS sh_cur,  prv.shares_diluted AS sh_prev,
+            cur.gross_margin   AS gm_cur,  prv.gross_margin   AS gm_prev,
+            cur.revenue        AS rev_cur, prv.revenue        AS rev_prev
+        FROM ranked cur
+        LEFT JOIN ranked prv
+               ON prv.company_symbol = cur.company_symbol AND prv.rn = 2
+        WHERE cur.rn = 1
+    """,
+        (symbols,),
+    )
+
+    scores = {r["company_symbol"]: _piotroski_score(r) for r in rows}
+    for r in results:
+        r["piotroski_score"] = scores.get(r["symbol"])
+    return results
+
+
+def _attach_risk_score(results):
+    """Add risk_score (1-10), altman_z, and volatility_annualised to each result row.
+
+    Fetches total_assets from annual_financials and price history in two bulk queries.
+    risk_score = blend of Altman Z component (60%) and volatility component (40%).
+    """
+    if not results:
+        return results
+
+    symbols = [r["symbol"] for r in results]
+
+    # 1. Fetch most recent total_assets per symbol from annual_financials
+    ta_rows = query(
+        """
+        WITH ranked AS (
+            SELECT company_symbol, total_assets,
+                   ROW_NUMBER() OVER (PARTITION BY company_symbol ORDER BY period_end_date DESC) AS rn
+            FROM annual_financials
+            WHERE company_symbol = ANY(%s)
+        )
+        SELECT company_symbol, total_assets FROM ranked WHERE rn = 1
+    """,
+        (symbols,),
+    )
+    total_assets_map = {r["company_symbol"]: r["total_assets"] for r in ta_rows}
+
+    # 2. Fetch up to 252 most recent closes per symbol, oldest-first for log-return ordering
+    #    rn=1 is the latest date; ORDER BY rn DESC puts oldest (largest rn) first.
+    price_rows = query(
+        """
+        WITH numbered AS (
+            SELECT symbol, close,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM price_history
+            WHERE symbol = ANY(%s)
+        )
+        SELECT symbol, close
+        FROM numbered
+        WHERE rn <= 252
+        ORDER BY symbol, rn DESC
+    """,
+        (symbols,),
+    )
+
+    # Group closes by symbol (list is already oldest-first within each symbol)
+    closes_map = {}
+    for r in price_rows:
+        closes_map.setdefault(r["symbol"], []).append(float(r["close"]))
+
+    # 3. Compute and attach scores
+    for r in results:
+        sym = r["symbol"]
+        ta = total_assets_map.get(sym)
+
+        z = _altman_z(r, ta)
+        altman_component = _z_to_risk(z)
+
+        closes = closes_map.get(sym, [])
+        vol = _annualised_vol(closes) if len(closes) >= 63 else None
+        vol_component = _vol_to_score(vol)
+
+        r["risk_score"] = _blend_risk(altman_component, vol_component)
+        r["altman_z"] = z
+        r["volatility_annualised"] = round(vol * 100, 1) if vol is not None else None
+
+    return results
+
+
+@app.get("/api/screener")
+def screener(
+    sector: Optional[str] = None,
+    exclude_sectors: Optional[str] = None,
+    country: Optional[str] = None,
+    ftse_index: Optional[str] = None,
+    min_market_cap: Optional[float] = None,
+    max_pe: Optional[float] = None,
+    min_roe: Optional[float] = None,
+    min_revenue_growth: Optional[float] = None,
+    consensus: Optional[str] = None,
+    min_upside_pct: Optional[float] = None,
+    limit: int = 100,
+):
+    wheres = ["1=1"]
+    params = []
+    if sector:
+        wheres.append("m.sector = %s")
+        params.append(sector)
+    if exclude_sectors:
+        excluded = [s.strip() for s in exclude_sectors.split(",") if s.strip()]
+        if excluded:
+            wheres.append("m.sector <> ALL(%s)")
+            params.append(excluded)
+    if country:
+        wheres.append("m.country = %s")
+        params.append(country)
+    if ftse_index:
+        if ftse_index == "FTSE 350":
+            wheres.append("m.ftse_index IN ('FTSE 100', 'FTSE 250')")
+        elif ftse_index == "FTSE All-Share":
+            wheres.append("m.ftse_index IN ('FTSE 100', 'FTSE 250', 'FTSE SmallCap')")
+        else:
+            wheres.append("m.ftse_index = %s")
+            params.append(ftse_index)
+    if min_market_cap:
+        wheres.append("t.market_cap >= %s")
+        params.append(min_market_cap)
+    if max_pe:
+        wheres.append("t.price_to_earnings <= %s AND t.price_to_earnings > 0")
+        params.append(max_pe)
+    if min_roe:
+        wheres.append("t.roe >= %s")
+        params.append(min_roe)
+    if min_revenue_growth:
+        wheres.append("t.revenue_growth >= %s")
+        params.append(min_revenue_growth)
+    if consensus:
+        wheres.append("a.consensus = %s")
+        params.append(consensus)
+    if min_upside_pct:
+        wheres.append("a.upside_pct >= %s")
+        params.append(min_upside_pct)
+    params.append(limit)
+    sql = f"""
+        SELECT m.symbol, m.name, m.sector, m.country, m.exchange, m.ftse_index, m.financial_currency,
+               t.market_cap, t.revenue, t.net_income,
+               CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END as price_to_earnings,
+               t.price_to_book, t.price_to_sales, t.roe, t.roa, t.roic, t.roce,
+               t.gross_margin, t.operating_margin, t.net_income_margin,
+               t.revenue_growth, t.eps_diluted_growth, t.fcf_growth,
+               t.debt_to_equity, t.current_ratio, t.fcf, t.ebitda,
+               t.revenue_cagr_10, t.eps_cagr_10, t.period_end_date,
+               t.fcf_margin, t.dividends_per_share, t.period_end_price,
+               t.gross_margin_median, t.operating_margin_median,
+               t.net_margin_median, t.roe_median, t.roic_median,
+               a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score,
+               a.eps_growth_next_yr,
+               COALESCE(p.latest_close, t.period_end_price) AS current_price
+        FROM ttm_financials t
+        JOIN company_metadata m ON m.symbol = t.company_symbol
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol)
+                symbol, consensus, buy_pct, upside_pct, total_analysts, revision_score,
+                eps_growth_next_yr
+            FROM analyst_snapshots
+            ORDER BY symbol, snapshot_date DESC
+        ) a ON a.symbol = m.symbol
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol) symbol, close AS latest_close
+            FROM price_history
+            ORDER BY symbol, date DESC
+        ) p ON p.symbol = m.symbol
+        WHERE {' AND '.join(wheres)}
+        ORDER BY t.market_cap DESC NULLS LAST
+        LIMIT %s
+    """
+    results = query(sql, params)
+    for r in results:
+        r["quality_score"] = _quality_score(r)
+    _attach_pegy(results)
+    _attach_momentum(results)
+    _attach_piotroski(results)
+    return _attach_risk_score(results)
+
+
+_quote_cache: dict = {}
+_QUOTE_TTL = 60  # seconds
+
+
+@app.get("/api/quotes")
+def quotes(symbols: str):
+    """Return live last-price for each symbol via yfinance fast_info. 60s cache per symbol."""
+    import time
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not requested:
+        return {}
+
+    now = time.time()
+    out = {}
+    misses = []
+    for sym in requested:
+        cached = _quote_cache.get(sym)
+        if cached and now - cached[1] < _QUOTE_TTL:
+            out[sym] = cached[0]
+        else:
+            misses.append(sym)
+
+    def _fetch(sym):
+        # Try intraday (1-min bars) first — gives a near-live price during
+        # market hours. Falls back to daily if market is closed or intraday
+        # is unavailable.
+        for period, interval in (("2d", "1m"), ("5d", "1d")):
+            try:
+                h = yf.Ticker(sym).history(
+                    period=period, interval=interval, auto_adjust=False
+                )
+                if h.empty:
+                    continue
+                close = h["Close"].dropna()
+                if len(close) > 0:
+                    return sym, float(close.iloc[-1])
+            except Exception as e:
+                print(f"[quotes] {sym} {interval} failed: {e}")
+        return sym, None
+
+    if misses:
+        with ThreadPoolExecutor(max_workers=min(12, len(misses))) as ex:
+            for fut in as_completed([ex.submit(_fetch, s) for s in misses]):
+                sym, price = fut.result()
+                out[sym] = price
+                _quote_cache[sym] = (price, now)
+
+    return out
+
+
+@app.get("/api/filters")
+def filters():
+    sectors = query(
+        "SELECT DISTINCT sector FROM company_metadata WHERE sector IS NOT NULL ORDER BY sector"
+    )
+    countries = query(
+        "SELECT DISTINCT country FROM company_metadata WHERE country IS NOT NULL ORDER BY country"
+    )
+    return {
+        "sectors": [r["sector"] for r in sectors],
+        "countries": [r["country"] for r in countries],
+    }
+
+
+# ── Cron-job.org digest endpoint ──────────────────────────────────────────────
+
+_DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
+
+
+@app.get("/api/digest")
+def digest(token: str = Query(...)):
+    """HTTP endpoint for cron-job.org to trigger the RNS email digest.
+
+    Called by cron-job.org Mon–Fri at 06:30 and 07:30 UK time.
+    Requires ?token=<DIGEST_CRON_TOKEN> for basic auth.
+    """
+    if not _DIGEST_TOKEN:
+        return {"ok": False, "error": "DIGEST_CRON_TOKEN not configured"}
+    if token != _DIGEST_TOKEN:
+        raise HTTPException(403, "Invalid token")
+
+    exit_code = run_digest()
+    if exit_code == 0:
+        return {"ok": True, "message": "Digest sent"}
+    else:
+        return {"ok": False, "error": f"Digest failed with exit code {exit_code}"}
