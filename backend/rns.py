@@ -10,7 +10,10 @@ a <tr> with timestamp / wire / company / headline columns. The headline link
 URL carries both the ticker and the slug we classify on, which is more robust
 than parsing localisation-sensitive headline text.
 """
-import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import sys, os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import re
 import time
 import urllib.request
@@ -18,7 +21,6 @@ import urllib.error
 from datetime import datetime
 from typing import Optional
 
-import gh_actions
 from zoneinfo import ZoneInfo
 
 _UK_TZ = ZoneInfo("Europe/London")
@@ -38,12 +40,12 @@ router = APIRouter(prefix="/api/rns", tags=["rns"])
 # ── DB (own pool) ─────────────────────────────────────────────────────────────
 
 _DB_CONFIG = {
-    "dbname":   os.environ.get("DB_NAME", "postgres"),
-    "user":     os.environ.get("DB_USER", "postgres"),
+    "dbname": os.environ.get("DB_NAME", "postgres"),
+    "user": os.environ.get("DB_USER", "postgres"),
     "password": os.environ.get("DB_PASSWORD", ""),
-    "host":     os.environ.get("DB_HOST", ""),
-    "port":     os.environ.get("DB_PORT", "5432"),
-    "sslmode":  "require",
+    "host": os.environ.get("DB_HOST", ""),
+    "port": os.environ.get("DB_PORT", "5432"),
+    "sslmode": "require",
 }
 
 _pool = None
@@ -76,204 +78,575 @@ _CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
     # "Notice of …" pre-announcements must be caught first — they're just scheduling,
     # not the event itself. Listed above the Tier A results categories so the slug
     # "notice-of-interim-results" doesn't match interim_results.
-    ("notice_of_results", "C", ("notice-of-results", "notice-of-interim-results",
-                                 "notice-of-final-results", "notice-of-full-year-results",
-                                 "notice-of-half-year-results", "notice-of-annual-results",
-                                 "notice-of-preliminary-results", "notice-of-quarterly-results",
-                                 "notice-of-q1-results", "notice-of-q2-results",
-                                 "notice-of-q3-results", "notice-of-q4-results",
-                                 "notice of results", "notice of interim results",
-                                 "notice of final results")),
-
+    (
+        "notice_of_results",
+        "C",
+        (
+            "notice-of-results",
+            "notice-of-interim-results",
+            "notice-of-final-results",
+            "notice-of-full-year-results",
+            "notice-of-half-year-results",
+            "notice-of-annual-results",
+            "notice-of-preliminary-results",
+            "notice-of-quarterly-results",
+            "notice-of-q1-results",
+            "notice-of-q2-results",
+            "notice-of-q3-results",
+            "notice-of-q4-results",
+            "notice of results",
+            "notice of interim results",
+            "notice of final results",
+        ),
+    ),
     # Tier A — always surface
-    ("profit_warning",   "A", ("profit-warning", "profit warning")),
-    ("trading_update",   "A", ("trading-update", "trading-statement", "q1-trading", "q3-trading",
-                                "q1-business-update", "q2-business-update",
-                                "q3-business-update", "q4-business-update",
-                                "business-update",
-                                "trading statement", "q1 trading", "q3 trading")),
-    ("final_results",    "A", ("final-results", "annual-results", "full-year-results",
-                                "preliminary-results", "full year results", "annual results",
-                                "preliminary results")),
-    ("interim_results",  "A", ("interim-results", "half-year-results", "half-yearly-report",
-                                "interim report", "half year results", "half-yearly report")),
-    ("quarterly",        "A", ("q1-results", "q2-results", "q3-results", "q4-results",
-                                "first-quarter-results", "third-quarter-results",
-                                "quarterly-update")),
-    ("firm_offer",       "A", ("rule-2.7", "rule-2-7", "rule 2.7", "firm-offer")),
-    ("possible_offer",   "A", ("rule-2.4", "rule-2-4", "rule 2.4", "possible-offer",
-                                "possible offer")),
-    ("recommended_offer","A", ("recommended-offer", "recommended-cash-offer",
-                                "recommended offer")),
-    ("ma_update",        "B", ("update-re-", "update-on-offer", "offer-update",
-                                "update-re offer", "update on offer")),
-    ("fund_winddown",    "B", ("compulsory-redemption", "compulsory redemption",
-                                "managed-wind-down", "managed wind-down",
-                                "notice-of-wind-up", "notice of wind-up")),
-    ("strategic_review", "A", ("strategic-review", "formal-sale-process", "strategic review",
-                                "formal sale process")),
-    ("suspension",       "A", ("suspension-of-", "temporary-suspension",
-                                "suspension of listing", "suspension of trading")),
-    ("going_concern",    "A", ("going-concern", "going concern")),
-    ("liquidation",      "A", ("liquidation-announcement", "notice-of-liquidation",
-                                "administration", "going-into-administration",
-                                "liquidation announcement")),
-    ("delisting",        "A", ("cancellation-of-admission", "cancellation-of-listing",
-                                "notice-of-cancellation",
-                                "cancellation - ", "cancellation-")),
-    ("response_to",      "A", ("response-to-speculation", "response-to-press",
-                                "response-to-media", "response to speculation",
-                                "response to press")),
-
+    ("profit_warning", "A", ("profit-warning", "profit warning")),
+    (
+        "trading_update",
+        "A",
+        (
+            "trading-update",
+            "trading-statement",
+            "q1-trading",
+            "q3-trading",
+            "q1-business-update",
+            "q2-business-update",
+            "q3-business-update",
+            "q4-business-update",
+            "business-update",
+            "trading statement",
+            "q1 trading",
+            "q3 trading",
+        ),
+    ),
+    (
+        "final_results",
+        "A",
+        (
+            "final-results",
+            "annual-results",
+            "full-year-results",
+            "preliminary-results",
+            "full year results",
+            "annual results",
+            "preliminary results",
+        ),
+    ),
+    (
+        "interim_results",
+        "A",
+        (
+            "interim-results",
+            "half-year-results",
+            "half-yearly-report",
+            "interim report",
+            "half year results",
+            "half-yearly report",
+        ),
+    ),
+    (
+        "quarterly",
+        "A",
+        (
+            "q1-results",
+            "q2-results",
+            "q3-results",
+            "q4-results",
+            "first-quarter-results",
+            "third-quarter-results",
+            "quarterly-update",
+        ),
+    ),
+    ("firm_offer", "A", ("rule-2.7", "rule-2-7", "rule 2.7", "firm-offer")),
+    (
+        "possible_offer",
+        "A",
+        ("rule-2.4", "rule-2-4", "rule 2.4", "possible-offer", "possible offer"),
+    ),
+    (
+        "recommended_offer",
+        "A",
+        ("recommended-offer", "recommended-cash-offer", "recommended offer"),
+    ),
+    (
+        "ma_update",
+        "B",
+        (
+            "update-re-",
+            "update-on-offer",
+            "offer-update",
+            "update-re offer",
+            "update on offer",
+        ),
+    ),
+    (
+        "fund_winddown",
+        "B",
+        (
+            "compulsory-redemption",
+            "compulsory redemption",
+            "managed-wind-down",
+            "managed wind-down",
+            "notice-of-wind-up",
+            "notice of wind-up",
+        ),
+    ),
+    (
+        "strategic_review",
+        "A",
+        (
+            "strategic-review",
+            "formal-sale-process",
+            "strategic review",
+            "formal sale process",
+        ),
+    ),
+    (
+        "suspension",
+        "A",
+        (
+            "suspension-of-",
+            "temporary-suspension",
+            "suspension of listing",
+            "suspension of trading",
+        ),
+    ),
+    ("going_concern", "A", ("going-concern", "going concern")),
+    (
+        "liquidation",
+        "A",
+        (
+            "liquidation-announcement",
+            "notice-of-liquidation",
+            "administration",
+            "going-into-administration",
+            "liquidation announcement",
+        ),
+    ),
+    (
+        "delisting",
+        "A",
+        (
+            "cancellation-of-admission",
+            "cancellation-of-listing",
+            "notice-of-cancellation",
+            "cancellation - ",
+            "cancellation-",
+        ),
+    ),
+    (
+        "response_to",
+        "A",
+        (
+            "response-to-speculation",
+            "response-to-press",
+            "response-to-media",
+            "response to speculation",
+            "response to press",
+        ),
+    ),
     # Tier B — surface for larger caps
-    ("capital_markets",  "B", ("capital-markets-day", "investor-day", "capital markets day",
-                                "investor day")),
-    ("capital_raise",    "B", ("placing-", "-placing", "rights-issue", "open-offer",
-                                "subscription-and-", "-subscription", "fundraise", "fundraising",
-                                "result-of-retail-offer", "retail-offer",
-                                "debt-facility", "loan-facility", "stream-financing",
-                                "convertible-bond-issue", "senior-notes-issue",
-                                "placing and", "rights issue", "open offer", "placing &")),
-    ("acquisition",      "B", ("acquisition-of", "-acquisition", "acquires-", "-acquires",
-                                "proposed-acquisition", "acquisition of", "proposed acquisition")),
-    ("disposal",         "B", ("disposal-of", "-disposal", "sale-of-", "disposal of",
-                                "sale of")),
-    ("contract_win",     "B", ("contract-award", "contract-win", "-contract-", "framework-agreement",
-                                "mou-with", "partnership-agreement",
-                                "strategic-collaboration", "distribution-agreement",
-                                "contract award", "contract win", "framework agreement",
-                                "strategic collaboration")),
-    ("board_change",     "B", ("ceo-appointment", "chief-executive", "chairman-succession",
-                                "chair-appointment", "cfo-appointment", "director-appointment",
-                                "director-resignation", "board-change", "-resigns", "steps-down",
-                                "directorate-change", "change-in-board",
-                                "confirmation-of-new-cfo", "confirmation-of-new-ceo",
-                                "new-ceo", "new-cfo",
-                                "appointment-of-board-director", "appointment-of-technical-director",
-                                "board-role-change", "leadership-update",
-                                "change-in-appointment-of-representative-directors",
-                                "change-in-appointment-of",
-                                "change in appointment of",
-                                "ceo appointment", "chief executive", "board change", "steps down",
-                                "directorate change")),
-    ("drug_approval",    "B", ("fda-approval", "mhra-approval", "ce-mark-approval",
-                                "regulatory-approval", "fda approval", "mhra approval",
-                                "regulatory approval")),
-    ("clinical_trial",   "B", ("phase-i", "phase-ii", "phase-iii", "clinical-trial",
-                                "trial-results", "topline-results", "phase i", "phase ii",
-                                "phase iii", "clinical trial", "trial results")),
-    ("drill_results",    "B", ("drill-results", "exploration-results", "assay-results",
-                                "reserves-update", "resource-update", "drilling-update",
-                                "drill results", "exploration results")),
-    ("dividend_change",  "B", ("dividend-increase", "special-dividend", "dividend-cut",
-                                "dividend suspended", "dividend increase", "special dividend")),
-
-    ("update_statement", "B", ("update-statement", "trading-and-operational-update",
-                                "operational-update")),
-
+    (
+        "capital_markets",
+        "B",
+        ("capital-markets-day", "investor-day", "capital markets day", "investor day"),
+    ),
+    (
+        "capital_raise",
+        "B",
+        (
+            "placing-",
+            "-placing",
+            "rights-issue",
+            "open-offer",
+            "subscription-and-",
+            "-subscription",
+            "fundraise",
+            "fundraising",
+            "result-of-retail-offer",
+            "retail-offer",
+            "debt-facility",
+            "loan-facility",
+            "stream-financing",
+            "convertible-bond-issue",
+            "senior-notes-issue",
+            "placing and",
+            "rights issue",
+            "open offer",
+            "placing &",
+        ),
+    ),
+    (
+        "acquisition",
+        "B",
+        (
+            "acquisition-of",
+            "-acquisition",
+            "acquires-",
+            "-acquires",
+            "proposed-acquisition",
+            "acquisition of",
+            "proposed acquisition",
+        ),
+    ),
+    (
+        "disposal",
+        "B",
+        ("disposal-of", "-disposal", "sale-of-", "disposal of", "sale of"),
+    ),
+    (
+        "contract_win",
+        "B",
+        (
+            "contract-award",
+            "contract-win",
+            "-contract-",
+            "framework-agreement",
+            "mou-with",
+            "partnership-agreement",
+            "strategic-collaboration",
+            "distribution-agreement",
+            "contract award",
+            "contract win",
+            "framework agreement",
+            "strategic collaboration",
+        ),
+    ),
+    (
+        "board_change",
+        "B",
+        (
+            "ceo-appointment",
+            "chief-executive",
+            "chairman-succession",
+            "chair-appointment",
+            "cfo-appointment",
+            "director-appointment",
+            "director-resignation",
+            "board-change",
+            "-resigns",
+            "steps-down",
+            "directorate-change",
+            "change-in-board",
+            "confirmation-of-new-cfo",
+            "confirmation-of-new-ceo",
+            "new-ceo",
+            "new-cfo",
+            "appointment-of-board-director",
+            "appointment-of-technical-director",
+            "board-role-change",
+            "leadership-update",
+            "change-in-appointment-of-representative-directors",
+            "change-in-appointment-of",
+            "change in appointment of",
+            "ceo appointment",
+            "chief executive",
+            "board change",
+            "steps down",
+            "directorate change",
+        ),
+    ),
+    (
+        "drug_approval",
+        "B",
+        (
+            "fda-approval",
+            "mhra-approval",
+            "ce-mark-approval",
+            "regulatory-approval",
+            "fda approval",
+            "mhra approval",
+            "regulatory approval",
+        ),
+    ),
+    (
+        "clinical_trial",
+        "B",
+        (
+            "phase-i",
+            "phase-ii",
+            "phase-iii",
+            "clinical-trial",
+            "trial-results",
+            "topline-results",
+            "phase i",
+            "phase ii",
+            "phase iii",
+            "clinical trial",
+            "trial results",
+        ),
+    ),
+    (
+        "drill_results",
+        "B",
+        (
+            "drill-results",
+            "exploration-results",
+            "assay-results",
+            "reserves-update",
+            "resource-update",
+            "drilling-update",
+            "drill results",
+            "exploration results",
+        ),
+    ),
+    (
+        "dividend_change",
+        "B",
+        (
+            "dividend-increase",
+            "special-dividend",
+            "dividend-cut",
+            "dividend suspended",
+            "dividend increase",
+            "special dividend",
+        ),
+    ),
+    (
+        "update_statement",
+        "B",
+        ("update-statement", "trading-and-operational-update", "operational-update"),
+    ),
     # Tier C — routine noise
-    ("buyback",          "C", ("transaction-in-own-shares", "transactions-in-own-shares",
-                                "transaction-in-ow",  # covers truncated slugs ("...in-ow-")
-                                "share-buyback-programme", "share-buyback-program",
-                                "purchase-of-own-shares", "treasury-shares-issued",
-                                "ebt-share-purchase",
-                                "transaction in own shares")),
-    ("tvr",              "C", ("total-voting-rights", "-tvr", "voting rights and capital")),
-    ("holdings",         "C", ("holding-s-in-company",          # "(s)" becomes "-s-" in slugs
-                                "holding(s)-in-company",
-                                "holdings-in-company", "form-tr-1",
-                                "notification-of-major-holdings",
-                                "tr-major-holding-notification",
-                                "major-shareholding-notification",
-                                "form tr-1", "holding in company")),
-    ("disclosure_8",     "C", ("form-8.3", "form-8.5", "form-8-3", "form-8-5",
-                                "form-8-opd", "form-8-dd", "form-38-5", "form-38.5",
-                                "form 8.3", "form 8.5", "form 38.5")),
-    ("rule_2_9",         "C", ("rule-2-9", "rule 2.9", "rule-2.9",
-                                "acceptance-level-update")),  # offer period disclosures
-    ("director_pdmr",    "C", ("director-pdmr-shareholding", "director/pdmr-shareholding",
-                                "pdmr-shareholding", "pdmr-transaction-notification",
-                                "director-declaration",
-                                "director-dealing", "director-dealings",
-                                "reporting-of-transactions-made-by-persons",
-                                "pdmr shareholding", "director dealing")),
-    ("block_listing",    "C", ("block-listing", "block-admission", "block listing")),
-    ("agm_notice",       "C", ("notice-of-agm", "notice-of-gm",
-                                "annual-financial-report-and-notice",
-                                "notice-of-annual-general-meeting",
-                                "notice-of-annual-general",      # truncated slug
-                                "result-of-agm", "results-of-agm",
-                                "proceedings-of-postal-ballot",
-                                "shareholders-approve",
-                                "iss-voting-recommendation",
-                                "publishes-annual-report",
-                                "publication-of-the-annual-report",
-                                "publication-of-the-2025-annual-report",
-                                "publication-of-annual-report",
-                                "2025-annual-report",            # e.g. "2025-annual-report-*-di-"
-                                "annual-report-and-notice",
-                                "notice of agm", "annual financial report",
-                                "result of agm", "notice of annual general meeting")),
-    ("equity_issue",     "C", ("issue-of-equity", "admission-of-further-securities",
-                                "admission-of-further-shares", "admission-of-shares",
-                                "admission-to-trading",
-                                "grant-of-long-term-incentive", "grant-of-ltip",
-                                "grant-of-warrants", "grant-of-options",
-                                "grant-of-share-options", "ltip-grant",
-                                "long-term-incentive-plan-awards",
-                                "saye-option-plan",
-                                "share-incentive-plan",
-                                "purchase-of-shares-by-employee-benefit-trust",
-                                "issue-of-shares-on-conversion",
-                                "issue-of-awards-under-the-company-s-ltip",
-                                "application-for-quotation-of-securities",
-                                "cleansing-notice",
-                                "issue of equity", "admission of shares")),
-    ("dividend_routine", "C", ("dividend-declaration", "interim-dividend-declaration",
-                                "final-dividend-declaration",
-                                "dividend-payment-date",
-                                "interim-d-",                    # truncated "interim-dividend"
-                                "dividend declaration")),
-    ("final_terms",      "C", ("final-terms", "final terms",
-                                "notice-of-redemption", "notice of redemption",
-                                "early-redemption",
-                                "issuer-call-notice",
-                                "publication-of-a-supplementary-prospectus",
-                                "supplementary-prospectus")),
-    ("compliance",       "C", ("compliance-with-market-abuse", "aim-rule-17",
-                                "mar-disclosure", "market abuse regulation",
-                                "eqs-pvr-")),                    # German voting rights disclosures
-    ("fund_update",      "C", ("monthly-factsheet", "factsheet-commentary",
-                                "monthly-investor-report",
-                                "portfolio-update", "monthly factsheet")),
-    ("investor_event",   "C", ("investor-presentation-via-investor-meet-company",
-                                "investor-presentation",
-                                "investor-webinar", "investor-meet-company",
-                                "analyst-site-visit", "analyst-briefing",
-                                "quarterly-conference-call")),
-    ("nomad",            "C", ("appointment-of-nominated-adviser",
-                                "appointment-of-nominated-financial-adviser",
-                                "change-of-nominated-adviser",
-                                "appointment of nominated")),
-    ("nav",              "C", ("net-asset-value", "-nav-", "net asset value")),
+    (
+        "buyback",
+        "C",
+        (
+            "transaction-in-own-shares",
+            "transactions-in-own-shares",
+            "transaction-in-ow",  # covers truncated slugs ("...in-ow-")
+            "share-buyback-programme",
+            "share-buyback-program",
+            "purchase-of-own-shares",
+            "treasury-shares-issued",
+            "ebt-share-purchase",
+            "transaction in own shares",
+        ),
+    ),
+    ("tvr", "C", ("total-voting-rights", "-tvr", "voting rights and capital")),
+    (
+        "holdings",
+        "C",
+        (
+            "holding-s-in-company",  # "(s)" becomes "-s-" in slugs
+            "holding(s)-in-company",
+            "holdings-in-company",
+            "form-tr-1",
+            "notification-of-major-holdings",
+            "tr-major-holding-notification",
+            "major-shareholding-notification",
+            "form tr-1",
+            "holding in company",
+        ),
+    ),
+    (
+        "disclosure_8",
+        "C",
+        (
+            "form-8.3",
+            "form-8.5",
+            "form-8-3",
+            "form-8-5",
+            "form-8-opd",
+            "form-8-dd",
+            "form-38-5",
+            "form-38.5",
+            "form 8.3",
+            "form 8.5",
+            "form 38.5",
+        ),
+    ),
+    (
+        "rule_2_9",
+        "C",
+        ("rule-2-9", "rule 2.9", "rule-2.9", "acceptance-level-update"),
+    ),  # offer period disclosures
+    (
+        "director_pdmr",
+        "C",
+        (
+            "director-pdmr-shareholding",
+            "director/pdmr-shareholding",
+            "pdmr-shareholding",
+            "pdmr-transaction-notification",
+            "director-declaration",
+            "director-dealing",
+            "director-dealings",
+            "reporting-of-transactions-made-by-persons",
+            "pdmr shareholding",
+            "director dealing",
+        ),
+    ),
+    ("block_listing", "C", ("block-listing", "block-admission", "block listing")),
+    (
+        "agm_notice",
+        "C",
+        (
+            "notice-of-agm",
+            "notice-of-gm",
+            "annual-financial-report-and-notice",
+            "notice-of-annual-general-meeting",
+            "notice-of-annual-general",  # truncated slug
+            "result-of-agm",
+            "results-of-agm",
+            "proceedings-of-postal-ballot",
+            "shareholders-approve",
+            "iss-voting-recommendation",
+            "publishes-annual-report",
+            "publication-of-the-annual-report",
+            "publication-of-the-2025-annual-report",
+            "publication-of-annual-report",
+            "2025-annual-report",  # e.g. "2025-annual-report-*-di-"
+            "annual-report-and-notice",
+            "notice of agm",
+            "annual financial report",
+            "result of agm",
+            "notice of annual general meeting",
+        ),
+    ),
+    (
+        "equity_issue",
+        "C",
+        (
+            "issue-of-equity",
+            "admission-of-further-securities",
+            "admission-of-further-shares",
+            "admission-of-shares",
+            "admission-to-trading",
+            "grant-of-long-term-incentive",
+            "grant-of-ltip",
+            "grant-of-warrants",
+            "grant-of-options",
+            "grant-of-share-options",
+            "ltip-grant",
+            "long-term-incentive-plan-awards",
+            "saye-option-plan",
+            "share-incentive-plan",
+            "purchase-of-shares-by-employee-benefit-trust",
+            "issue-of-shares-on-conversion",
+            "issue-of-awards-under-the-company-s-ltip",
+            "application-for-quotation-of-securities",
+            "cleansing-notice",
+            "issue of equity",
+            "admission of shares",
+        ),
+    ),
+    (
+        "dividend_routine",
+        "C",
+        (
+            "dividend-declaration",
+            "interim-dividend-declaration",
+            "final-dividend-declaration",
+            "dividend-payment-date",
+            "interim-d-",  # truncated "interim-dividend"
+            "dividend declaration",
+        ),
+    ),
+    (
+        "final_terms",
+        "C",
+        (
+            "final-terms",
+            "final terms",
+            "notice-of-redemption",
+            "notice of redemption",
+            "early-redemption",
+            "issuer-call-notice",
+            "publication-of-a-supplementary-prospectus",
+            "supplementary-prospectus",
+        ),
+    ),
+    (
+        "compliance",
+        "C",
+        (
+            "compliance-with-market-abuse",
+            "aim-rule-17",
+            "mar-disclosure",
+            "market abuse regulation",
+            "eqs-pvr-",
+        ),
+    ),  # German voting rights disclosures
+    (
+        "fund_update",
+        "C",
+        (
+            "monthly-factsheet",
+            "factsheet-commentary",
+            "monthly-investor-report",
+            "portfolio-update",
+            "monthly factsheet",
+        ),
+    ),
+    (
+        "investor_event",
+        "C",
+        (
+            "investor-presentation-via-investor-meet-company",
+            "investor-presentation",
+            "investor-webinar",
+            "investor-meet-company",
+            "analyst-site-visit",
+            "analyst-briefing",
+            "quarterly-conference-call",
+        ),
+    ),
+    (
+        "nomad",
+        "C",
+        (
+            "appointment-of-nominated-adviser",
+            "appointment-of-nominated-financial-adviser",
+            "change-of-nominated-adviser",
+            "appointment of nominated",
+        ),
+    ),
+    ("nav", "C", ("net-asset-value", "-nav-", "net asset value")),
 ]
 
 # Keyword overlays (applied on lower-cased headline). Each hit adjusts the score.
 _NEGATIVE_KEYWORDS = (
-    "profit warning", "materially below", "below expectations", "below market",
-    "challenging", "weaker", "going concern", "covenant", "suspended",
-    "resigns", "resignation", "investigation", "cautious outlook",
-    "significantly below", "downgrade", "impairment", "write-down", "write down",
+    "profit warning",
+    "materially below",
+    "below expectations",
+    "below market",
+    "challenging",
+    "weaker",
+    "going concern",
+    "covenant",
+    "suspended",
+    "resigns",
+    "resignation",
+    "investigation",
+    "cautious outlook",
+    "significantly below",
+    "downgrade",
+    "impairment",
+    "write-down",
+    "write down",
     "under review",
 )
 _POSITIVE_KEYWORDS = (
-    "ahead of expectations", "ahead of market", "significantly ahead",
-    "upgraded guidance", "raised guidance", "raised outlook", "record",
-    "strong trading", "beat expectations", "materially ahead", "ahead of consensus",
+    "ahead of expectations",
+    "ahead of market",
+    "significantly ahead",
+    "upgraded guidance",
+    "raised guidance",
+    "raised outlook",
+    "record",
+    "strong trading",
+    "beat expectations",
+    "materially ahead",
+    "ahead of consensus",
 )
 _CATALYTIC_KEYWORDS = (
-    "recommended offer", "possible offer", "in discussions", "strategic review",
-    "formal sale process", "firm offer",
+    "recommended offer",
+    "possible offer",
+    "in discussions",
+    "strategic review",
+    "formal sale process",
+    "firm offer",
 )
 
 
@@ -283,7 +656,7 @@ def _classify(headline: str, slug: str) -> dict:
     Pure function: no DB, no network. Takes headline text and URL slug.
     Returns dict with keys: tier, category, keyword_hits, score.
     """
-    hay_slug    = (slug or "").lower()
+    hay_slug = (slug or "").lower()
     hay_headline = (headline or "").lower()
 
     # Category match — slug first (more reliable), fall back to headline text
@@ -300,9 +673,12 @@ def _classify(headline: str, slug: str) -> dict:
     neg_hits = sum(1 for k in _NEGATIVE_KEYWORDS if k in hay_headline)
     pos_hits = sum(1 for k in _POSITIVE_KEYWORDS if k in hay_headline)
     cat_hits = sum(1 for k in _CATALYTIC_KEYWORDS if k in hay_headline)
-    if neg_hits: hits.append(f"neg:{neg_hits}")
-    if pos_hits: hits.append(f"pos:{pos_hits}")
-    if cat_hits: hits.append(f"cat:{cat_hits}")
+    if neg_hits:
+        hits.append(f"neg:{neg_hits}")
+    if pos_hits:
+        hits.append(f"pos:{pos_hits}")
+    if cat_hits:
+        hits.append(f"cat:{cat_hits}")
 
     # Score: tier base + capped overlay contribution
     base = {"A": 60, "B": 40, "C": 10}[tier]
@@ -326,9 +702,7 @@ _USER_AGENT = (
 _BASE_URL = "https://www.investegate.co.uk"
 
 # Investegate URL: /announcement/{wire}/{company-slug}--{ticker}/{headline-slug}/{id}
-_ANN_URL_RE = re.compile(
-    r"/announcement/([^/]+)/[^/]+--([^/]+)/([^/]+)/(\d+)"
-)
+_ANN_URL_RE = re.compile(r"/announcement/([^/]+)/[^/]+--([^/]+)/([^/]+)/(\d+)")
 
 
 def _fetch_page(page: int = 1, timeout: int = 20) -> str:
@@ -413,16 +787,18 @@ def _parse_rows(html: str) -> list[dict]:
         if ticker is None and url_ticker:
             ticker = url_ticker.upper()
 
-        rows.append({
-            "id":            int(ann_id),
-            "published_at":  published_at,
-            "wire":          wire,
-            "ticker":        ticker,
-            "company_name":  company_name,
-            "headline":      headline,
-            "headline_slug": slug.lower(),
-            "url":           url,
-        })
+        rows.append(
+            {
+                "id": int(ann_id),
+                "published_at": published_at,
+                "wire": wire,
+                "ticker": ticker,
+                "company_name": company_name,
+                "headline": headline,
+                "headline_slug": slug.lower(),
+                "url": url,
+            }
+        )
     return rows
 
 
@@ -455,13 +831,15 @@ def _resolve_symbol(ticker: Optional[str]) -> Optional[str]:
 
 # ── DB write ──────────────────────────────────────────────────────────────────
 
+
 def _upsert(row: dict) -> bool:
     """Upsert one classified announcement. Returns True if newly inserted."""
     pool = _get_pool()
     conn = pool.getconn()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO rns_announcements (
                 id, published_at, wire, ticker, symbol, company_name,
                 headline, headline_slug, url, tier, category, keyword_hits, score
@@ -478,7 +856,9 @@ def _upsert(row: dict) -> bool:
                 symbol       = EXCLUDED.symbol,
                 fetched_at   = NOW()
             RETURNING (xmax = 0) AS inserted
-        """, row)
+        """,
+            row,
+        )
         (inserted,) = cur.fetchone()
         conn.commit()
         return bool(inserted)
@@ -491,16 +871,17 @@ def _upsert(row: dict) -> bool:
 
 # ── Ingest orchestration ──────────────────────────────────────────────────────
 
+
 def _build_row(raw: dict) -> dict:
     """Combine parsed row + classifier + symbol resolution into a DB-ready dict."""
     cls = _classify(raw["headline"], raw["headline_slug"])
     return {
         **raw,
-        "symbol":       _resolve_symbol(raw.get("ticker")),
-        "tier":         cls["tier"],
-        "category":     cls["category"],
+        "symbol": _resolve_symbol(raw.get("ticker")),
+        "tier": cls["tier"],
+        "category": cls["category"],
         "keyword_hits": cls["keyword_hits"],
-        "score":        cls["score"],
+        "score": cls["score"],
     }
 
 
@@ -517,7 +898,7 @@ def _prune_old(days: int = 14) -> dict:
         cur = conn.cursor()
         cur.execute(
             "DELETE FROM rns_announcements WHERE published_at < NOW() - (%s || ' days')::interval",
-            (str(days),)
+            (str(days),),
         )
         deleted = cur.rowcount
         return {"deleted": deleted, "older_than_days": days}
@@ -525,8 +906,9 @@ def _prune_old(days: int = 14) -> dict:
         pool.putconn(conn)
 
 
-def _run_ingest(max_pages: int = 7, stop_on_known: bool = True,
-                sleep_s: float = 2.0) -> dict:
+def _run_ingest(
+    max_pages: int = 7, stop_on_known: bool = True, sleep_s: float = 2.0
+) -> dict:
     """Fetch up to max_pages of the feed, classify, and upsert.
 
     If stop_on_known is True, stops early once a whole page produced no new rows.
@@ -564,15 +946,16 @@ def _run_ingest(max_pages: int = 7, stop_on_known: bool = True,
             time.sleep(sleep_s)
     result = {
         "processed": processed,
-        "inserted":  inserted,
-        "updated":   updated,
-        "errors":    errors,
+        "inserted": inserted,
+        "updated": updated,
+        "errors": errors,
     }
     print(f"[rns] ingest done — {result}")
     return result
 
 
 # ── Summary scraper (investegate AI summary) ──────────────────────────────────
+
 
 def _fetch_summary(url: str, timeout: int = 15) -> Optional[str]:
     """Fetch one announcement page and extract the #collapseSummary text.
@@ -598,11 +981,14 @@ def _update_summary(ann_id: int, summary: Optional[str]) -> None:
     conn = pool.getconn()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE rns_announcements
             SET summary = %s, summary_fetched_at = NOW()
             WHERE id = %s
-        """, (summary, ann_id))
+        """,
+            (summary, ann_id),
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -611,20 +997,24 @@ def _update_summary(ann_id: int, summary: Optional[str]) -> None:
         pool.putconn(conn)
 
 
-def _backfill_summaries(limit: int = 50, sleep_s: float = 1.5,
-                        tiers: tuple = ("A", "B")) -> dict:
+def _backfill_summaries(
+    limit: int = 50, sleep_s: float = 1.5, tiers: tuple = ("A", "B")
+) -> dict:
     """Fetch investegate AI summaries for recent tier A/B rows that lack one.
 
     Rate-limited by sleep_s between fetches. Feeds the LLM ranker with context.
     """
-    rows = _query("""
+    rows = _query(
+        """
         SELECT id, url
         FROM rns_announcements
         WHERE summary_fetched_at IS NULL
           AND tier = ANY(%s)
         ORDER BY published_at DESC
         LIMIT %s
-    """, (list(tiers), limit))
+    """,
+        (list(tiers), limit),
+    )
 
     fetched = with_summary = missing = errors = 0
     for r in rows:
@@ -641,17 +1031,18 @@ def _backfill_summaries(limit: int = 50, sleep_s: float = 1.5,
             errors += 1
         time.sleep(sleep_s)
     result = {
-        "candidates":   len(rows),
-        "fetched":      fetched,
+        "candidates": len(rows),
+        "fetched": fetched,
         "with_summary": with_summary,
-        "missing":      missing,
-        "errors":       errors,
+        "missing": missing,
+        "errors": errors,
     }
     print(f"[rns] summary backfill done — {result}")
     return result
 
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
+
 
 @router.get("/latest")
 def get_latest(
@@ -660,7 +1051,8 @@ def get_latest(
     limit: int = Query(200, ge=1, le=1000),
 ):
     """Recent announcements above min_score threshold, newest first."""
-    return _query("""
+    return _query(
+        """
         SELECT id, published_at, wire, ticker, symbol, company_name, headline,
                url, tier, category, keyword_hits, score,
                llm_score, llm_confidence, llm_thesis, llm_action, llm_risks,
@@ -670,76 +1062,94 @@ def get_latest(
           AND score >= %s
         ORDER BY published_at DESC
         LIMIT %s
-    """, (str(hours), min_score, limit))
+    """,
+        (str(hours), min_score, limit),
+    )
 
 
 @router.get("/significant")
 def get_significant(hours: int = Query(24, ge=1, le=168)):
     """Tier-A-only feed: the morning 'must-read' list."""
-    return _query("""
+    return _query(
+        """
         SELECT id, published_at, wire, ticker, symbol, company_name, headline,
                url, tier, category, keyword_hits, score
         FROM rns_announcements
         WHERE published_at >= NOW() - (%s || ' hours')::interval
           AND tier = 'A'
         ORDER BY score DESC, published_at DESC
-    """, (str(hours),))
+    """,
+        (str(hours),),
+    )
 
 
 @router.get("/by-symbol/{symbol}")
 def get_by_symbol(symbol: str, limit: int = Query(50, ge=1, le=500)):
     """All announcements for one resolved symbol, newest first."""
-    rows = _query("""
+    rows = _query(
+        """
         SELECT id, published_at, wire, headline, url, tier, category, score
         FROM rns_announcements
         WHERE symbol = %s
         ORDER BY published_at DESC
         LIMIT %s
-    """, (symbol, limit))
+    """,
+        (symbol, limit),
+    )
     if not rows:
         raise HTTPException(404, "No announcements for this symbol")
     return rows
 
 
 @router.post("/refresh")
-def refresh(background_tasks: BackgroundTasks,
-            max_pages: int = Query(7, ge=1, le=20)):
+def refresh(background_tasks: BackgroundTasks, max_pages: int = Query(7, ge=1, le=20)):
     """Kick off an ingest in the background."""
     background_tasks.add_task(_run_ingest, max_pages)
     return {"status": "ingest started", "max_pages": max_pages}
 
 
 @router.post("/backfill-summaries")
-def backfill_summaries(background_tasks: BackgroundTasks,
-                       limit: int = Query(50, ge=1, le=500)):
+def backfill_summaries(
+    background_tasks: BackgroundTasks, limit: int = Query(50, ge=1, le=500)
+):
     """Fetch investegate AI summaries for recent tier-A/B rows that lack one."""
     background_tasks.add_task(_backfill_summaries, limit)
     return {"status": "summary backfill started", "limit": limit}
 
 
-# ── Pipeline trigger via GitHub Actions ──────────────────────────────────────
+# ── Pipeline trigger via Inngest ─────────────────────────────────────────────
 #
 # The full pipeline (multi-page scrape + DeepSeek calls) takes minutes and
-# can't run inside a Vercel serverless function. The refresh button dispatches
-# the same refresh-rns.yml workflow that runs on cron; the UI polls run state
-# back via the GitHub REST API. See gh_actions.py for the helpers.
+# can't run inside a Vercel serverless function. The refresh button sends an
+# Inngest event which triggers the same pipeline as the cron schedule.
+# The UI polls run state back via the Inngest API.
 
-_RNS_WORKFLOW = "refresh-rns.yml"
+import inngest
+from inngest_client import get_client as get_inngest_client
 
 
 @router.post("/pipeline")
-def pipeline():
+async def pipeline():
     try:
-        dispatched_at = gh_actions.dispatch(_RNS_WORKFLOW)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace") if getattr(e, "fp", None) else str(e)
-        raise HTTPException(status_code=502, detail=f"GitHub dispatch failed ({e.code}): {detail}")
+        client = get_inngest_client()
+        await client.send(inngest.Event(name="rns/pipeline.run", data={}))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"GitHub dispatch failed: {e}")
-    return {"status": "dispatched", "dispatched_at": dispatched_at}
+        raise HTTPException(status_code=502, detail=f"Inngest send failed: {e}")
+    return {"status": "dispatched", "via": "inngest"}
 
 
 @router.get("/pipeline/status")
-def pipeline_status(since: Optional[str] = Query(None,
-                    description="ISO timestamp of dispatch — only runs started >= this are considered ours")):
-    return gh_actions.pipeline_status(_RNS_WORKFLOW, since)
+def pipeline_status():
+    """Legacy status endpoint — Inngest handles observability natively.
+
+    Returns a simple acknowledgement. The UI should use the Inngest Cloud
+    dashboard or the Inngest API for detailed run status.
+    """
+    return {
+        "running": False,
+        "stage": None,
+        "started_at": None,
+        "finished_at": None,
+        "stages": {},
+        "note": "Use Inngest Cloud dashboard for run status",
+    }
