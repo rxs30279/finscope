@@ -1050,17 +1050,23 @@ def get_latest(
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(200, ge=1, le=1000),
 ):
-    """Recent announcements above min_score threshold, newest first."""
+    """Recent announcements above min_score threshold, newest first.
+
+    Includes market_cap from ttm_financials (DB) with a yfinance fallback for
+    companies that don't have financial data stored yet.
+    """
     return _query(
         """
-        SELECT id, published_at, wire, ticker, symbol, company_name, headline,
-               url, tier, category, keyword_hits, score,
-               llm_score, llm_confidence, llm_thesis, llm_action, llm_risks,
-               llm_model, llm_processed_at, fetched_at
-        FROM rns_announcements
-        WHERE published_at >= NOW() - (%s || ' hours')::interval
-          AND score >= %s
-        ORDER BY published_at DESC
+        SELECT r.id, r.published_at, r.wire, r.ticker, r.symbol, r.company_name,
+               r.headline, r.url, r.tier, r.category, r.keyword_hits, r.score,
+               r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_action, r.llm_risks,
+               r.llm_model, r.llm_processed_at, r.fetched_at,
+               f.market_cap
+        FROM rns_announcements r
+        LEFT JOIN ttm_financials f ON f.company_symbol = r.symbol
+        WHERE r.published_at >= NOW() - (%s || ' hours')::interval
+          AND r.score >= %s
+        ORDER BY r.published_at DESC
         LIMIT %s
     """,
         (str(hours), min_score, limit),
@@ -1124,18 +1130,119 @@ def backfill_summaries(
 # Inngest event which triggers the same pipeline as the cron schedule.
 # The UI polls run state back via the Inngest API.
 
-import inngest
-from inngest_client import get_client as get_inngest_client
-
 
 @router.post("/pipeline")
-async def pipeline():
-    try:
-        client = get_inngest_client()
-        await client.send(inngest.Event(name="rns/pipeline.run", data={}))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Inngest send failed: {e}")
-    return {"status": "dispatched", "via": "inngest"}
+async def pipeline(background_tasks: BackgroundTasks):
+    """Trigger the full RNS pipeline (ingest → summaries → rank).
+
+    When INNGEST_SIGNING_KEY is configured, dispatches an Inngest event so the
+    pipeline runs as a background function on Vercel. Otherwise falls back to
+    running synchronously in a background task (local dev / no Inngest keys).
+    """
+    import os
+
+    signing_key = os.environ.get("INNGEST_SIGNING_KEY", "")
+    if signing_key:
+        try:
+            import inngest
+            from inngest_client import get_client as get_inngest_client
+
+            client = get_inngest_client()
+            await client.send(inngest.Event(name="rns/pipeline.run", data={}))
+            return {"status": "dispatched", "via": "inngest"}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Inngest send failed: {e}")
+    else:
+        # Fallback: run pipeline directly in background (local dev)
+        from refresh_rns import _compute_max_pages
+        from rns_llm import _rank_pending
+
+        max_pages, reason = _compute_max_pages()
+        background_tasks.add_task(
+            _run_ingest, max_pages=max_pages, stop_on_known=True, sleep_s=1.5
+        )
+        background_tasks.add_task(
+            _backfill_summaries, limit=50, sleep_s=1.0, tiers=("A", "B")
+        )
+        background_tasks.add_task(_rank_pending, limit=50, tiers=("A", "B"), hours=48)
+        return {
+            "status": "started",
+            "via": "background_task",
+            "max_pages": max_pages,
+            "max_pages_reason": reason,
+        }
+
+
+@router.get("/market-caps")
+def get_market_caps(
+    hours: int = Query(72, ge=1, le=168),
+    min_score: int = Query(0, ge=0, le=100),
+):
+    """Fetch market caps from yfinance for rows that don't have one yet.
+
+    Returns a dict of {ticker_or_symbol: market_cap} for rows in the given
+    window that are missing market_cap. The frontend calls this after the
+    initial page load to fill in the column without blocking the main query.
+    """
+    rows = _query(
+        """
+        SELECT r.id, r.ticker, r.symbol
+        FROM rns_announcements r
+        LEFT JOIN ttm_financials f ON f.company_symbol = r.symbol
+        WHERE r.published_at >= NOW() - (%s || ' hours')::interval
+          AND r.score >= %s
+          AND f.market_cap IS NULL
+        ORDER BY r.published_at DESC
+    """,
+        (str(hours), min_score),
+    )
+
+    if not rows:
+        return {}
+
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # Collect unique candidates: resolved symbols first, then ticker.L
+    candidates = set()
+    for r in rows:
+        if r.get("symbol"):
+            candidates.add(r["symbol"])
+        elif r.get("ticker"):
+            t = r["ticker"].rstrip(".")
+            candidates.add(f"{t}.L")
+
+    mc_map = {}
+
+    def _fetch_mc(sym):
+        try:
+            t = yf.Ticker(sym)
+            info = t.fast_info
+            mc = getattr(info, "market_cap", None)
+            return sym, mc
+        except Exception:
+            return sym, None
+
+    with ThreadPoolExecutor(max_workers=min(12, len(candidates))) as ex:
+        for fut in as_completed([ex.submit(_fetch_mc, s) for s in candidates]):
+            sym, mc = fut.result()
+            if mc is not None:
+                mc_map[sym] = mc
+
+    # Map back to ticker/symbol keys the frontend can use
+    result = {}
+    for r in rows:
+        key = r["symbol"] or r["ticker"]
+        if key and key not in result:
+            if r.get("symbol") and r["symbol"] in mc_map:
+                result[key] = mc_map[r["symbol"]]
+            elif r.get("ticker"):
+                t = r["ticker"].rstrip(".")
+                sym = f"{t}.L"
+                if sym in mc_map:
+                    result[key] = mc_map[sym]
+
+    return result
 
 
 @router.get("/pipeline/status")

@@ -54,6 +54,16 @@ function fmtTime(iso) {
   });
 }
 
+function fmtCurrency(v) {
+  if (v == null) return "—";
+  const abs = Math.abs(v);
+  if (abs >= 1e12) return "£" + (v / 1e12).toFixed(2) + "T";
+  if (abs >= 1e9) return "£" + (v / 1e9).toFixed(1) + "B";
+  if (abs >= 1e6) return "£" + (v / 1e6).toFixed(0) + "M";
+  if (abs >= 1e3) return "£" + (v / 1e3).toFixed(0) + "K";
+  return "£" + v.toFixed(0);
+}
+
 function fmtAgo(iso) {
   if (!iso) return "never";
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -188,8 +198,25 @@ export default function RnsTab({ refreshKey, onSelect }) {
     fetch(`${API}/rns/latest?min_score=${minScore}&hours=${hours}&limit=500`)
       .then((r) => r.json())
       .then((d) => {
-        setRows(Array.isArray(d) ? d : []);
+        const data = Array.isArray(d) ? d : [];
+        setRows(data);
         setLoading(false);
+        // After initial render, fetch market caps for rows missing them
+        fetch(`${API}/rns/market-caps?min_score=${minScore}&hours=${hours}`)
+          .then((r) => r.json())
+          .then((mcMap) => {
+            if (Object.keys(mcMap).length === 0) return;
+            setRows((prev) =>
+              prev.map((r) => {
+                if (r.market_cap != null) return r;
+                const key = r.symbol || r.ticker;
+                return key && mcMap[key] != null
+                  ? { ...r, market_cap: mcMap[key] }
+                  : r;
+              }),
+            );
+          })
+          .catch(() => {});
       })
       .catch(() => setLoading(false));
   }, [refreshKey, hours, minScore]);
@@ -353,6 +380,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
       </td>
       <td style={S.td}>
         <TierBadge tier={r.tier} />
+      </td>
+      <td style={{ ...S.td, textAlign: "right", whiteSpace: "nowrap" }}>
+        {r.market_cap != null ? fmtCurrency(r.market_cap) : "—"}
       </td>
       <td style={{ ...S.td, fontWeight: 700, whiteSpace: "nowrap" }}>
         {r.ticker ? (
@@ -762,6 +792,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               <tr style={{ borderBottom: "1px solid #2a2a2a" }}>
                 <th style={S.th}>Time</th>
                 <th style={S.th}>Tier</th>
+                <th style={{ ...S.th, textAlign: "right" }}>Mkt Cap</th>
                 <th style={S.th}>Ticker</th>
                 <th style={S.th}>Company</th>
                 <th style={S.th}>Headline / AI Thesis</th>
@@ -775,7 +806,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               {filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     style={{
                       ...S.td,
                       color: "#444",
