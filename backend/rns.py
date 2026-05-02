@@ -1123,56 +1123,6 @@ def backfill_summaries(
     return {"status": "summary backfill started", "limit": limit}
 
 
-# ── Pipeline trigger via Inngest ─────────────────────────────────────────────
-#
-# The full pipeline (multi-page scrape + DeepSeek calls) takes minutes and
-# can't run inside a Vercel serverless function. The refresh button sends an
-# Inngest event which triggers the same pipeline as the cron schedule.
-# The UI polls run state back via the Inngest API.
-
-
-@router.post("/pipeline")
-async def pipeline(background_tasks: BackgroundTasks):
-    """Trigger the full RNS pipeline (ingest → summaries → rank).
-
-    When INNGEST_SIGNING_KEY is configured, dispatches an Inngest event so the
-    pipeline runs as a background function on Vercel. Otherwise falls back to
-    running synchronously in a background task (local dev / no Inngest keys).
-    """
-    import os
-
-    signing_key = os.environ.get("INNGEST_SIGNING_KEY", "")
-    if signing_key:
-        try:
-            import inngest
-            from inngest_client import get_client as get_inngest_client
-
-            client = get_inngest_client()
-            await client.send(inngest.Event(name="rns/pipeline.run", data={}))
-            return {"status": "dispatched", "via": "inngest"}
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Inngest send failed: {e}")
-    else:
-        # Fallback: run pipeline directly in background (local dev)
-        from refresh_rns import _compute_max_pages
-        from rns_llm import _rank_pending
-
-        max_pages, reason = _compute_max_pages()
-        background_tasks.add_task(
-            _run_ingest, max_pages=max_pages, stop_on_known=True, sleep_s=1.5
-        )
-        background_tasks.add_task(
-            _backfill_summaries, limit=50, sleep_s=1.0, tiers=("A", "B")
-        )
-        background_tasks.add_task(_rank_pending, limit=50, tiers=("A", "B"), hours=48)
-        return {
-            "status": "started",
-            "via": "background_task",
-            "max_pages": max_pages,
-            "max_pages_reason": reason,
-        }
-
-
 @router.get("/market-caps")
 def get_market_caps(
     hours: int = Query(72, ge=1, le=168),

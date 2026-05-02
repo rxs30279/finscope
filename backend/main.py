@@ -17,25 +17,9 @@ from rns_llm import router as rns_llm_router
 from news import router as news_router
 from email_rns_digest import main as run_digest
 
-# ── Inngest ───────────────────────────────────────────────────────────────────
-from inngest_client import get_client as get_inngest_client
-from inngest_functions import functions as inngest_functions
-import inngest.fast_api
-
 load_dotenv()
 
 app = FastAPI(title="Finance API")
-
-# Mount Inngest serve handler — exposes /api/inngest for Inngest Cloud to call.
-# Only enabled when INNGEST_SIGNING_KEY is set (avoids crash during local dev).
-_inngest_signing_key = os.environ.get("INNGEST_SIGNING_KEY", "")
-if _inngest_signing_key:
-    inngest.fast_api.serve(
-        app,
-        get_inngest_client(),
-        inngest_functions,
-        serve_path="/api/inngest",
-    )
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 app.add_middleware(

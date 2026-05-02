@@ -9,4 +9,3 @@ beautifulsoup4
 lxml
 curl_cffi
 openai
-inngest>=0.5.18
