@@ -6,8 +6,11 @@ import psycopg2.extras
 import psycopg2.pool
 import os
 import time
+import logging
 from datetime import date, timedelta
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -83,24 +86,31 @@ def _upsert_rows(rows):
 
 # ── Price fetch ───────────────────────────────────────────────────────────────
 
+_BATCH_SIZE = 25  # yfinance chokes on large batches — keep small
+_BATCH_SLEEP_S = 1.5  # delay between batches to avoid rate limiting
+_MAX_RETRIES = 2  # retry a failed batch once
 
-def _fetch_ohlcv(symbols, start_date):
-    """Fetch adjusted daily OHLCV for symbols from start_date to today.
+
+def _fetch_ohlcv_batch(symbols, start_date):
+    """Fetch adjusted daily OHLCV for a single batch of symbols.
     Returns list of (symbol, date, open, high, low, close, volume) tuples."""
-    end_date = (
-        date.today()
-    )  # yf.download end is exclusive — today's partial session is intentionally excluded
+    end_date = date.today()
     if not symbols:
         return []
 
-    df = yf.download(
-        tickers=symbols,
-        start=start_date.isoformat(),
-        end=end_date.isoformat(),
-        auto_adjust=True,
-        progress=False,
-    )
-    if df.empty:
+    try:
+        df = yf.download(
+            tickers=symbols,
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+            auto_adjust=True,
+            progress=False,
+        )
+    except Exception as e:
+        logger.warning("yf.download batch failed for %d symbols: %s", len(symbols), e)
+        return []
+
+    if df is None or df.empty:
         return []
 
     # yfinance returns MultiIndex columns for multiple tickers,
@@ -156,6 +166,54 @@ def _fetch_ohlcv(symbols, start_date):
                     )
                 )
     return rows
+
+
+def _fetch_ohlcv(symbols, start_date):
+    """Fetch adjusted daily OHLCV for symbols from start_date to today.
+    Splits into small batches with delays to avoid yfinance rate limiting.
+    Returns list of (symbol, date, open, high, low, close, volume) tuples."""
+    if not symbols:
+        return []
+
+    all_rows = []
+    total = len(symbols)
+    # Process in batches
+    for i in range(0, total, _BATCH_SIZE):
+        batch = symbols[i : i + _BATCH_SIZE]
+        logger.info(
+            "Fetching prices batch %d/%d (%d symbols, start=%s)",
+            i // _BATCH_SIZE + 1,
+            (total + _BATCH_SIZE - 1) // _BATCH_SIZE,
+            len(batch),
+            start_date,
+        )
+
+        # Try the batch with retries
+        rows = None
+        for attempt in range(_MAX_RETRIES):
+            if attempt > 0:
+                logger.info("Retry %d for batch starting at index %d", attempt + 1, i)
+                time.sleep(_BATCH_SLEEP_S * 2)  # longer wait before retry
+            rows = _fetch_ohlcv_batch(batch, start_date)
+            if rows:
+                break  # got data, no need to retry
+
+        if rows:
+            all_rows.extend(rows)
+        else:
+            logger.warning(
+                "No price data for batch %d/%d (%d symbols) after %d attempts",
+                i // _BATCH_SIZE + 1,
+                (total + _BATCH_SIZE - 1) // _BATCH_SIZE,
+                len(batch),
+                _MAX_RETRIES,
+            )
+
+        # Delay between batches (skip after last batch)
+        if i + _BATCH_SIZE < total:
+            time.sleep(_BATCH_SLEEP_S)
+
+    return all_rows
 
 
 # ── Momentum scoring ──────────────────────────────────────────────────────────
