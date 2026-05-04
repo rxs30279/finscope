@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/market", tags=["market"])
 _cache: dict = {}
 CACHE_TTL = 900  # 15 minutes
 
+
 def _cached(key: str, fn):
     now = time.time()
     if key in _cache and now - _cache[key][1] < CACHE_TTL:
@@ -21,65 +22,181 @@ def _cached(key: str, fn):
     _cache[key] = (data, now)
     return data
 
+
 # ── Ticker constants ───────────────────────────────────────────────────────────
 BENCHMARK_TICKERS = {
-    "FTSE 100":  "^FTSE",
-    "FTSE 250":  "^FTMC",
-    "All-Share":  "^FTAS",
+    "FTSE 100": "^FTSE",
+    "FTSE 250": "^FTMC",
+    "All-Share": "^FTAS",
 }
 
 # 2 representative stocks per ICB sector — basket average used as sector proxy
 SECTOR_TICKERS = {
-    "Energy":                 ["SHEL.L", "BP.L", "HBR.L"],
-    "Financials":             ["HSBA.L", "LLOY.L", "BARC.L", "NWG.L", "LSEG.L"],
-    "Industrials":            ["RR.L",   "BA.L",  "AHT.L",  "IAG.L"],
-    "Materials":              ["RIO.L",  "GLEN.L","AAL.L",  "ANTO.L","FRES.L"],
-    "Consumer Discretionary": ["CPG.L",  "NXT.L", "IHG.L",  "GAW.L", "KGF.L"],
-    "Consumer Staples":       ["BATS.L", "ULVR.L","RKT.L",  "TSCO.L","DGE.L", "IMB.L"],
-    "Health Care":            ["AZN.L",  "GSK.L", "HLN.L",  "SN.L",  "HIK.L"],
-    "Technology":             ["REL.L",  "HLMA.L","SGE.L",  "AUTO.L","RMV.L"],
-    "Telecommunications":     ["VOD.L",  "BT-A.L","AAF.L"],
-    "Utilities":              ["NG.L",   "SSE.L", "CNA.L",  "SVT.L", "UU.L"],
-    "Real Estate":            ["LAND.L", "SGRO.L", "BLND.L", "BBOX.L", "PCTN.L", "GPE.L"],
+    "Energy": ["SHEL.L", "BP.L", "HBR.L"],
+    "Financials": [
+        "HSBA.L",
+        "LLOY.L",
+        "BARC.L",
+        "NWG.L",
+        "LSEG.L",
+        "STAN.L",
+        "AV.L",
+        "LGEN.L",
+        "ADM.L",
+        "MNG.L",
+        "PRU.L",
+        "SDR.L",
+        "III.L",
+        "EXPN.L",
+    ],
+    "Industrials": [
+        "RR.L",
+        "BA.L",
+        "AHT.L",
+        "IMI.L",
+        "WEIR.L",
+        "RTO.L",
+        "ITRK.L",
+        "MRO.L",
+    ],
+    "Consumer Discretionary": [
+        "CPG.L",
+        "NXT.L",
+        "IHG.L",
+        "GAW.L",
+        "KGF.L",
+        "JD.L",
+        "MKS.L",
+        "WTB.L",
+        "EZJ.L",
+        "ENT.L",
+        "FLTR.L",
+        "ABF.L",
+        "SBRY.L",
+        "PSN.L",
+        "TW.L",
+        "WPP.L",
+        "PSON.L",
+        "IAG.L",
+    ],
+    "Materials": [
+        "RIO.L",
+        "GLEN.L",
+        "AAL.L",
+        "ANTO.L",
+        "FRES.L",
+        "MNDI.L",
+        "SKG.L",
+        "CRDA.L",
+    ],
+    "Consumer Staples": ["BATS.L", "ULVR.L", "RKT.L", "TSCO.L", "DGE.L", "IMB.L"],
+    "Health Care": ["AZN.L", "GSK.L", "HLN.L", "SN.L", "HIK.L"],
+    "Technology": ["REL.L", "HLMA.L", "SGE.L", "AUTO.L", "RMV.L"],
+    "Telecommunications": ["VOD.L", "BT-A.L", "AAF.L"],
+    "Utilities": ["NG.L", "SSE.L", "CNA.L", "SVT.L", "UU.L"],
+    "Real Estate": ["LAND.L", "SGRO.L", "BLND.L", "BBOX.L", "PCTN.L", "GPE.L"],
 }
 
 # FTSE 100 — used for breadth calculations
 BREADTH_TICKERS = [
     # Top 50 by market cap
-    "AZN.L",  "SHEL.L", "HSBA.L", "ULVR.L", "BP.L",
-    "RIO.L",  "GSK.L",  "LSEG.L", "REL.L",  "DGE.L",
-    "BATS.L", "GLEN.L", "LLOY.L", "BARC.L", "NG.L",
-    "RKT.L",  "IMB.L",  "HLN.L",  "AAL.L",  "NWG.L",
-    "TSCO.L", "SSE.L",  "AHT.L",  "BA.L",   "RR.L",
-    "HLMA.L", "SGE.L",  "IHG.L",  "SN.L",   "HIK.L",
-    "CPG.L",  "EXPN.L", "STAN.L", "IAG.L",  "ANTO.L",
-    "PRU.L",  "ABF.L",  "WPP.L",  "BT-A.L", "AUTO.L",
-    "FRES.L", "MNG.L",  "CNA.L",  "SVT.L",  "UU.L",
-    "LAND.L", "SGRO.L", "BLND.L", "VOD.L",  "NXT.L",
+    "AZN.L",
+    "SHEL.L",
+    "HSBA.L",
+    "ULVR.L",
+    "BP.L",
+    "RIO.L",
+    "GSK.L",
+    "LSEG.L",
+    "REL.L",
+    "DGE.L",
+    "BATS.L",
+    "GLEN.L",
+    "LLOY.L",
+    "BARC.L",
+    "NG.L",
+    "RKT.L",
+    "IMB.L",
+    "HLN.L",
+    "AAL.L",
+    "NWG.L",
+    "TSCO.L",
+    "SSE.L",
+    "AHT.L",
+    "BA.L",
+    "RR.L",
+    "HLMA.L",
+    "SGE.L",
+    "IHG.L",
+    "SN.L",
+    "HIK.L",
+    "CPG.L",
+    "EXPN.L",
+    "STAN.L",
+    "IAG.L",
+    "ANTO.L",
+    "PRU.L",
+    "ABF.L",
+    "WPP.L",
+    "BT-A.L",
+    "AUTO.L",
+    "FRES.L",
+    "MNG.L",
+    "CNA.L",
+    "SVT.L",
+    "UU.L",
+    "LAND.L",
+    "SGRO.L",
+    "BLND.L",
+    "VOD.L",
+    "NXT.L",
     # FTSE 100 remainder
-    "AV.L",   "LGEN.L", "ADM.L",  "III.L",  "ITRK.L",
-    "CRDA.L", "RTO.L",  "WTB.L",  "JD.L",   "MKS.L",
-    "SBRY.L", "MNDI.L", "EZJ.L",  "ENT.L",  "FLTR.L",
-    "PSON.L", "SDR.L",  "PSN.L",  "TW.L",   "MRO.L",
-    "IMI.L",  "WEIR.L", "SKG.L",  "RMV.L",  "GAW.L",
+    "AV.L",
+    "LGEN.L",
+    "ADM.L",
+    "III.L",
+    "ITRK.L",
+    "CRDA.L",
+    "RTO.L",
+    "WTB.L",
+    "JD.L",
+    "MKS.L",
+    "SBRY.L",
+    "MNDI.L",
+    "EZJ.L",
+    "ENT.L",
+    "FLTR.L",
+    "PSON.L",
+    "SDR.L",
+    "PSN.L",
+    "TW.L",
+    "MRO.L",
+    "IMI.L",
+    "WEIR.L",
+    "SKG.L",
+    "RMV.L",
+    "GAW.L",
 ]
 
 CROSS_ASSET_TICKERS = {
-    "gbpusd":   "GBPUSD=X",
-    "brent":    "BZ=F",
-    "gold":     "GC=F",
+    "gbpusd": "GBPUSD=X",
+    "brent": "BZ=F",
+    "gold": "GC=F",
 }
 
 VIX_TICKER = "^VIX"
 GILT_ETF_TICKER = "IGLT.L"  # iShares UK Gilt ETF — used for safe haven spread & z-score
 
-ALL_PROXY_TICKERS = list(dict.fromkeys(
-    list(BENCHMARK_TICKERS.values()) +
-    [t for tickers in SECTOR_TICKERS.values() for t in tickers] +
-    BREADTH_TICKERS +
-    list(CROSS_ASSET_TICKERS.values()) +
-    [VIX_TICKER, GILT_ETF_TICKER]
-))
+ALL_PROXY_TICKERS = list(
+    dict.fromkeys(
+        list(BENCHMARK_TICKERS.values())
+        + [t for tickers in SECTOR_TICKERS.values() for t in tickers]
+        + BREADTH_TICKERS
+        + list(CROSS_ASSET_TICKERS.values())
+        + [VIX_TICKER, GILT_ETF_TICKER]
+    )
+)
+
 
 # ── Shared price fetch (all proxy tickers, 1 year history, cached) ────────────
 def _get_prices():
@@ -108,7 +225,9 @@ def _get_prices():
             print("[market] yfinance: no data returned for any ticker")
             return pd.DataFrame()
         return pd.DataFrame(frames)
+
     return _cached("prices", fetch)
+
 
 # ── Cycle phase state (in-memory, manually set) ───────────────────────────────
 _cycle = {
@@ -117,18 +236,27 @@ _cycle = {
 }
 
 PHASE_GUIDANCE = {
-    "Recovery":    {"favour": ["Energy", "Financials", "Materials", "Industrials"],
-                    "avoid":  ["Utilities", "Consumer Staples"]},
-    "Expansion":   {"favour": ["Technology", "Consumer Discretionary", "Industrials"],
-                    "avoid":  ["Health Care", "Utilities"]},
-    "Slowdown":    {"favour": ["Health Care", "Consumer Staples", "Utilities"],
-                    "avoid":  ["Energy", "Materials", "Financials"]},
-    "Contraction": {"favour": ["Utilities", "Consumer Staples", "Health Care"],
-                    "avoid":  ["Energy", "Financials", "Technology"]},
+    "Recovery": {
+        "favour": ["Energy", "Financials", "Materials", "Industrials"],
+        "avoid": ["Utilities", "Consumer Staples"],
+    },
+    "Expansion": {
+        "favour": ["Technology", "Consumer Discretionary", "Industrials"],
+        "avoid": ["Health Care", "Utilities"],
+    },
+    "Slowdown": {
+        "favour": ["Health Care", "Consumer Staples", "Utilities"],
+        "avoid": ["Energy", "Materials", "Financials"],
+    },
+    "Contraction": {
+        "favour": ["Utilities", "Consumer Staples", "Health Care"],
+        "avoid": ["Energy", "Financials", "Technology"],
+    },
 }
 
 # ── In-memory signal log ──────────────────────────────────────────────────────
 _signal_log: list = []
+
 
 # ── Fear & Greed helpers ──────────────────────────────────────────────────────
 def _zscore_to_score(series, current_val, clip=2.0):
@@ -142,6 +270,7 @@ def _zscore_to_score(series, current_val, clip=2.0):
     z = (current_val - mean) / std
     z = max(-clip, min(clip, z))
     return round((z + clip) / (2 * clip) * 100)
+
 
 def _suggest_phase(score, trend):
     """Map F&G score + trend to a suggested cycle phase string."""
@@ -159,8 +288,10 @@ def _suggest_phase(score, trend):
         return "Slowdown"
     return "no_change"
 
+
 # ── Fear & Greed state ────────────────────────────────────────────────────────
 _fg_history: list = []  # last 4 readings: [{score, suggested_phase, timestamp}, ...]
+
 
 def _compute_fear_greed():
     """Compute 5-component UK Fear & Greed score (0-100), update history, auto-set cycle phase."""
@@ -233,7 +364,11 @@ def _compute_fear_greed():
                     "value": round(current_spread * 100, 2),
                 }
     if "safe_haven" not in components:
-        components["safe_haven"] = {"score": 50, "label": "Safe Haven Demand", "value": None}
+        components["safe_haven"] = {
+            "score": 50,
+            "label": "Safe Haven Demand",
+            "value": None,
+        }
 
     # 5. Realised Volatility — 20-day annualised vol of FTSE 100, inverted (high vol = fear = low score)
     if ftse_ticker in prices.columns:
@@ -249,12 +384,16 @@ def _compute_fear_greed():
                     "value": round(current_rv * 100, 1),
                 }
     if "realised_vol" not in components:
-        components["realised_vol"] = {"score": 50, "label": "Realised Vol", "value": None}
+        components["realised_vol"] = {
+            "score": 50,
+            "label": "Realised Vol",
+            "value": None,
+        }
 
     # 6. New Highs / Lows — % of stocks at 52w high minus % at 52w low, centred at 50
-    new_highs    = breadth_data.get("new_highs", 0)
-    new_lows     = breadth_data.get("new_lows", 0)
-    hl_universe  = breadth_data.get("hl_universe", 0)
+    new_highs = breadth_data.get("new_highs", 0)
+    new_lows = breadth_data.get("new_lows", 0)
+    hl_universe = breadth_data.get("hl_universe", 0)
     if hl_universe > 0:
         hl_score = round(50 + ((new_highs - new_lows) / hl_universe) * 50)
         hl_score = max(0, min(100, hl_score))
@@ -271,11 +410,16 @@ def _compute_fear_greed():
     overall = round(sum(scores) / len(scores)) if scores else 50
 
     # Sentiment label
-    if overall >= 75:   sentiment = "Extreme Greed"
-    elif overall >= 55: sentiment = "Greed"
-    elif overall >= 45: sentiment = "Neutral"
-    elif overall >= 25: sentiment = "Fear"
-    else:               sentiment = "Extreme Fear"
+    if overall >= 75:
+        sentiment = "Extreme Greed"
+    elif overall >= 55:
+        sentiment = "Greed"
+    elif overall >= 45:
+        sentiment = "Neutral"
+    elif overall >= 25:
+        sentiment = "Fear"
+    else:
+        sentiment = "Extreme Fear"
 
     # Trend: compare current score vs reading 3 cycles ago (before appending)
     if len(_fg_history) >= 3:
@@ -287,11 +431,13 @@ def _compute_fear_greed():
     suggested_phase = _suggest_phase(overall, trend)
 
     # Update history (keep last 4)
-    _fg_history.append({
-        "score": overall,
-        "suggested_phase": suggested_phase,
-        "timestamp": datetime.now().isoformat(),
-    })
+    _fg_history.append(
+        {
+            "score": overall,
+            "suggested_phase": suggested_phase,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
     if len(_fg_history) > 4:
         _fg_history.pop(0)
 
@@ -299,16 +445,23 @@ def _compute_fear_greed():
     confirmed = False
     if len(_fg_history) >= 2 and suggested_phase != "no_change":
         last_two = _fg_history[-2:]
-        if last_two[0]["suggested_phase"] == last_two[1]["suggested_phase"] == suggested_phase:
+        if (
+            last_two[0]["suggested_phase"]
+            == last_two[1]["suggested_phase"]
+            == suggested_phase
+        ):
             confirmed = True
             if suggested_phase != _cycle["phase"]:
                 _cycle["phase"] = suggested_phase
                 _cycle["set_at"] = datetime.now().isoformat()
-                _signal_log.insert(0, {
-                    "timestamp": datetime.now().strftime("%d %b %H:%M"),
-                    "type": "INFO",
-                    "message": f"Cycle phase auto-updated to {suggested_phase} by Fear & Greed index (score: {overall})",
-                })
+                _signal_log.insert(
+                    0,
+                    {
+                        "timestamp": datetime.now().strftime("%d %b %H:%M"),
+                        "type": "INFO",
+                        "message": f"Cycle phase auto-updated to {suggested_phase} by Fear & Greed index (score: {overall})",
+                    },
+                )
                 _cache.pop("signals", None)
                 _cache.pop("sidebar", None)
 
@@ -321,6 +474,7 @@ def _compute_fear_greed():
         "components": components,
     }
 
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 def _pct_change_today(prices, ticker):
     """Return today's % change for a single ticker. Returns None if insufficient data."""
@@ -331,25 +485,25 @@ def _pct_change_today(prices, ticker):
         return None
     return float((col.iloc[-1] / col.iloc[-2]) - 1)
 
+
 def _basket_pct_change(prices, tickers):
     """Average % change across a basket of tickers (ignores missing)."""
     changes = [_pct_change_today(prices, t) for t in tickers]
     valid = [c for c in changes if c is not None]
     return float(np.mean(valid)) if valid else None
 
+
 def _compute_rs_score(prices, sector_tickers, benchmark_ticker, window=63):
     """RS score = basket 63-day return / benchmark 63-day return."""
-    basket_prices = [
-        prices[t].dropna() for t in sector_tickers if t in prices.columns
-    ]
+    basket_prices = [prices[t].dropna() for t in sector_tickers if t in prices.columns]
     if not basket_prices:
         return None
     min_len = min(len(p) for p in basket_prices)
     if min_len < window + 1:
         return None
-    basket_ret = float(np.mean([
-        (p.iloc[-1] / p.iloc[-(window + 1)]) - 1 for p in basket_prices
-    ]))
+    basket_ret = float(
+        np.mean([(p.iloc[-1] / p.iloc[-(window + 1)]) - 1 for p in basket_prices])
+    )
     if benchmark_ticker not in prices.columns:
         return None
     bm = prices[benchmark_ticker].dropna()
@@ -360,6 +514,7 @@ def _compute_rs_score(prices, sector_tickers, benchmark_ticker, window=63):
         return None
     return round((1 + basket_ret) / (1 + bm_ret), 4)
 
+
 def _compute_rotation():
     """Compute RS scores + signals for all sectors. Returns list of dicts."""
     prices = _get_prices()
@@ -367,7 +522,9 @@ def _compute_rotation():
     results = []
     for sector, tickers in SECTOR_TICKERS.items():
         rs_now = _compute_rs_score(prices, tickers, bm_ticker, window=63)
-        rs_prior = _compute_rs_score(prices, tickers, bm_ticker, window=73)  # 10 days ago
+        rs_prior = _compute_rs_score(
+            prices, tickers, bm_ticker, window=73
+        )  # 10 days ago
         if rs_now is None or rs_prior is None:
             trend = "unknown"
             signal = "NEUTRAL"
@@ -395,20 +552,23 @@ def _compute_rotation():
                 above += 1
         breadth = round(above / total, 4) if total else None
 
-        results.append({
-            "sector": sector,
-            "rs_score": rs_now,
-            "trend": trend,
-            "breadth": breadth,
-            "signal": signal,
-            "pct_change": _basket_pct_change(prices, tickers),
-        })
+        results.append(
+            {
+                "sector": sector,
+                "rs_score": rs_now,
+                "trend": trend,
+                "breadth": breadth,
+                "signal": signal,
+                "pct_change": _basket_pct_change(prices, tickers),
+            }
+        )
 
     results.sort(key=lambda x: (x["rs_score"] or 0), reverse=True)
     for i, r in enumerate(results):
         r["rank"] = i + 1
 
     return results
+
 
 def _fetch_boe_gilt_yields():
     """Fetch UK nominal zero coupon gilt yields from Bank of England.
@@ -424,9 +584,7 @@ def _fetch_boe_gilt_yields():
         f"?csv.x=yes&Datefrom=01/Jan/2021&Dateto={_today}"
         "&SeriesCodes=IUDSNZC,IUDMNZC,IUDLNZC&CSVF=TT&UsingCodes=Y&VPD=Y&VFD=N"
     )
-    ZIP_URL = (
-        "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/glcnominalddata.zip"
-    )
+    ZIP_URL = "https://www.bankofengland.co.uk/-/media/boe/files/statistics/yield-curves/glcnominalddata.zip"
     HEADERS = {"User-Agent": "Mozilla/5.0"}
 
     # ── IADB: 5Y, 10Y, 20Y ───────────────────────────────────────────────────
@@ -450,9 +608,12 @@ def _fetch_boe_gilt_yields():
             if i == 0:
                 # Header row: DATE, IUDSNZC, IUDMNZC, IUDLNZC
                 for j, col in enumerate(parts):
-                    if col == "IUDSNZC":  col_map[j] = 5
-                    elif col == "IUDMNZC": col_map[j] = 10
-                    elif col == "IUDLNZC": col_map[j] = 20
+                    if col == "IUDSNZC":
+                        col_map[j] = 5
+                    elif col == "IUDMNZC":
+                        col_map[j] = 10
+                    elif col == "IUDLNZC":
+                        col_map[j] = 20
                 continue
             if len(parts) < 2 or not parts[0]:
                 continue
@@ -476,6 +637,7 @@ def _fetch_boe_gilt_yields():
     zip_data = {2: {}, 30: {}}
     try:
         import openpyxl
+
         r = requests.get(ZIP_URL, timeout=60, headers=HEADERS)
         r.raise_for_status()
         zf = zipfile.ZipFile(io.BytesIO(r.content))
@@ -484,13 +646,29 @@ def _fetch_boe_gilt_yields():
             raise ValueError("No xlsx files found in zip")
 
         def _parse_sheet(wb_bytes):
-            wb = openpyxl.load_workbook(io.BytesIO(wb_bytes), read_only=True, data_only=True)
+            wb = openpyxl.load_workbook(
+                io.BytesIO(wb_bytes), read_only=True, data_only=True
+            )
             ws = wb["4. spot curve"]
             rows = list(ws.iter_rows(values_only=True))
             # Row 3 is the maturity header: ('years:', 0.5, 1.0, 1.5, 2.0, ...)
             header = rows[3] if len(rows) > 3 else rows[0]
-            col_2y  = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 2.0)  < 0.01), None)
-            col_30y = next((i for i, h in enumerate(header) if isinstance(h, (int, float)) and abs(h - 30.0) < 0.01), None)
+            col_2y = next(
+                (
+                    i
+                    for i, h in enumerate(header)
+                    if isinstance(h, (int, float)) and abs(h - 2.0) < 0.01
+                ),
+                None,
+            )
+            col_30y = next(
+                (
+                    i
+                    for i, h in enumerate(header)
+                    if isinstance(h, (int, float)) and abs(h - 30.0) < 0.01
+                ),
+                None,
+            )
             # Data starts at row 5
             for row in rows[5:]:
                 if not row or row[0] is None:
@@ -504,12 +682,20 @@ def _fetch_boe_gilt_yields():
                         date_str = dt.strftime("%Y-%m-%d")
                     if date_str < "2021-01-01":
                         continue
-                    if col_2y is not None and col_2y < len(row) and row[col_2y] is not None:
+                    if (
+                        col_2y is not None
+                        and col_2y < len(row)
+                        and row[col_2y] is not None
+                    ):
                         try:
                             zip_data[2][date_str] = float(row[col_2y])
                         except (ValueError, TypeError):
                             pass
-                    if col_30y is not None and col_30y < len(row) and row[col_30y] is not None:
+                    if (
+                        col_30y is not None
+                        and col_30y < len(row)
+                        and row[col_30y] is not None
+                    ):
                         try:
                             zip_data[30][date_str] = float(row[col_30y])
                         except (ValueError, TypeError):
@@ -528,8 +714,8 @@ def _fetch_boe_gilt_yields():
 
     # ── Merge all series ──────────────────────────────────────────────────────
     all_series = {
-        2:  zip_data[2],
-        5:  iadb_data[5],
+        2: zip_data[2],
+        5: iadb_data[5],
         10: iadb_data[10],
         20: iadb_data[20],
         30: zip_data[30],
@@ -556,19 +742,24 @@ def _fetch_boe_gilt_yields():
 
     return {"snapshot": snapshot, "history": history}
 
+
 def _fetch_cnn_fg():
     """Fetch CNN Fear & Greed Index via the fear-and-greed PyPI package."""
     try:
         import fear_and_greed
+
         result = fear_and_greed.get()
         return {
             "value": round(float(result.value), 1),
             "description": result.description,
-            "last_update": result.last_update.isoformat() if result.last_update else None,
+            "last_update": (
+                result.last_update.isoformat() if result.last_update else None
+            ),
         }
     except Exception as e:
         print(f"[market] CNN fear-greed fetch failed: {e}")
         return {"value": None, "description": None, "last_update": None}
+
 
 @router.get("/sidebar")
 def sidebar():
@@ -590,7 +781,11 @@ def sidebar():
         breadth_data = _compute_breadth()
         avg_breadth = breadth_data.get("pct_above_50ma")
         vix_col = prices[VIX_TICKER].dropna() if VIX_TICKER in prices.columns else None
-        vix_level = round(float(vix_col.iloc[-1]), 2) if vix_col is not None and len(vix_col) else None
+        vix_level = (
+            round(float(vix_col.iloc[-1]), 2)
+            if vix_col is not None and len(vix_col)
+            else None
+        )
         cnn_fg = _cached("cnn_fear_greed", _fetch_cnn_fg)
         fg = _cached("fear_greed", _compute_fear_greed)
         return {
@@ -599,9 +794,9 @@ def sidebar():
             "vix": vix_level,
             "cnn_fear_greed": cnn_fg,
             "fear_greed": {
-                "score":           fg["score"],
-                "sentiment":       fg["sentiment"],
-                "trend":           fg["trend"],
+                "score": fg["score"],
+                "sentiment": fg["sentiment"],
+                "trend": fg["trend"],
                 "suggested_phase": fg["suggested_phase"],
             },
             "signal_summary": {
@@ -610,11 +805,14 @@ def sidebar():
                 "breadth": avg_breadth,
             },
         }
+
     return _cached("sidebar", compute)
+
 
 @router.get("/rotation")
 def rotation():
     return _cached("rotation", _compute_rotation)
+
 
 def _compute_breadth():
     prices = _get_prices()
@@ -665,13 +863,15 @@ def _compute_breadth():
                     dec += 1
                 else:
                     unch += 1
-            cumulative += (adv - dec)
-            ad_line.append({
-                "date": prices.index[i].strftime("%Y-%m-%d"),
-                "value": cumulative,
-                "advances": adv,
-                "declines": dec,
-            })
+            cumulative += adv - dec
+            ad_line.append(
+                {
+                    "date": prices.index[i].strftime("%Y-%m-%d"),
+                    "value": cumulative,
+                    "advances": adv,
+                    "declines": dec,
+                }
+            )
 
     # Today's advances/declines
     today_adv = today_dec = today_unch = 0
@@ -693,7 +893,11 @@ def _compute_breadth():
         "pct_above_50ma": pct_above,
         "above_50ma": above_50,
         "below_50ma": total - above_50,
-        "hl_universe": sum(1 for t in all_basket_tickers if t in prices.columns and len(prices[t].dropna()) >= 252),
+        "hl_universe": sum(
+            1
+            for t in all_basket_tickers
+            if t in prices.columns and len(prices[t].dropna()) >= 252
+        ),
         "advances": today_adv,
         "declines": today_dec,
         "unchanged": today_unch,
@@ -703,9 +907,11 @@ def _compute_breadth():
         "ad_line": ad_line,
     }
 
+
 @router.get("/breadth")
 def breadth():
     return _cached("breadth", _compute_breadth)
+
 
 def _cross_asset_item(prices, ticker):
     if ticker not in prices.columns:
@@ -716,6 +922,7 @@ def _cross_asset_item(prices, ticker):
     value = round(float(col.iloc[-1]), 4)
     pct_change = round(float((col.iloc[-1] / col.iloc[-2]) - 1), 6)
     return {"value": value, "pct_change": pct_change}
+
 
 def _gilt_vs_utilities_zscore(prices):
     """Z-score of (gilt yield - utilities basket price change) over 252 days.
@@ -738,65 +945,100 @@ def _gilt_vs_utilities_zscore(prices):
     zscore = round(float((spread[-1] - spread.mean()) / spread.std()), 2)
     return zscore
 
+
 def _compute_cross_asset():
     prices = _get_prices()
     t = CROSS_ASSET_TICKERS
     gbpusd = _cross_asset_item(prices, t["gbpusd"])
-    brent  = _cross_asset_item(prices, t["brent"])
-    gold   = _cross_asset_item(prices, t["gold"])
+    brent = _cross_asset_item(prices, t["brent"])
+    gold = _cross_asset_item(prices, t["gold"])
     zscore = _gilt_vs_utilities_zscore(prices)
 
     return {
-        "gbpusd":            gbpusd,
-        "brent":             brent,
-        "gold":              gold,
-        "gilt_vs_utilities": {"zscore": zscore, "bias": "Gilts expensive vs Utilities" if zscore is not None and zscore < -1 else None},
+        "gbpusd": gbpusd,
+        "brent": brent,
+        "gold": gold,
+        "gilt_vs_utilities": {
+            "zscore": zscore,
+            "bias": (
+                "Gilts expensive vs Utilities"
+                if zscore is not None and zscore < -1
+                else None
+            ),
+        },
     }
+
 
 @router.get("/cross-asset")
 def cross_asset():
     return _cached("cross_asset", _compute_cross_asset)
 
+
 @router.get("/gilt-yields")
 def gilt_yields():
     return _cached("gilt_yields", _fetch_boe_gilt_yields)
+
 
 @router.get("/fear-greed")
 def fear_greed():
     return _cached("fear_greed", _compute_fear_greed)
 
+
 from fastapi import Body
+
 
 def _compute_signals():
     """Generate signal log by running rotation + breadth and checking thresholds."""
     rotation_data = _compute_rotation()
-    breadth_data  = _compute_breadth()
+    breadth_data = _compute_breadth()
     now = datetime.now().strftime("%d %b %H:%M")
     signals = list(_signal_log)  # include manually added signals (e.g. phase changes)
 
     breadth_val = breadth_data.get("pct_above_50ma")
     if breadth_val is not None:
         if breadth_val > 0.65:
-            signals.append({"timestamp": now, "type": "ALERT",
-                            "message": f"Breadth at {breadth_val*100:.0f}% — bullish threshold crossed"})
+            signals.append(
+                {
+                    "timestamp": now,
+                    "type": "ALERT",
+                    "message": f"Breadth at {breadth_val*100:.0f}% — bullish threshold crossed",
+                }
+            )
         elif breadth_val < 0.40:
-            signals.append({"timestamp": now, "type": "ALERT",
-                            "message": f"Breadth at {breadth_val*100:.0f}% — bearish threshold crossed"})
+            signals.append(
+                {
+                    "timestamp": now,
+                    "type": "ALERT",
+                    "message": f"Breadth at {breadth_val*100:.0f}% — bearish threshold crossed",
+                }
+            )
 
     for s in rotation_data:
         if s["signal"] == "BUY":
-            signals.append({"timestamp": now, "type": "BUY",
-                            "message": f"{s['sector']} RS {s['rs_score']:.2f} rising — momentum breakout"})
+            signals.append(
+                {
+                    "timestamp": now,
+                    "type": "BUY",
+                    "message": f"{s['sector']} RS {s['rs_score']:.2f} rising — momentum breakout",
+                }
+            )
         elif s["signal"] == "AVOID":
-            signals.append({"timestamp": now, "type": "AVOID",
-                            "message": f"{s['sector']} RS {s['rs_score']:.2f} falling — underperforming market"})
+            signals.append(
+                {
+                    "timestamp": now,
+                    "type": "AVOID",
+                    "message": f"{s['sector']} RS {s['rs_score']:.2f} falling — underperforming market",
+                }
+            )
 
     # newest first (manual log entries are already ordered)
     return signals[:50]  # cap at 50 entries
 
+
 @router.get("/signals")
 def signals():
     return _cached("signals", _compute_signals)
+
 
 def _suggest_phase_from_rotation(rotation_data):
     """Infer cycle phase from which sectors are leading by RS rank.
@@ -826,11 +1068,16 @@ def get_cycle():
     fg_suggestion = _fg_history[-1]["suggested_phase"] if _fg_history else None
     if not fg_suggestion or fg_suggestion == "no_change":
         if fg_score is not None:
-            if fg_score >= 70:   fg_suggestion = "Expansion"
-            elif fg_score >= 55: fg_suggestion = "Recovery"
-            elif fg_score <= 30: fg_suggestion = "Contraction"
-            elif fg_score <= 45: fg_suggestion = "Slowdown"
-            else:                fg_suggestion = None  # 45-55: neutral
+            if fg_score >= 70:
+                fg_suggestion = "Expansion"
+            elif fg_score >= 55:
+                fg_suggestion = "Recovery"
+            elif fg_score <= 30:
+                fg_suggestion = "Contraction"
+            elif fg_score <= 45:
+                fg_suggestion = "Slowdown"
+            else:
+                fg_suggestion = None  # 45-55: neutral
 
     fg_confirmed = (
         len(_fg_history) >= 2
@@ -847,19 +1094,24 @@ def get_cycle():
         "rotation_suggested_phase": rotation_suggestion,
     }
 
+
 @router.post("/cycle")
 def set_cycle(body: dict = Body(...)):
     phase = body.get("phase")
     if phase not in PHASE_GUIDANCE:
         from fastapi import HTTPException
+
         raise HTTPException(400, f"phase must be one of {list(PHASE_GUIDANCE.keys())}")
     _cycle["phase"] = phase
     _cycle["set_at"] = datetime.now().isoformat()
-    _signal_log.insert(0, {
-        "timestamp": datetime.now().strftime("%d %b %H:%M"),
-        "type": "INFO",
-        "message": f"Cycle phase set to {phase} — manual override",
-    })
+    _signal_log.insert(
+        0,
+        {
+            "timestamp": datetime.now().strftime("%d %b %H:%M"),
+            "type": "INFO",
+            "message": f"Cycle phase set to {phase} — manual override",
+        },
+    )
     # clear signal cache so next fetch reflects new phase
     _cache.pop("signals", None)
     _cache.pop("sidebar", None)

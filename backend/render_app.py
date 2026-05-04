@@ -37,6 +37,7 @@ load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 from rns import _run_ingest, _backfill_summaries, _prune_old
 from rns_llm import _rank_pending
 from refresh_rns import _compute_max_pages
+from prices import refresh_prices
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -246,6 +247,31 @@ def pipeline_log(lines: int = Query(50, ge=1, le=500)):
         "dashboard_url": None,
         "last_run": _run_state.get("run_id"),
     }
+
+
+@app.get("/api/prices/run")
+def run_price_refresh(token: str = Query(...)):
+    """Trigger a daily price refresh for all stocks.
+
+    Called by cron-job.org once daily after market close.
+    Requires ?token=<CRON_AUTH_TOKEN>.
+    Runs synchronously — fetches missing OHLCV data from yfinance and upserts.
+    """
+    if _CRON_TOKEN and token != _CRON_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    print(
+        f"[render] price refresh starting at {datetime.now(timezone.utc).isoformat()}"
+    )
+    try:
+        result = refresh_prices()
+        print(f"[render] price refresh done — {result}")
+        return {"status": "ok", **result}
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        print(f"[render] price refresh FAILED — {error_msg}")
+        traceback.print_exc()
+        return {"status": "error", "error": error_msg}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

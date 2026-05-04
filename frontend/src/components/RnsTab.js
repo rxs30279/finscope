@@ -246,9 +246,8 @@ export default function RnsTab({ refreshKey, onSelect }) {
       return;
     }
 
-    // Pipeline dispatched via Inngest. Wait a reasonable time for the
-    // pipeline to complete (typically 2-5 min), then reload the feed.
-    // Inngest Cloud dashboard provides detailed run observability.
+    // Pipeline dispatched. Wait for it to complete (typically 2-5 min),
+    // then reload the feed.
     setPipelineStage("in_progress");
     const startedPollMs = Date.now();
     const poll = setInterval(async () => {
@@ -277,7 +276,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
           clearInterval(elapsedTimer);
           setRefreshing(false);
           setPipelineStage(null);
-          setToast("Refresh timed out — check Inngest Cloud dashboard");
+          setToast("Refresh timed out — check Render dashboard logs");
           setTimeout(() => setToast(null), 6000);
         }
       } catch {

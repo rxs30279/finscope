@@ -1143,16 +1143,5 @@ def get_market_caps(
 
 @router.get("/pipeline/status")
 def pipeline_status():
-    """Legacy status endpoint — Inngest handles observability natively.
-
-    Returns a simple acknowledgement. The UI should use the Inngest Cloud
-    dashboard or the Inngest API for detailed run status.
-    """
-    return {
-        "running": False,
-        "stage": None,
-        "started_at": None,
-        "finished_at": None,
-        "stages": {},
-        "note": "Use Inngest Cloud dashboard for run status",
-    }
+    """Return the status of the last pipeline run."""
+    return _pipeline_state
