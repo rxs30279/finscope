@@ -108,7 +108,7 @@ def _fetch_ohlcv_batch(symbols, start_date):
     """Fetch adjusted daily OHLCV for a single batch of symbols.
     Returns list of (symbol, date, open, high, low, close, volume) tuples.
 
-    If yfinance returns empty data (e.g. start date is a bank holiday),
+    If yfinance returns no usable data (e.g. start date is a bank holiday),
     the start date is advanced by 1 day and retried up to _MAX_START_SKIP
     times before giving up.
     """
@@ -116,9 +116,9 @@ def _fetch_ohlcv_batch(symbols, start_date):
     if not symbols:
         return []
 
-    # yfinance can return empty when the start date is a non-trading day
-    # (weekend or bank holiday).  Advance the start date up to 5 days to
-    # skip past the gap.
+    # yfinance can return empty or all-NaN when the start date is a
+    # non-trading day (weekend or bank holiday).  Advance the start date
+    # up to 5 days to skip past the gap.
     _MAX_START_SKIP = 5
     for skip in range(_MAX_START_SKIP + 1):
         actual_start = start_date + timedelta(days=skip)
@@ -141,21 +141,30 @@ def _fetch_ohlcv_batch(symbols, start_date):
             )
             return []
 
-        if df is not None and not df.empty:
-            break  # got data
+        rows = _extract_ohlcv_rows(df, symbols)
+        if rows:
+            return rows  # got usable data
+
         logger.info(
-            "yfinance returned empty for start=%s (skip=%d), trying next day",
+            "yfinance returned no usable data for start=%s (skip=%d), trying next day",
             actual_start,
             skip,
         )
-    else:
-        # All skip attempts exhausted
-        logger.warning(
-            "No price data for %d symbols after advancing start %d days (original=%s)",
-            len(symbols),
-            _MAX_START_SKIP,
-            start_date,
-        )
+
+    # All skip attempts exhausted
+    logger.warning(
+        "No price data for %d symbols after advancing start %d days (original=%s)",
+        len(symbols),
+        _MAX_START_SKIP,
+        start_date,
+    )
+    return []
+
+
+def _extract_ohlcv_rows(df, symbols):
+    """Extract (symbol, date, open, high, low, close, volume) tuples from a
+    yfinance DataFrame.  Returns [] if the DataFrame is empty or all-NaN."""
+    if df is None or df.empty:
         return []
 
     # yfinance returns MultiIndex columns for multiple tickers,
