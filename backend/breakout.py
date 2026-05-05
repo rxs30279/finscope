@@ -23,7 +23,12 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from dotenv import load_dotenv
 
-from backend.prices import query, _get_pool
+# Import query and _get_pool — works both when running from backend/ dir
+# and when running from project root (e.g. python -c "from backend.breakout import ...")
+try:
+    from prices import query, _get_pool
+except ModuleNotFoundError:
+    from backend.prices import query, _get_pool
 
 logger = logging.getLogger(__name__)
 
