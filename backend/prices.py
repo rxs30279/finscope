@@ -84,19 +84,6 @@ def _upsert_rows(rows):
         pool.putconn(conn)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def _next_trading_day(d: date) -> date:
-    """If *d* falls on a weekend, advance to the following Monday."""
-    # Monday=0 … Sunday=6
-    if d.weekday() == 5:  # Saturday
-        return d + timedelta(days=2)
-    if d.weekday() == 6:  # Sunday
-        return d + timedelta(days=1)
-    return d
-
-
 # ── Price fetch ───────────────────────────────────────────────────────────────
 
 _BATCH_SIZE = 25  # yfinance chokes on large batches — keep small
@@ -106,67 +93,23 @@ _MAX_RETRIES = 2  # retry a failed batch once
 
 def _fetch_ohlcv_batch(symbols, start_date):
     """Fetch adjusted daily OHLCV for a single batch of symbols.
-    Returns list of (symbol, date, open, high, low, close, volume) tuples.
-
-    If yfinance returns no usable data (e.g. start date is a bank holiday),
-    the start date is advanced by 1 day and retried up to _MAX_START_SKIP
-    times before giving up.
-    """
+    Returns list of (symbol, date, open, high, low, close, volume) tuples."""
+    end_date = date.today()
     if not symbols:
         return []
 
-    # yfinance can return empty or all-NaN when the start date is a
-    # non-trading day (weekend or bank holiday).  Advance the start date
-    # up to 5 days to skip past the gap.  The end date is always set to
-    # actual_start + 1 so we always request a valid 1-day range.
-    _MAX_START_SKIP = 5
-    for skip in range(_MAX_START_SKIP + 1):
-        actual_start = start_date + timedelta(days=skip)
-        actual_end = actual_start + timedelta(days=1)
-        if actual_start > date.today():
-            break
-
-        try:
-            df = yf.download(
-                tickers=symbols,
-                start=actual_start.isoformat(),
-                end=actual_end.isoformat(),
-                auto_adjust=True,
-                progress=False,
-            )
-        except Exception as e:
-            logger.warning(
-                "yf.download batch failed for %d symbols (start=%s): %s",
-                len(symbols),
-                actual_start,
-                e,
-            )
-            return []
-
-        rows = _extract_ohlcv_rows(df, symbols)
-        if rows:
-            return rows  # got usable data
-
-        logger.info(
-            "yfinance returned no usable data for start=%s end=%s (skip=%d), trying next day",
-            actual_start,
-            actual_end,
-            skip,
+    try:
+        df = yf.download(
+            tickers=symbols,
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+            auto_adjust=True,
+            progress=False,
         )
+    except Exception as e:
+        logger.warning("yf.download batch failed for %d symbols: %s", len(symbols), e)
+        return []
 
-    # All skip attempts exhausted
-    logger.warning(
-        "No price data for %d symbols after advancing start %d days (original=%s)",
-        len(symbols),
-        _MAX_START_SKIP,
-        start_date,
-    )
-    return []
-
-
-def _extract_ohlcv_rows(df, symbols):
-    """Extract (symbol, date, open, high, low, close, volume) tuples from a
-    yfinance DataFrame.  Returns [] if the DataFrame is empty or all-NaN."""
     if df is None or df.empty:
         return []
 
@@ -362,8 +305,8 @@ def refresh_prices():
     groups = {}  # start_date -> [symbols]
     for sym in all_symbols:
         if sym in latest and latest[sym] is not None:
-            # Top-up from latest stored date (skip weekends)
-            top_up_start = _next_trading_day(latest[sym] + timedelta(days=1))
+            # Top-up from latest stored date
+            top_up_start = latest[sym] + timedelta(days=1)
             groups.setdefault(top_up_start, []).append(sym)
             # Backfill if we don't have 5Y of history
             if sym in earliest and earliest[sym] > target_start:
@@ -415,9 +358,9 @@ def refresh_symbol(symbol: str):
         fetched = _fetch_ohlcv([symbol], target_start)
         total += _upsert_rows(fetched)
 
-    # Top-up from latest stored date to today (skip weekends)
+    # Top-up from latest stored date to today
     if latest is not None:
-        top_up_start = _next_trading_day(latest + timedelta(days=1))
+        top_up_start = latest + timedelta(days=1)
         if top_up_start < date.today():
             fetched = _fetch_ohlcv([symbol], top_up_start)
             total += _upsert_rows(fetched)
