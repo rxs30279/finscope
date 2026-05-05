@@ -5,14 +5,18 @@ structured score + thesis + action + risks. Context assembled per-row:
   - headline, category, tier, keyword_hits, rules score
   - investegate AI summary (scraped via rns._fetch_summary)
   - company_metadata: sector, industry, country, ftse_index
-  - ttm_financials: market_cap, P/E, dividend yield
-  - analyst_snapshots: consensus, buy %, upside %, # analysts
+  - ttm_financials: market_cap, P/E, dividend yield, ROIC, ROE, margins,
+    growth rates, debt/equity, quality_score, risk_score
+  - analyst_snapshots: consensus, buy %, upside %, # analysts, fwd EPS growth
   - price_history: 1-month and 6-month price change
   - recent RNS history for the same ticker (last 60 days)
 
 Uses DeepSeek's OpenAI-compatible API. Requires DEEPSEEK_API_KEY in env.
 """
-import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import sys, os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
 import os
 from datetime import datetime
@@ -41,15 +45,23 @@ def _get_client():
         if not _DEEPSEEK_API_KEY:
             raise RuntimeError("DEEPSEEK_API_KEY not set in environment")
         from openai import OpenAI
+
         _client = OpenAI(api_key=_DEEPSEEK_API_KEY, base_url=_DEEPSEEK_BASE_URL)
     return _client
 
 
 # ── Context assembly ──────────────────────────────────────────────────────────
 
+
 def _load_candidate(row_id: int) -> Optional[dict]:
-    """Load the announcement plus enrichment (company, fundamentals, analysts)."""
-    rows = _query("""
+    """Load the announcement plus enrichment (company, fundamentals, analysts).
+
+    If market_cap is missing from ttm_financials (e.g. the company isn't in the
+    financials DB yet), falls back to a Yahoo Finance lookup via the shared
+    market-cap cache in rns.py.
+    """
+    rows = _query(
+        """
         SELECT a.id, a.published_at, a.wire, a.ticker, a.symbol, a.company_name,
                a.headline, a.headline_slug, a.url, a.tier, a.category,
                a.keyword_hits, a.score, a.summary,
@@ -60,33 +72,76 @@ def _load_candidate(row_id: int) -> Optional[dict]:
                CASE WHEN t.period_end_price > 0 AND t.dividends_per_share > 0
                     THEN t.dividends_per_share / t.period_end_price
                     ELSE NULL END AS dividend_yield,
-               s.consensus, s.buy_pct, s.upside_pct, s.total_analysts
+               t.price_to_book, t.price_to_sales,
+               t.roic, t.roe, t.operating_margin, t.fcf_margin,
+               t.revenue_growth, t.eps_cagr_10,
+               t.debt_to_equity, t.current_ratio,
+               t.gross_margin, t.net_income_margin,
+               t.gross_margin_median, t.operating_margin_median,
+               t.net_margin_median, t.roe_median, t.roic_median,
+               t.revenue, t.fcf, t.period_end_price,
+               s.consensus, s.buy_pct, s.upside_pct, s.total_analysts,
+               s.eps_growth_next_yr
         FROM rns_announcements a
         LEFT JOIN company_metadata m ON m.symbol = a.symbol
         LEFT JOIN LATERAL (
-            SELECT market_cap, price_to_earnings, dividends_per_share, period_end_price
+            SELECT market_cap, price_to_earnings, dividends_per_share, period_end_price,
+                   price_to_book, price_to_sales,
+                   roic, roe, operating_margin, fcf_margin,
+                   revenue_growth, eps_cagr_10,
+                   debt_to_equity, current_ratio,
+                   gross_margin, net_income_margin,
+                   gross_margin_median, operating_margin_median,
+                   net_margin_median, roe_median, roic_median,
+                   revenue, fcf
             FROM ttm_financials
             WHERE company_symbol = a.symbol
             ORDER BY period_end_date DESC NULLS LAST
             LIMIT 1
         ) t ON TRUE
         LEFT JOIN LATERAL (
-            SELECT consensus, buy_pct, upside_pct, total_analysts
+            SELECT consensus, buy_pct, upside_pct, total_analysts,
+                   eps_growth_next_yr
             FROM analyst_snapshots
             WHERE symbol = a.symbol
             ORDER BY snapshot_date DESC
             LIMIT 1
         ) s ON TRUE
         WHERE a.id = %s
-    """, (row_id,))
-    return rows[0] if rows else None
+    """,
+        (row_id,),
+    )
+
+    cand = rows[0] if rows else None
+    if cand is None:
+        return None
+
+    # If market_cap is missing from the DB, try a Yahoo Finance fallback
+    if cand.get("market_cap") is None:
+        symbol = cand.get("symbol")
+        ticker = cand.get("ticker")
+        if symbol or ticker:
+            # Build the Yahoo Finance symbol
+            if symbol:
+                yahoo_sym = symbol
+            else:
+                yahoo_sym = f"{ticker.rstrip('.')}.L"
+            # Use the shared market-cap fetcher from rns.py
+            from rns import _fetch_market_caps_batch
+
+            mc_map = _fetch_market_caps_batch([yahoo_sym])
+            if yahoo_sym in mc_map:
+                cand["market_cap"] = mc_map[yahoo_sym]
+
+    return cand
 
 
 def _load_price_change(symbol: Optional[str]) -> dict:
     """Compute 1-month and 6-month price changes, plus latest close."""
     if not symbol:
         return {}
-    rows = _query("""
+    rows = _query(
+        """
         SELECT
             (SELECT close FROM price_history WHERE symbol = %s
              ORDER BY date DESC LIMIT 1) AS latest,
@@ -96,7 +151,9 @@ def _load_price_change(symbol: Optional[str]) -> dict:
             (SELECT close FROM price_history WHERE symbol = %s
              AND date <= CURRENT_DATE - INTERVAL '180 days'
              ORDER BY date DESC LIMIT 1) AS m6
-    """, (symbol, symbol, symbol))
+    """,
+        (symbol, symbol, symbol),
+    )
     if not rows:
         return {}
     r = rows[0]
@@ -112,7 +169,8 @@ def _load_history(symbol: Optional[str], limit: int = 10) -> list[dict]:
     """Last `limit` RNS items for this issuer, excluding routine noise."""
     if not symbol:
         return []
-    return _query("""
+    return _query(
+        """
         SELECT published_at, tier, category, headline
         FROM rns_announcements
         WHERE symbol = %s
@@ -120,7 +178,9 @@ def _load_history(symbol: Optional[str], limit: int = 10) -> list[dict]:
           AND published_at >= NOW() - INTERVAL '60 days'
         ORDER BY published_at DESC
         LIMIT %s
-    """, (symbol, limit))
+    """,
+        (symbol, limit),
+    )
 
 
 def _format_market_cap(mc: Optional[float]) -> str:
@@ -145,6 +205,115 @@ def _fmt_num(v: Optional[float], decimals: int = 1) -> str:
     return f"{v:.{decimals}f}"
 
 
+# ── Quality & risk helpers (ported from main.py) ──────────────────────────────
+
+
+def _quality_score(r: dict) -> Optional[int]:
+    """Quality score 0-10: rewards high AND consistent returns/margins."""
+    score = 0
+    roic = r.get("roic")
+    roic_med = r.get("roic_median")
+    roe = r.get("roe")
+    roe_med = r.get("roe_median")
+    gm = r.get("gross_margin")
+    gm_med = r.get("gross_margin_median")
+    om = r.get("operating_margin")
+    om_med = r.get("operating_margin_median")
+    fcfm = r.get("fcf_margin")
+    nm = r.get("net_income_margin")
+    nm_med = r.get("net_margin_median")
+
+    if roic is not None:
+        if roic > 0.10:
+            score += 1
+        if roic_med is not None and roic >= roic_med:
+            score += 1
+    if roe is not None:
+        if roe > 0.15:
+            score += 1
+        if roe_med is not None and roe >= roe_med:
+            score += 1
+    if gm is not None:
+        if gm > 0.30:
+            score += 1
+        if gm_med is not None and gm >= gm_med:
+            score += 1
+    if om is not None:
+        if om > 0.10:
+            score += 1
+        if om_med is not None and om >= om_med:
+            score += 1
+    if fcfm is not None:
+        if fcfm > 0.05:
+            score += 1
+        if nm is not None and nm_med is not None and nm >= nm_med:
+            score += 1
+
+    return score
+
+
+def _risk_score(cand: dict) -> Optional[int]:
+    """Simple risk score 1-10 using debt/equity + current ratio + FCF margin.
+
+    Lower = safer. Uses only ttm_financials data (no Altman Z or vol needed).
+    1-3: low risk, 4-6: moderate, 7-10: high risk.
+    """
+    de = cand.get("debt_to_equity")
+    cr = cand.get("current_ratio")
+    fcfm = cand.get("fcf_margin")
+
+    components = 0
+    total = 0.0
+
+    # Debt/equity component (0-10 scale)
+    if de is not None and de > 0:
+        components += 1
+        if de < 0.3:
+            total += 1  # very low debt
+        elif de < 0.6:
+            total += 2
+        elif de < 1.0:
+            total += 3
+        elif de < 2.0:
+            total += 5
+        elif de < 4.0:
+            total += 7
+        else:
+            total += 10  # dangerously leveraged
+
+    # Current ratio component (0-10 scale)
+    if cr is not None and cr > 0:
+        components += 1
+        if cr > 2.5:
+            total += 1  # very liquid
+        elif cr > 1.5:
+            total += 2
+        elif cr > 1.0:
+            total += 4
+        elif cr > 0.5:
+            total += 7
+        else:
+            total += 10  # distress
+
+    # FCF margin component (0-10 scale)
+    if fcfm is not None:
+        components += 1
+        if fcfm > 0.10:
+            total += 1  # strong FCF
+        elif fcfm > 0.05:
+            total += 2
+        elif fcfm > 0.0:
+            total += 4
+        elif fcfm > -0.10:
+            total += 7
+        else:
+            total += 10  # burning cash
+
+    if components == 0:
+        return None
+    return max(1, min(10, round(total / components)))
+
+
 def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
     """Construct the DeepSeek chat messages. Forces JSON output via prompt."""
     system = (
@@ -164,20 +333,18 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
             f"  - {h['published_at'].strftime('%Y-%m-%d')}  [{h['tier']}] "
             f"{h['category'] or '?'}: {h['headline']}"
             for h in history
-        ) or "  (no prior tier A/B items in last 60 days)"
+        )
+        or "  (no prior tier A/B items in last 60 days)"
     )
 
-    pe = cand.get('price_to_earnings')
-    dy = cand.get('dividend_yield')
-    consensus = cand.get('consensus')
-    buy_pct = cand.get('buy_pct')
-    upside = cand.get('upside_pct')
-    n_analysts = cand.get('total_analysts')
+    pe = cand.get("price_to_earnings")
+    dy = cand.get("dividend_yield")
+    consensus = cand.get("consensus")
+    buy_pct = cand.get("buy_pct")
+    upside = cand.get("upside_pct")
+    n_analysts = cand.get("total_analysts")
 
-    valuation_line = (
-        f"P/E {_fmt_num(pe)}, "
-        f"div yield {_fmt_pct(dy)}"
-    )
+    valuation_line = f"P/E {_fmt_num(pe)}, " f"div yield {_fmt_pct(dy)}"
     if consensus or n_analysts:
         analyst_line = (
             f"{consensus or '?'} (buy {_fmt_pct(buy_pct/100 if buy_pct is not None else None)}, "
@@ -188,9 +355,49 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         analyst_line = "(no analyst coverage)"
 
     price_line = (
-        f"1m {_fmt_pct(price.get('chg_1m'))}, "
-        f"6m {_fmt_pct(price.get('chg_6m'))}"
+        f"1m {_fmt_pct(price.get('chg_1m'))}, " f"6m {_fmt_pct(price.get('chg_6m'))}"
     )
+
+    # ── Enriched financial health section ──────────────────────────────────
+    qs = _quality_score(cand)
+    rs = _risk_score(cand)
+
+    roic = cand.get("roic")
+    roe = cand.get("roe")
+    op_margin = cand.get("operating_margin")
+    fcf_margin = cand.get("fcf_margin")
+    rev_growth = cand.get("revenue_growth")
+    eps_cagr = cand.get("eps_cagr_10")
+    de = cand.get("debt_to_equity")
+    cr = cand.get("current_ratio")
+    pb = cand.get("price_to_book")
+    ps = cand.get("price_to_sales")
+    fwd_eps = cand.get("eps_growth_next_yr")
+
+    quality_str = f"{qs}/10" if qs is not None else "n/a"
+    risk_str = f"{rs}/10" if rs is not None else "n/a"
+    risk_label = ""
+    if rs is not None:
+        if rs <= 3:
+            risk_label = " (low risk)"
+        elif rs <= 6:
+            risk_label = " (moderate)"
+        else:
+            risk_label = " (high risk)"
+
+    health_lines = (
+        f"  ROIC:         {_fmt_pct(roic)}   ROE: {_fmt_pct(roe)}\n"
+        f"  Op. margin:   {_fmt_pct(op_margin)}   FCF margin: {_fmt_pct(fcf_margin)}\n"
+        f"  Revenue gr:   {_fmt_pct(rev_growth)}   EPS CAGR 10Y: {_fmt_pct(eps_cagr)}\n"
+        f"  D/E:          {_fmt_num(de, 2)}   Current ratio: {_fmt_num(cr, 2)}\n"
+        f"  P/B:          {_fmt_num(pb, 2)}x   P/S: {_fmt_num(ps, 2)}x\n"
+        f"  Quality:      {quality_str}   Risk: {risk_str}{risk_label}"
+    )
+
+    if fwd_eps is not None:
+        health_lines += (
+            f"\n  Fwd EPS gr:   {_fmt_pct(fwd_eps)}  ({n_analysts or 0} analysts)"
+        )
 
     user = f"""Announcement
   Ticker:       {cand.get('ticker') or '?'}
@@ -211,6 +418,9 @@ Market context
   Analysts:     {analyst_line}
   Price change: {price_line}
 
+Financial health
+{health_lines}
+
 Investegate AI summary
 {cand.get('summary') or '(not available)'}
 
@@ -228,11 +438,12 @@ Return JSON only — no preamble, no code fence."""
 
     return [
         {"role": "system", "content": system},
-        {"role": "user",   "content": user},
+        {"role": "user", "content": user},
     ]
 
 
 # ── LLM call + persistence ────────────────────────────────────────────────────
+
 
 def _call_deepseek(messages: list[dict]) -> dict:
     client = _get_client()
@@ -252,7 +463,8 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
     conn = pool.getconn()
     try:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE rns_announcements
             SET llm_score        = %s,
                 llm_confidence   = %s,
@@ -262,15 +474,17 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 llm_model        = %s,
                 llm_processed_at = NOW()
             WHERE id = %s
-        """, (
-            _clip_int(result.get("score"), 0, 100),
-            (result.get("confidence") or "").lower()[:10] or None,
-            (result.get("thesis") or "")[:500] or None,
-            (result.get("action") or "").lower()[:10] or None,
-            (result.get("risks") or "")[:500] or None,
-            model,
-            ann_id,
-        ))
+        """,
+            (
+                _clip_int(result.get("score"), 0, 100),
+                (result.get("confidence") or "").lower()[:10] or None,
+                (result.get("thesis") or "")[:500] or None,
+                (result.get("action") or "").lower()[:10] or None,
+                (result.get("risks") or "")[:500] or None,
+                model,
+                ann_id,
+            ),
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -299,10 +513,10 @@ def _rank_one(row_id: int) -> dict:
     return {"id": row_id, **result}
 
 
-def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"),
-                  hours: int = 72) -> dict:
+def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -> dict:
     """Rank recent tier A/B rows that haven't been processed yet."""
-    rows = _query("""
+    rows = _query(
+        """
         SELECT id
         FROM rns_announcements
         WHERE tier = ANY(%s)
@@ -310,7 +524,9 @@ def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"),
           AND published_at >= NOW() - (%s || ' hours')::interval
         ORDER BY published_at DESC
         LIMIT %s
-    """, (list(tiers), str(hours), limit))
+    """,
+        (list(tiers), str(hours), limit),
+    )
 
     ranked = errors = 0
     for r in rows:
@@ -327,10 +543,13 @@ def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"),
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
+
 @router.post("/rank")
-def rank(background_tasks: BackgroundTasks,
-         limit: int = Query(50, ge=1, le=500),
-         hours: int = Query(72, ge=1, le=168)):
+def rank(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(50, ge=1, le=500),
+    hours: int = Query(72, ge=1, le=168),
+):
     """Kick off LLM ranking for pending tier A/B rows."""
     background_tasks.add_task(_rank_pending, limit, ("A", "B"), hours)
     return {"status": "ranking started", "limit": limit, "hours": hours}
@@ -352,7 +571,8 @@ def get_ranked(
     limit: int = Query(50, ge=1, le=500),
 ):
     """LLM-ranked feed for the morning screen."""
-    return _query("""
+    return _query(
+        """
         SELECT id, published_at, ticker, symbol, company_name, headline, url,
                tier, category, score,
                llm_score, llm_confidence, llm_thesis, llm_action, llm_risks,
@@ -363,4 +583,6 @@ def get_ranked(
           AND published_at >= NOW() - (%s || ' hours')::interval
         ORDER BY llm_score DESC, published_at DESC
         LIMIT %s
-    """, (min_llm_score, str(hours), limit))
+    """,
+        (min_llm_score, str(hours), limit),
+    )
