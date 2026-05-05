@@ -112,23 +112,31 @@ def _fetch_ohlcv_batch(symbols, start_date):
     the start date is advanced by 1 day and retried up to _MAX_START_SKIP
     times before giving up.
     """
-    end_date = date.today()
     if not symbols:
         return []
 
+    # Use a fixed end date far enough back that yfinance will have data.
+    # Today's data is rarely available until after market close, and
+    # requesting a range that starts and ends on the same non-trading day
+    # (e.g. bank holiday) yields nothing.  Using yesterday as the base
+    # end date avoids both problems.
+    _END_DATE = date.today() - timedelta(days=1)
+
     # yfinance can return empty or all-NaN when the start date is a
     # non-trading day (weekend or bank holiday).  Advance the start date
-    # up to 5 days to skip past the gap.
+    # up to 5 days to skip past the gap.  The end date is also advanced
+    # so we always request a range of at least 1 day.
     _MAX_START_SKIP = 5
     for skip in range(_MAX_START_SKIP + 1):
         actual_start = start_date + timedelta(days=skip)
-        if actual_start >= end_date:
+        actual_end = _END_DATE + timedelta(days=skip)
+        if actual_start >= actual_end:
             break
         try:
             df = yf.download(
                 tickers=symbols,
                 start=actual_start.isoformat(),
-                end=end_date.isoformat(),
+                end=actual_end.isoformat(),
                 auto_adjust=True,
                 progress=False,
             )
@@ -146,8 +154,9 @@ def _fetch_ohlcv_batch(symbols, start_date):
             return rows  # got usable data
 
         logger.info(
-            "yfinance returned no usable data for start=%s (skip=%d), trying next day",
+            "yfinance returned no usable data for start=%s end=%s (skip=%d), trying next day",
             actual_start,
+            actual_end,
             skip,
         )
 
