@@ -38,6 +38,12 @@ from rns import _run_ingest, _backfill_summaries, _prune_old
 from rns_llm import _rank_pending
 from refresh_rns import _compute_max_pages
 from prices import refresh_prices
+from breakout import (
+    _compute_breakout_scores,
+    _upsert_scores,
+    _upsert_signals,
+    _compute_backtest,
+)
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -270,6 +276,55 @@ def run_price_refresh(token: str = Query(...)):
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         print(f"[render] price refresh FAILED — {error_msg}")
+        traceback.print_exc()
+        return {"status": "error", "error": error_msg}
+
+
+@app.get("/api/breakout/run")
+def run_breakout(token: str = Query(...)):
+    """Compute breakout scores for all stocks.
+
+    Called by cron-job.org ~30 min after the daily price refresh.
+    Requires ?token=<CRON_AUTH_TOKEN>.
+    Runs synchronously — fetches price history, computes indicators, upserts.
+    """
+    if _CRON_TOKEN and token != _CRON_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    t0 = time.time()
+    print(
+        f"[render] breakout computation starting at {datetime.now(timezone.utc).isoformat()}"
+    )
+    try:
+        results = _compute_breakout_scores()
+        if not results:
+            return {
+                "status": "ok",
+                "stocks_processed": 0,
+                "signals": 0,
+                "duration_seconds": round(time.time() - t0, 1),
+                "message": "No stocks processed",
+            }
+
+        scores_count = _upsert_scores(results)
+        signals_count = _upsert_signals(results)
+
+        # Run backtest for today's signals
+        backtest_result = _compute_backtest()
+
+        print(
+            f"[render] breakout done — {len(results)} stocks, {signals_count} signals"
+        )
+        return {
+            "status": "ok",
+            "stocks_processed": len(results),
+            "signals": signals_count,
+            "duration_seconds": round(time.time() - t0, 1),
+            "backtest": backtest_result,
+        }
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        print(f"[render] breakout FAILED — {error_msg}")
         traceback.print_exc()
         return {"status": "error", "error": error_msg}
 
