@@ -115,23 +115,17 @@ def _fetch_ohlcv_batch(symbols, start_date):
     if not symbols:
         return []
 
-    # Use a fixed end date far enough back that yfinance will have data.
-    # Today's data is rarely available until after market close, and
-    # requesting a range that starts and ends on the same non-trading day
-    # (e.g. bank holiday) yields nothing.  Using yesterday as the base
-    # end date avoids both problems.
-    _END_DATE = date.today() - timedelta(days=1)
-
     # yfinance can return empty or all-NaN when the start date is a
     # non-trading day (weekend or bank holiday).  Advance the start date
-    # up to 5 days to skip past the gap.  The end date is also advanced
-    # so we always request a range of at least 1 day.
+    # up to 5 days to skip past the gap.  The end date is always set to
+    # actual_start + 1 so we always request a valid 1-day range.
     _MAX_START_SKIP = 5
     for skip in range(_MAX_START_SKIP + 1):
         actual_start = start_date + timedelta(days=skip)
-        actual_end = _END_DATE + timedelta(days=skip)
-        if actual_start >= actual_end:
+        actual_end = actual_start + timedelta(days=1)
+        if actual_start > date.today():
             break
+
         try:
             df = yf.download(
                 tickers=symbols,
