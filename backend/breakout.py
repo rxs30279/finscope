@@ -1013,7 +1013,7 @@ def run_backfill(days: int = Query(60, ge=1, le=365)):
 
 @router.get("/api/breakout/signals")
 def get_signals(
-    date: Optional[str] = None,
+    target_date_str: Optional[str] = None,
     min_score: Optional[float] = Query(None, ge=0, le=100),
     min_layers: Optional[int] = Query(None, ge=1, le=6),
     sector: Optional[str] = None,
@@ -1021,7 +1021,7 @@ def get_signals(
     limit: int = Query(100, ge=1, le=500),
 ):
     """Return today's breakout signals with company metadata."""
-    target_date = date if date else date.today().isoformat()
+    target_date = target_date_str if target_date_str else date.today().isoformat()
 
     wheres = ["s.date = %s"]
     params = [target_date]
@@ -1092,9 +1092,9 @@ def get_breakout_history(symbol: str, days: int = Query(60, ge=1, le=365)):
 
 
 @router.get("/api/breakout/summary")
-def get_breakout_summary(date: Optional[str] = None):
+def get_breakout_summary(target_date_str: Optional[str] = None):
     """Return aggregate breakout stats for a given date."""
-    target_date = date if date else date.today().isoformat()
+    target_date = target_date_str if target_date_str else date.today().isoformat()
 
     stats = _fetch_all(
         """

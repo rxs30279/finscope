@@ -94,6 +94,10 @@ export default function BreakoutTab({ refreshKey }) {
   const [filterLayers, setFilterLayers] = useState(1);
   const [sortCol, setSortCol] = useState("breakout_score");
   const [sortDir, setSortDir] = useState("desc");
+  const [showBacktest, setShowBacktest] = useState(false);
+  const [backtestStats, setBacktestStats] = useState([]);
+  const [backtestResults, setBacktestResults] = useState([]);
+  const [backtestLoading, setBacktestLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -975,6 +979,334 @@ export default function BreakoutTab({ refreshKey }) {
           </table>
         </div>
       )}
+
+      {/* ── Backtest Section ── */}
+      <div style={{ marginTop: 24 }}>
+        <button
+          onClick={() => {
+            const next = !showBacktest;
+            setShowBacktest(next);
+            if (next && backtestStats.length === 0) {
+              setBacktestLoading(true);
+              Promise.all([
+                fetch(`${API}/breakout/backtest/stats`).then((r) => r.json()),
+                fetch(`${API}/breakout/backtest?limit=100`).then((r) =>
+                  r.json(),
+                ),
+              ])
+                .then(([stats, results]) => {
+                  setBacktestStats(Array.isArray(stats) ? stats : []);
+                  setBacktestResults(Array.isArray(results) ? results : []);
+                  setBacktestLoading(false);
+                })
+                .catch(() => setBacktestLoading(false));
+            }
+          }}
+          style={{
+            background: "none",
+            border: "1px solid #2a2a2a",
+            borderRadius: 4,
+            padding: "8px 16px",
+            color: showBacktest ? "#10b981" : "#94a3b8",
+            cursor: "pointer",
+            fontFamily: "monospace",
+            fontSize: 11,
+            marginBottom: 12,
+          }}
+        >
+          {showBacktest ? "▼" : "▶"} Backtest Results
+          {backtestStats.length > 0 && (
+            <span style={{ color: "#666", marginLeft: 8, fontSize: 10 }}>
+              ({backtestStats.reduce((s, r) => s + Number(r.total || 0), 0)}{" "}
+              signals)
+            </span>
+          )}
+        </button>
+
+        {showBacktest && (
+          <div
+            style={{
+              background: "#111",
+              border: "1px solid #1e1e1e",
+              borderRadius: 3,
+              padding: 16,
+            }}
+          >
+            {backtestLoading ? (
+              <div
+                style={{
+                  color: "#444",
+                  padding: 20,
+                  textAlign: "center",
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                }}
+              >
+                Loading backtest data…
+              </div>
+            ) : backtestStats.length === 0 ? (
+              <div
+                style={{
+                  color: "#444",
+                  padding: 20,
+                  textAlign: "center",
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                }}
+              >
+                No backtest data available yet. Signals need forward price
+                history to be backtested.
+              </div>
+            ) : (
+              <>
+                {/* Score Range Summary Table */}
+                <h4
+                  style={{
+                    fontFamily: "monospace",
+                    fontSize: 11,
+                    color: "#666",
+                    textTransform: "uppercase",
+                    letterSpacing: 1,
+                    margin: "0 0 12px 0",
+                  }}
+                >
+                  Performance by Score Range
+                </h4>
+                <div style={{ overflowX: "auto", marginBottom: 20 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Score Range</th>
+                        <th style={thStyle}>Signals</th>
+                        <th style={thStyle}>Avg 5d</th>
+                        <th style={thStyle}>Avg 10d</th>
+                        <th style={thStyle}>Avg 20d</th>
+                        <th style={thStyle}>Win Rate 5d</th>
+                        <th style={thStyle}>Win Rate 10d</th>
+                        <th style={thStyle}>Win Rate 20d</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {backtestStats.map((r, i) => (
+                        <tr
+                          key={i}
+                          style={{
+                            background: i % 2 === 0 ? "transparent" : "#0a0a0a",
+                          }}
+                        >
+                          <td
+                            style={{
+                              ...tdStyle,
+                              fontWeight: 700,
+                              color: SCORE_COLOR(
+                                Number(r.score_range?.split("-")[0] || 0),
+                              ),
+                            }}
+                          >
+                            {r.score_range}
+                          </td>
+                          <td style={tdStyle}>{r.total}</td>
+                          <td
+                            style={{
+                              ...tdStyle,
+                              color: r.avg_5d > 0 ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            {r.avg_5d != null
+                              ? `${(r.avg_5d * 100).toFixed(1)}%`
+                              : "—"}
+                          </td>
+                          <td
+                            style={{
+                              ...tdStyle,
+                              color: r.avg_10d > 0 ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            {r.avg_10d != null
+                              ? `${(r.avg_10d * 100).toFixed(1)}%`
+                              : "—"}
+                          </td>
+                          <td
+                            style={{
+                              ...tdStyle,
+                              color: r.avg_20d > 0 ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            {r.avg_20d != null
+                              ? `${(r.avg_20d * 100).toFixed(1)}%`
+                              : "—"}
+                          </td>
+                          <td
+                            style={{
+                              ...tdStyle,
+                              color:
+                                r.win_rate_5d > 0.5 ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            {r.win_rate_5d != null
+                              ? `${(r.win_rate_5d * 100).toFixed(0)}%`
+                              : "—"}
+                          </td>
+                          <td
+                            style={{
+                              ...tdStyle,
+                              color:
+                                r.win_rate_10d > 0.5 ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            {r.win_rate_10d != null
+                              ? `${(r.win_rate_10d * 100).toFixed(0)}%`
+                              : "—"}
+                          </td>
+                          <td
+                            style={{
+                              ...tdStyle,
+                              color:
+                                r.win_rate_20d > 0.5 ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            {r.win_rate_20d != null
+                              ? `${(r.win_rate_20d * 100).toFixed(0)}%`
+                              : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Individual Backtest Results */}
+                {backtestResults.length > 0 && (
+                  <>
+                    <h4
+                      style={{
+                        fontFamily: "monospace",
+                        fontSize: 11,
+                        color: "#666",
+                        textTransform: "uppercase",
+                        letterSpacing: 1,
+                        margin: "0 0 12px 0",
+                      }}
+                    >
+                      Recent Backtest Results
+                    </h4>
+                    <div style={{ overflowX: "auto" }}>
+                      <table
+                        style={{ width: "100%", borderCollapse: "collapse" }}
+                      >
+                        <thead>
+                          <tr>
+                            <th style={thStyle}>Date</th>
+                            <th style={thStyle}>Symbol</th>
+                            <th style={thStyle}>Score</th>
+                            <th style={thStyle}>Layers</th>
+                            <th style={thStyle}>Fwd 5d</th>
+                            <th style={thStyle}>Fwd 10d</th>
+                            <th style={thStyle}>Fwd 20d</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backtestResults.map((r, i) => (
+                            <tr
+                              key={i}
+                              style={{
+                                background:
+                                  i % 2 === 0 ? "transparent" : "#0a0a0a",
+                              }}
+                            >
+                              <td style={tdStyle}>
+                                {r.signal_date?.slice(0, 10)}
+                              </td>
+                              <td
+                                style={{
+                                  ...tdStyle,
+                                  color: "#f97316",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {r.symbol}
+                                {r.name ? (
+                                  <span
+                                    style={{
+                                      color: "#666",
+                                      fontWeight: 400,
+                                      marginLeft: 6,
+                                      fontSize: 10,
+                                    }}
+                                  >
+                                    {r.name}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td style={tdStyle}>
+                                <ScoreBadge score={r.breakout_score} />
+                              </td>
+                              <td
+                                style={{
+                                  ...tdStyle,
+                                  color:
+                                    r.layers_passed >= 3 ? "#10b981" : "#666",
+                                }}
+                              >
+                                {r.layers_passed}
+                              </td>
+                              <td
+                                style={{
+                                  ...tdStyle,
+                                  color:
+                                    r.forward_5d > 0
+                                      ? "#10b981"
+                                      : r.forward_5d < 0
+                                        ? "#ef4444"
+                                        : "#666",
+                                }}
+                              >
+                                {r.forward_5d != null
+                                  ? `${(r.forward_5d * 100).toFixed(1)}%`
+                                  : "—"}
+                              </td>
+                              <td
+                                style={{
+                                  ...tdStyle,
+                                  color:
+                                    r.forward_10d > 0
+                                      ? "#10b981"
+                                      : r.forward_10d < 0
+                                        ? "#ef4444"
+                                        : "#666",
+                                }}
+                              >
+                                {r.forward_10d != null
+                                  ? `${(r.forward_10d * 100).toFixed(1)}%`
+                                  : "—"}
+                              </td>
+                              <td
+                                style={{
+                                  ...tdStyle,
+                                  color:
+                                    r.forward_20d > 0
+                                      ? "#10b981"
+                                      : r.forward_20d < 0
+                                        ? "#ef4444"
+                                        : "#666",
+                                }}
+                              >
+                                {r.forward_20d != null
+                                  ? `${(r.forward_20d * 100).toFixed(1)}%`
+                                  : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -1123,6 +1123,54 @@ def backfill_summaries(
     return {"status": "summary backfill started", "limit": limit}
 
 
+# ── Market-cap cache (in-memory, 15 min TTL) ──────────────────────────────────
+
+_MC_CACHE: dict[str, tuple[float, float]] = {}  # symbol -> (market_cap, timestamp)
+_MC_CACHE_TTL = 900  # 15 minutes
+
+
+def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
+    """Fetch market caps from Yahoo Finance for a batch of symbols.
+
+    Uses ThreadPoolExecutor for concurrency. Returns {symbol: market_cap}.
+    """
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    now = time.time()
+    result: dict[str, float] = {}
+
+    # Check cache first
+    uncached: list[str] = []
+    for sym in symbols:
+        if sym in _MC_CACHE and now - _MC_CACHE[sym][1] < _MC_CACHE_TTL:
+            result[sym] = _MC_CACHE[sym][0]
+        else:
+            uncached.append(sym)
+
+    if not uncached:
+        return result
+
+    def _fetch_one(sym: str) -> tuple[str, float | None]:
+        try:
+            ticker = yf.Ticker(sym)
+            info = ticker.info if ticker else {}
+            mc = info.get("marketCap") if info else None
+            return sym, mc
+        except Exception:
+            return sym, None
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch_one, sym): sym for sym in uncached}
+        for future in as_completed(futures):
+            sym, mc = future.result()
+            if mc is not None:
+                result[sym] = mc
+                _MC_CACHE[sym] = (mc, now)
+
+    return result
+
+
 @router.get("/market-caps")
 def get_market_caps(
     hours: int = Query(72, ge=1, le=168),
@@ -1130,15 +1178,64 @@ def get_market_caps(
 ):
     """Fetch market caps for rows that don't have one in the DB yet.
 
-    Returns a dict of {ticker_or_symbol: market_cap} for rows in the given
-    window that are missing market_cap. The frontend calls this after the
-    initial page load to fill in the column without blocking the main query.
+    Returns a dict of {key: market_cap} where key is the symbol (e.g. ALBA.L)
+    if available, otherwise the ticker (e.g. ALBA). The frontend uses
+    `r.symbol || r.ticker` as the lookup key, so this matches.
 
-    Currently returns {} — market caps come from the DB (ttm_financials) or
-    are filled client-side. Yahoo Finance lookups were removed because they
-    caused timeouts on the server.
+    Uses Yahoo Finance with a ThreadPoolExecutor and in-memory cache.
     """
-    return {}
+    # Find rows in the window that are missing market_cap in ttm_financials.
+    # Two cases:
+    #   1. symbol IS NOT NULL but no matching ttm_financials row
+    #   2. symbol IS NULL (ticker not resolved in company_metadata) — use ticker
+    rows = _query(
+        """
+        SELECT DISTINCT
+            COALESCE(r.symbol, r.ticker) AS lookup_key,
+            r.symbol,
+            r.ticker
+        FROM rns_announcements r
+        LEFT JOIN ttm_financials f ON f.company_symbol = r.symbol
+        WHERE r.published_at >= NOW() - (%s || ' hours')::interval
+          AND r.score >= %s
+          AND r.ticker IS NOT NULL
+          AND f.market_cap IS NULL
+        LIMIT 100
+    """,
+        (str(hours), min_score),
+    )
+
+    if not rows:
+        return {}
+
+    # Build the list of Yahoo Finance symbols to fetch.
+    # For rows with a resolved symbol (e.g. KIE.L) use it directly.
+    # For rows with only a ticker (e.g. ALBA), append .L
+    yahoo_symbols: list[str] = []
+    key_to_yahoo: dict[str, str] = {}
+    for r in rows:
+        key = r["lookup_key"]
+        if not key:
+            continue
+        if r["symbol"]:
+            yahoo_sym = r["symbol"]
+        else:
+            # Ticker-only: strip trailing dots and append .L
+            ticker = r["ticker"].rstrip(".")
+            yahoo_sym = f"{ticker}.L"
+        yahoo_symbols.append(yahoo_sym)
+        key_to_yahoo[key] = yahoo_sym
+
+    mc_map = _fetch_market_caps_batch(yahoo_symbols)
+
+    # Re-key the result using the original lookup_key (symbol or ticker)
+    # so the frontend can find it with r.symbol || r.ticker
+    result: dict[str, float] = {}
+    for key, yahoo_sym in key_to_yahoo.items():
+        if yahoo_sym in mc_map:
+            result[key] = mc_map[yahoo_sym]
+
+    return result
 
 
 @router.get("/pipeline/status")
