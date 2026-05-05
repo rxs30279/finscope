@@ -84,6 +84,19 @@ def _upsert_rows(rows):
         pool.putconn(conn)
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _next_trading_day(d: date) -> date:
+    """If *d* falls on a weekend, advance to the following Monday."""
+    # Monday=0 … Sunday=6
+    if d.weekday() == 5:  # Saturday
+        return d + timedelta(days=2)
+    if d.weekday() == 6:  # Sunday
+        return d + timedelta(days=1)
+    return d
+
+
 # ── Price fetch ───────────────────────────────────────────────────────────────
 
 _BATCH_SIZE = 25  # yfinance chokes on large batches — keep small
@@ -305,8 +318,8 @@ def refresh_prices():
     groups = {}  # start_date -> [symbols]
     for sym in all_symbols:
         if sym in latest and latest[sym] is not None:
-            # Top-up from latest stored date
-            top_up_start = latest[sym] + timedelta(days=1)
+            # Top-up from latest stored date (skip weekends)
+            top_up_start = _next_trading_day(latest[sym] + timedelta(days=1))
             groups.setdefault(top_up_start, []).append(sym)
             # Backfill if we don't have 5Y of history
             if sym in earliest and earliest[sym] > target_start:
@@ -316,7 +329,7 @@ def refresh_prices():
 
     total_rows = 0
     for start_date, symbols in groups.items():
-        if start_date >= date.today():
+        if start_date > date.today():
             continue  # already up to date
         rows = _fetch_ohlcv(symbols, start_date)
         total_rows += _upsert_rows(rows)
@@ -358,10 +371,10 @@ def refresh_symbol(symbol: str):
         fetched = _fetch_ohlcv([symbol], target_start)
         total += _upsert_rows(fetched)
 
-    # Top-up from latest stored date to today
+    # Top-up from latest stored date to today (skip weekends)
     if latest is not None:
-        top_up_start = latest + timedelta(days=1)
-        if top_up_start < date.today():
+        top_up_start = _next_trading_day(latest + timedelta(days=1))
+        if top_up_start <= date.today():
             fetched = _fetch_ohlcv([symbol], top_up_start)
             total += _upsert_rows(fetched)
 
