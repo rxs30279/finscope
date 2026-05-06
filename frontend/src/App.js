@@ -24,6 +24,7 @@ import {
   loadTargets,
   saveTargets,
 } from "./utils";
+import { useIsMobile } from "./useMediaQuery";
 import Sidebar from "./components/Sidebar";
 import RotationTab from "./components/RotationTab";
 import BreadthTab from "./components/BreadthTab";
@@ -2350,9 +2351,11 @@ function Screener({
 
 // ── App Shell ─────────────────────────────────────────────────────────────────
 export default function App() {
+  const isMobile = useIsMobile();
   const [page, setPage] = useState("screener"); // screener | watchlist | rotation | breadth | cross-asset | signals | company
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [watchlist, setWatchlist] = useState(() => new Set(loadWatchlist()));
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     saveWatchlist([...watchlist]);
@@ -2508,7 +2511,7 @@ export default function App() {
         style={{
           background: "#0a0a0a",
           borderBottom: "1px solid #2a2a2a",
-          padding: "0 32px",
+          padding: isMobile ? "0 12px" : "0 32px",
           display: "flex",
           alignItems: "center",
           height: 52,
@@ -2517,241 +2520,288 @@ export default function App() {
           zIndex: 100,
         }}
       >
-        <button
-          onClick={() => setSidebarCollapsed((v) => !v)}
-          title="Toggle sidebar"
-          style={{
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            padding: "4px 8px 4px 0",
-            marginRight: 8,
-            marginLeft: -20,
-            display: "flex",
-            alignItems: "center",
-            opacity: sidebarCollapsed ? 0.35 : 0.75,
-            transition: "opacity 0.2s",
-          }}
-        >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
+        {/* Hamburger / Sidebar toggle */}
+        {isMobile ? (
+          <button
+            onClick={() => setMobileMenuOpen((v) => !v)}
+            title="Menu"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: "4px 8px",
+              marginRight: 8,
+              display: "flex",
+              alignItems: "center",
+              color: "#f1f5f9",
+            }}
           >
-            <rect
-              x="2"
-              y="2"
+            <svg
               width="20"
               height="20"
-              rx="3"
-              stroke="#f1f5f9"
-              strokeWidth="1.5"
-            />
-            <line
-              x1="8"
-              y1="2"
-              x2="8"
-              y2="22"
-              stroke="#f1f5f9"
-              strokeWidth="1.5"
-            />
-            <line
-              x1="11"
-              y1="7"
-              x2="19"
-              y2="7"
-              stroke="#f1f5f9"
-              strokeWidth="1.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
               strokeLinecap="round"
-            />
-            <line
-              x1="11"
-              y1="12"
-              x2="19"
-              y2="12"
-              stroke="#f1f5f9"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-            <line
-              x1="11"
-              y1="17"
-              x2="16"
-              y2="17"
-              stroke="#f1f5f9"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-            />
-          </svg>
-        </button>
+            >
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
+        ) : (
+          <button
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            title="Toggle sidebar"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: "4px 8px 4px 0",
+              marginRight: 8,
+              marginLeft: -20,
+              display: "flex",
+              alignItems: "center",
+              opacity: sidebarCollapsed ? 0.35 : 0.75,
+              transition: "opacity 0.2s",
+            }}
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <rect
+                x="2"
+                y="2"
+                width="20"
+                height="20"
+                rx="3"
+                stroke="#f1f5f9"
+                strokeWidth="1.5"
+              />
+              <line
+                x1="8"
+                y1="2"
+                x2="8"
+                y2="22"
+                stroke="#f1f5f9"
+                strokeWidth="1.5"
+              />
+              <line
+                x1="11"
+                y1="7"
+                x2="19"
+                y2="7"
+                stroke="#f1f5f9"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <line
+                x1="11"
+                y1="12"
+                x2="19"
+                y2="12"
+                stroke="#f1f5f9"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <line
+                x1="11"
+                y1="17"
+                x2="16"
+                y2="17"
+                stroke="#f1f5f9"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        )}
         <div
-          onClick={() => setPage("screener")}
+          onClick={() => {
+            setPage("screener");
+            setMobileMenuOpen(false);
+          }}
           style={{
             fontFamily: '"DM Sans", sans-serif',
-            fontSize: 12,
+            fontSize: isMobile ? 10 : 12,
             fontWeight: 600,
             color: "#f97316",
             letterSpacing: 2,
             textTransform: "uppercase",
-            marginRight: 32,
+            marginRight: isMobile ? 8 : 32,
             cursor: "pointer",
             padding: "4px 10px",
             borderRadius: 4,
             background: "linear-gradient(135deg, #2a1a00 0%, #1a1200 100%)",
             boxShadow: "0 0 12px rgba(249, 115, 22, 0.15)",
+            whiteSpace: "nowrap",
           }}
         >
-          Alpha Move AI
+          {isMobile ? "AMA" : "Alpha Move AI"}
         </div>
-        <div style={{ display: "flex", gap: 2 }}>
-          {NAV_GROUPS.map((g) => {
-            if (!g.children) {
-              return (
-                <button
-                  key={g.id}
-                  style={{
-                    ...S.navBtn,
-                    ...(page === g.id ? S.navBtnActive : {}),
-                  }}
-                  onClick={() => setPage(g.id)}
-                >
-                  {g.label}
-                </button>
-              );
-            }
-            const groupActive = g.children.some((c) => c.id === page);
-            return (
-              <div
-                key={g.id}
-                style={{ position: "relative" }}
-                onMouseEnter={() => setOpenMenu(g.id)}
-                onMouseLeave={() => setOpenMenu(null)}
-              >
-                <button
-                  style={{
-                    ...S.navBtn,
-                    ...(groupActive ? S.navBtnActive : {}),
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 4,
-                  }}
-                >
-                  {g.label} <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
-                </button>
-                {openMenu === g.id && (
-                  <div
+
+        {/* Desktop nav links */}
+        {!isMobile && (
+          <div style={{ display: "flex", gap: 2 }}>
+            {NAV_GROUPS.map((g) => {
+              if (!g.children) {
+                return (
+                  <button
+                    key={g.id}
                     style={{
-                      position: "absolute",
-                      top: "100%",
-                      left: 0,
-                      background: "#141414",
-                      border: "1px solid #2a2a2a",
-                      borderRadius: 4,
-                      minWidth: 160,
-                      zIndex: 200,
-                      boxShadow: "0 8px 24px rgba(0,0,0,0.8)",
-                      paddingBottom: 4,
+                      ...S.navBtn,
+                      ...(page === g.id ? S.navBtnActive : {}),
+                    }}
+                    onClick={() => setPage(g.id)}
+                  >
+                    {g.label}
+                  </button>
+                );
+              }
+              const groupActive = g.children.some((c) => c.id === page);
+              return (
+                <div
+                  key={g.id}
+                  style={{ position: "relative" }}
+                  onMouseEnter={() => setOpenMenu(g.id)}
+                  onMouseLeave={() => setOpenMenu(null)}
+                >
+                  <button
+                    style={{
+                      ...S.navBtn,
+                      ...(groupActive ? S.navBtnActive : {}),
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
                     }}
                   >
-                    {g.children.map((c, idx) => {
-                      if (c.heading) {
+                    {g.label}{" "}
+                    <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
+                  </button>
+                  {openMenu === g.id && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "100%",
+                        left: 0,
+                        background: "#141414",
+                        border: "1px solid #2a2a2a",
+                        borderRadius: 4,
+                        minWidth: 160,
+                        zIndex: 200,
+                        boxShadow: "0 8px 24px rgba(0,0,0,0.8)",
+                        paddingBottom: 4,
+                      }}
+                    >
+                      {g.children.map((c, idx) => {
+                        if (c.heading) {
+                          return (
+                            <div
+                              key={"h-" + idx}
+                              style={{
+                                padding: "10px 16px 4px",
+                                color: "#555",
+                                fontSize: 9,
+                                fontFamily: "monospace",
+                                textTransform: "uppercase",
+                                letterSpacing: 1.5,
+                                borderTop:
+                                  idx === 0 ? "none" : "1px solid #1f1f1f",
+                                marginTop: idx === 0 ? 0 : 4,
+                              }}
+                            >
+                              {c.heading}
+                            </div>
+                          );
+                        }
                         return (
-                          <div
-                            key={"h-" + idx}
+                          <button
+                            key={c.id}
+                            onClick={() => {
+                              setPage(c.id);
+                              setOpenMenu(null);
+                            }}
                             style={{
-                              padding: "10px 16px 4px",
-                              color: "#555",
-                              fontSize: 9,
-                              fontFamily: "monospace",
-                              textTransform: "uppercase",
-                              letterSpacing: 1.5,
-                              borderTop:
-                                idx === 0 ? "none" : "1px solid #1f1f1f",
-                              marginTop: idx === 0 ? 0 : 4,
+                              ...S.navBtn,
+                              ...(page === c.id ? S.navBtnActive : {}),
+                              display: "block",
+                              width: "100%",
+                              textAlign: "left",
+                              borderRadius: 0,
+                              padding: "10px 16px",
                             }}
                           >
-                            {c.heading}
-                          </div>
+                            {c.label}
+                          </button>
                         );
-                      }
-                      return (
-                        <button
-                          key={c.id}
-                          onClick={() => {
-                            setPage(c.id);
-                            setOpenMenu(null);
-                          }}
-                          style={{
-                            ...S.navBtn,
-                            ...(page === c.id ? S.navBtnActive : {}),
-                            display: "block",
-                            width: "100%",
-                            textAlign: "left",
-                            borderRadius: 0,
-                            padding: "10px 16px",
-                          }}
-                        >
-                          {c.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Right side: buttons + search */}
         <div
           style={{
             marginLeft: "auto",
             display: "flex",
             alignItems: "center",
-            gap: 12,
+            gap: isMobile ? 6 : 12,
           }}
         >
-          {lastUpdated && (
+          {!isMobile && lastUpdated && (
             <span
               style={{ color: "#444", fontSize: 10, fontFamily: "monospace" }}
             >
               Updated {lastUpdated}
             </span>
           )}
-          <button
-            onClick={handleRefresh}
-            style={{
-              background: "#1a1a1a",
-              color: "#666",
-              border: "1px solid #2a2a2a",
-              padding: "4px 10px",
-              borderRadius: 2,
-              fontFamily: "monospace",
-              fontSize: 10,
-              cursor: "pointer",
-            }}
-          >
-            ↻ Market
-          </button>
-          <button
-            onClick={handlePriceRefresh}
-            disabled={priceRefreshing}
-            title="Refresh price history"
-            style={{
-              background: "#1a1a1a",
-              color: priceRefreshing ? "#f97316" : "#666",
-              border: "1px solid #2a2a2a",
-              padding: "4px 10px",
-              borderRadius: 2,
-              fontFamily: "monospace",
-              fontSize: 10,
-              cursor: priceRefreshing ? "not-allowed" : "pointer",
-            }}
-          >
-            <span className={priceRefreshing ? "spinning" : ""}>↻</span>
-            {priceRefreshing ? " Refreshing…" : " Stock Prices"}
-          </button>
-          {priceToast && (
+          {!isMobile && (
+            <button
+              onClick={handleRefresh}
+              style={{
+                background: "#1a1a1a",
+                color: "#666",
+                border: "1px solid #2a2a2a",
+                padding: "4px 10px",
+                borderRadius: 2,
+                fontFamily: "monospace",
+                fontSize: 10,
+                cursor: "pointer",
+              }}
+            >
+              ↻ Market
+            </button>
+          )}
+          {!isMobile && (
+            <button
+              onClick={handlePriceRefresh}
+              disabled={priceRefreshing}
+              title="Refresh price history"
+              style={{
+                background: "#1a1a1a",
+                color: priceRefreshing ? "#f97316" : "#666",
+                border: "1px solid #2a2a2a",
+                padding: "4px 10px",
+                borderRadius: 2,
+                fontFamily: "monospace",
+                fontSize: 10,
+                cursor: priceRefreshing ? "not-allowed" : "pointer",
+              }}
+            >
+              <span className={priceRefreshing ? "spinning" : ""}>↻</span>
+              {priceRefreshing ? "…" : " Prices"}
+            </button>
+          )}
+          {!isMobile && priceToast && (
             <span
               style={{
                 fontSize: 10,
@@ -2764,7 +2814,7 @@ export default function App() {
           )}
           <div style={{ position: "relative" }}>
             <input
-              placeholder="Search ticker or company…"
+              placeholder={isMobile ? "Search…" : "Search ticker or company…"}
               value={searchQ}
               onChange={(e) => {
                 doSearch(e.target.value);
@@ -2772,10 +2822,20 @@ export default function App() {
               }}
               onFocus={() => setShowSearch(true)}
               onBlur={() => setTimeout(() => setShowSearch(false), 200)}
-              style={S.searchInput}
+              style={{
+                ...S.searchInput,
+                width: isMobile ? 120 : 260,
+                fontSize: isMobile ? 11 : 13,
+              }}
             />
             {showSearch && searchResults.length > 0 && (
-              <div style={S.dropdown}>
+              <div
+                style={{
+                  ...S.dropdown,
+                  width: isMobile ? 280 : 420,
+                  right: isMobile ? -60 : 0,
+                }}
+              >
                 {searchResults.map((r) => (
                   <div
                     key={r.symbol}
@@ -2812,17 +2872,184 @@ export default function App() {
         </div>
       </nav>
 
+      {/* Mobile drawer */}
+      {isMobile && mobileMenuOpen && (
+        <>
+          <div
+            onClick={() => setMobileMenuOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.6)",
+              zIndex: 99,
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: 52,
+              left: 0,
+              bottom: 0,
+              width: 260,
+              background: "#0d0d0d",
+              borderRight: "1px solid #2a2a2a",
+              zIndex: 100,
+              overflowY: "auto",
+              padding: "8px 0",
+            }}
+          >
+            {NAV_GROUPS.map((g) => {
+              if (!g.children) {
+                return (
+                  <button
+                    key={g.id}
+                    onClick={() => {
+                      setPage(g.id);
+                      setMobileMenuOpen(false);
+                    }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      background: page === g.id ? "#1f1200" : "none",
+                      border: "none",
+                      padding: "12px 20px",
+                      color: page === g.id ? "#f97316" : "#999",
+                      cursor: "pointer",
+                      fontSize: 13,
+                      fontFamily: "monospace",
+                      fontWeight: page === g.id ? 700 : 400,
+                    }}
+                  >
+                    {g.label}
+                  </button>
+                );
+              }
+              return (
+                <div key={g.id}>
+                  <div
+                    style={{
+                      padding: "12px 20px 4px",
+                      color: "#555",
+                      fontSize: 10,
+                      fontFamily: "monospace",
+                      textTransform: "uppercase",
+                      letterSpacing: 1.5,
+                    }}
+                  >
+                    {g.label}
+                  </div>
+                  {g.children.map((c) => {
+                    if (c.heading) {
+                      return (
+                        <div
+                          key={"h-" + c.heading}
+                          style={{
+                            padding: "8px 20px 2px",
+                            color: "#444",
+                            fontSize: 9,
+                            fontFamily: "monospace",
+                            textTransform: "uppercase",
+                            letterSpacing: 1,
+                          }}
+                        >
+                          {c.heading}
+                        </div>
+                      );
+                    }
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          setPage(c.id);
+                          setMobileMenuOpen(false);
+                        }}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          background: page === c.id ? "#1f1200" : "none",
+                          border: "none",
+                          padding: "10px 20px 10px 28px",
+                          color: page === c.id ? "#f97316" : "#999",
+                          cursor: "pointer",
+                          fontSize: 12,
+                          fontFamily: "monospace",
+                          fontWeight: page === c.id ? 700 : 400,
+                        }}
+                      >
+                        {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            <div
+              style={{
+                borderTop: "1px solid #1f1f1f",
+                marginTop: 12,
+                paddingTop: 12,
+              }}
+            >
+              <button
+                onClick={handleRefresh}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  padding: "10px 20px",
+                  color: "#666",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontFamily: "monospace",
+                }}
+              >
+                ↻ Refresh Market Data
+              </button>
+              <button
+                onClick={handlePriceRefresh}
+                disabled={priceRefreshing}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  padding: "10px 20px",
+                  color: priceRefreshing ? "#f97316" : "#666",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontFamily: "monospace",
+                }}
+              >
+                ↻ {priceRefreshing ? "Refreshing…" : "Refresh Stock Prices"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Body: sidebar + main */}
       <div style={{ display: "flex", maxWidth: 1600, margin: "0 auto" }}>
         <div
           style={{
             flexShrink: 0,
-            display: showSidebar && !sidebarCollapsed ? "block" : "none",
+            display:
+              showSidebar && !sidebarCollapsed && !isMobile ? "block" : "none",
           }}
         >
           <Sidebar refreshKey={refreshKey} />
         </div>
-        <main style={{ flex: 1, padding: "32px 24px", minWidth: 0 }}>
+        <main
+          style={{
+            flex: 1,
+            padding: isMobile ? "16px 12px" : "32px 24px",
+            minWidth: 0,
+          }}
+        >
           <div style={{ display: page === "screener" ? "block" : "none" }}>
             <Screener
               onSelect={selectCompany}

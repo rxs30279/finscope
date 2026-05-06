@@ -1,4 +1,17 @@
 import { useState, useEffect, useMemo } from "react";
+
+// ── Mobile detection hook ─────────────────────────────────────────────────────
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" && window.innerWidth < 768,
+  );
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isMobile;
+}
 import { API } from "../utils";
 
 const TIER_COLORS = {
@@ -181,6 +194,7 @@ function KeywordTags({ hits }) {
 }
 
 export default function RnsTab({ refreshKey, onSelect }) {
+  const isMobile = useIsMobile();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -192,6 +206,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const [tierFilter, setTierFilter] = useState("all"); // all | A | B | C
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState("llm"); // 'llm' | 'time'
+  const [bannersCollapsed, setBannersCollapsed] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -382,7 +397,14 @@ export default function RnsTab({ refreshKey, onSelect }) {
       <td style={S.td}>
         <TierBadge tier={r.tier} />
       </td>
-      <td style={{ ...S.td, textAlign: "right", whiteSpace: "nowrap" }}>
+      <td
+        style={{
+          ...S.td,
+          textAlign: "right",
+          whiteSpace: "nowrap",
+          display: isMobile ? "none" : undefined,
+        }}
+      >
         {r.market_cap != null ? fmtCurrency(r.market_cap) : "—"}
       </td>
       <td style={{ ...S.td, fontWeight: 700, whiteSpace: "nowrap" }}>
@@ -420,7 +442,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
         style={{
           ...S.td,
           color: "#94a3b8",
-          maxWidth: 180,
+          maxWidth: isMobile ? 80 : 120,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -428,7 +450,13 @@ export default function RnsTab({ refreshKey, onSelect }) {
       >
         {r.company_name || "—"}
       </td>
-      <td style={S.td}>
+      <td
+        style={{
+          ...S.td,
+          maxWidth: isMobile ? "none" : 400,
+          minWidth: isMobile ? 180 : 250,
+        }}
+      >
         <a
           href={r.url}
           target="_blank"
@@ -462,17 +490,41 @@ export default function RnsTab({ refreshKey, onSelect }) {
         )}
       </td>
       <td
-        style={{ ...S.td, color: "#666", fontSize: 11, whiteSpace: "nowrap" }}
+        style={{
+          ...S.td,
+          color: "#666",
+          fontSize: 11,
+          whiteSpace: "nowrap",
+          display: isMobile ? "none" : undefined,
+        }}
       >
         {CATEGORY_LABELS[r.category] || r.category || "—"}
       </td>
-      <td style={{ ...S.td, textAlign: "right" }}>
+      <td
+        style={{
+          ...S.td,
+          textAlign: "right",
+          display: isMobile ? "none" : undefined,
+        }}
+      >
         <ScoreCell value={r.score} />
       </td>
-      <td style={{ ...S.td, textAlign: "right" }}>
+      <td
+        style={{
+          ...S.td,
+          textAlign: "right",
+          display: isMobile ? "none" : undefined,
+        }}
+      >
         <ScoreCell value={r.llm_score} />
       </td>
-      <td style={{ ...S.td, textAlign: "center" }}>
+      <td
+        style={{
+          ...S.td,
+          textAlign: "center",
+          display: isMobile ? "none" : undefined,
+        }}
+      >
         <ActionPill action={r.llm_action} />
       </td>
     </tr>
@@ -484,16 +536,25 @@ export default function RnsTab({ refreshKey, onSelect }) {
       <div
         style={{
           display: "flex",
+          flexDirection: isMobile ? "column" : "row",
           justifyContent: "space-between",
-          alignItems: "center",
+          alignItems: isMobile ? "stretch" : "center",
+          gap: isMobile ? 8 : 0,
           marginBottom: 20,
         }}
       >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: isMobile ? "column" : "row",
+            alignItems: isMobile ? "flex-start" : "baseline",
+            gap: isMobile ? 4 : 16,
+          }}
+        >
           <h2
             style={{
               fontFamily: "monospace",
-              fontSize: 14,
+              fontSize: isMobile ? 12 : 14,
               color: "#f97316",
               textTransform: "uppercase",
               letterSpacing: 2,
@@ -560,105 +621,154 @@ export default function RnsTab({ refreshKey, onSelect }) {
         </div>
       </div>
 
-      {/* Summary bar */}
-      <div style={{ display: "flex", gap: 16, marginBottom: 20 }}>
-        <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
-          <div
+      {/* Summary bar — collapsible */}
+      <div
+        style={{
+          ...S.card,
+          marginBottom: 16,
+          padding: bannersCollapsed ? "6px 16px" : 16,
+          cursor: "pointer",
+          userSelect: "none",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          transition: "padding 0.2s",
+        }}
+        onClick={() => setBannersCollapsed(!bannersCollapsed)}
+      >
+        <span
+          style={{
+            fontSize: 10,
+            color: "#555",
+            fontFamily: "monospace",
+            letterSpacing: 1,
+            textTransform: "uppercase",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {bannersCollapsed ? "Summary" : "Summary"}
+          <span style={{ marginLeft: 8, color: "#444", fontSize: 9 }}>
+            {bannersCollapsed ? "▸ show" : "▾ hide"}
+          </span>
+        </span>
+        {bannersCollapsed && (
+          <span
             style={{
               fontSize: 10,
               color: "#555",
-              letterSpacing: 1,
-              textTransform: "uppercase",
               fontFamily: "monospace",
+              marginLeft: 8,
             }}
           >
-            Tier A — Significant
-          </div>
-          <div
-            style={{
-              fontSize: 28,
-              color: "#f97316",
-              fontFamily: "monospace",
-              fontWeight: 700,
-              marginTop: 4,
-            }}
-          >
-            {tierA.length}
-          </div>
-        </div>
-        <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
-          <div
-            style={{
-              fontSize: 10,
-              color: "#555",
-              letterSpacing: 1,
-              textTransform: "uppercase",
-              fontFamily: "monospace",
-            }}
-          >
-            Tier B — Noteworthy
-          </div>
-          <div
-            style={{
-              fontSize: 28,
-              color: "#60a5fa",
-              fontFamily: "monospace",
-              fontWeight: 700,
-              marginTop: 4,
-            }}
-          >
-            {tierB.length}
-          </div>
-        </div>
-        <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
-          <div
-            style={{
-              fontSize: 10,
-              color: "#555",
-              letterSpacing: 1,
-              textTransform: "uppercase",
-              fontFamily: "monospace",
-            }}
-          >
-            AI-Ranked
-          </div>
-          <div
-            style={{
-              fontSize: 28,
-              color: "#10b981",
-              fontFamily: "monospace",
-              fontWeight: 700,
-              marginTop: 4,
-            }}
-          >
-            {ranked.length}
-          </div>
-        </div>
-        <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
-          <div
-            style={{
-              fontSize: 10,
-              color: "#555",
-              letterSpacing: 1,
-              textTransform: "uppercase",
-              fontFamily: "monospace",
-            }}
-          >
-            Total in feed
-          </div>
-          <div
-            style={{
-              fontSize: 28,
-              color: "#e5e5e5",
-              fontFamily: "monospace",
-              fontWeight: 700,
-              marginTop: 4,
-            }}
-          >
-            {rows.length}
-          </div>
-        </div>
+            Tier A: <span style={{ color: "#f97316" }}>{tierA.length}</span>
+            {" · "}Tier B:{" "}
+            <span style={{ color: "#60a5fa" }}>{tierB.length}</span>
+            {" · "}AI: <span style={{ color: "#10b981" }}>{ranked.length}</span>
+            {" · "}Total:{" "}
+            <span style={{ color: "#e5e5e5" }}>{rows.length}</span>
+          </span>
+        )}
       </div>
+      {!bannersCollapsed && (
+        <div style={{ display: "flex", gap: 16, marginBottom: 20 }}>
+          <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
+            <div
+              style={{
+                fontSize: 10,
+                color: "#555",
+                letterSpacing: 1,
+                textTransform: "uppercase",
+                fontFamily: "monospace",
+              }}
+            >
+              Tier A — Significant
+            </div>
+            <div
+              style={{
+                fontSize: 28,
+                color: "#f97316",
+                fontFamily: "monospace",
+                fontWeight: 700,
+                marginTop: 4,
+              }}
+            >
+              {tierA.length}
+            </div>
+          </div>
+          <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
+            <div
+              style={{
+                fontSize: 10,
+                color: "#555",
+                letterSpacing: 1,
+                textTransform: "uppercase",
+                fontFamily: "monospace",
+              }}
+            >
+              Tier B — Noteworthy
+            </div>
+            <div
+              style={{
+                fontSize: 28,
+                color: "#60a5fa",
+                fontFamily: "monospace",
+                fontWeight: 700,
+                marginTop: 4,
+              }}
+            >
+              {tierB.length}
+            </div>
+          </div>
+          <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
+            <div
+              style={{
+                fontSize: 10,
+                color: "#555",
+                letterSpacing: 1,
+                textTransform: "uppercase",
+                fontFamily: "monospace",
+              }}
+            >
+              AI-Ranked
+            </div>
+            <div
+              style={{
+                fontSize: 28,
+                color: "#10b981",
+                fontFamily: "monospace",
+                fontWeight: 700,
+                marginTop: 4,
+              }}
+            >
+              {ranked.length}
+            </div>
+          </div>
+          <div style={{ ...S.card, flex: 1, textAlign: "center" }}>
+            <div
+              style={{
+                fontSize: 10,
+                color: "#555",
+                letterSpacing: 1,
+                textTransform: "uppercase",
+                fontFamily: "monospace",
+              }}
+            >
+              Total in feed
+            </div>
+            <div
+              style={{
+                fontSize: 28,
+                color: "#e5e5e5",
+                fontFamily: "monospace",
+                fontWeight: 700,
+                marginTop: 4,
+              }}
+            >
+              {rows.length}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div
@@ -785,7 +895,14 @@ export default function RnsTab({ refreshKey, onSelect }) {
 
       {/* Table */}
       <div style={S.card}>
-        <div style={{ maxHeight: "calc(100vh - 380px)", overflowY: "auto" }}>
+        <div
+          style={{
+            maxHeight: bannersCollapsed
+              ? "calc(100vh - 300px)"
+              : "calc(100vh - 380px)",
+            overflowY: "auto",
+          }}
+        >
           <table
             style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
           >
@@ -793,14 +910,48 @@ export default function RnsTab({ refreshKey, onSelect }) {
               <tr style={{ borderBottom: "1px solid #2a2a2a" }}>
                 <th style={S.th}>Time</th>
                 <th style={S.th}>Tier</th>
-                <th style={{ ...S.th, textAlign: "right" }}>Mkt Cap</th>
+                <th
+                  style={{
+                    ...S.th,
+                    textAlign: "right",
+                    display: isMobile ? "none" : undefined,
+                  }}
+                >
+                  Mkt Cap
+                </th>
                 <th style={S.th}>Ticker</th>
                 <th style={S.th}>Company</th>
                 <th style={S.th}>Headline / AI Thesis</th>
-                <th style={S.th}>Category</th>
-                <th style={{ ...S.th, textAlign: "right" }}>Rules</th>
-                <th style={{ ...S.th, textAlign: "right" }}>AI</th>
-                <th style={{ ...S.th, textAlign: "center" }}>Action</th>
+                <th style={{ ...S.th, display: isMobile ? "none" : undefined }}>
+                  Category
+                </th>
+                <th
+                  style={{
+                    ...S.th,
+                    textAlign: "right",
+                    display: isMobile ? "none" : undefined,
+                  }}
+                >
+                  Rules
+                </th>
+                <th
+                  style={{
+                    ...S.th,
+                    textAlign: "right",
+                    display: isMobile ? "none" : undefined,
+                  }}
+                >
+                  AI
+                </th>
+                <th
+                  style={{
+                    ...S.th,
+                    textAlign: "center",
+                    display: isMobile ? "none" : undefined,
+                  }}
+                >
+                  Action
+                </th>
               </tr>
             </thead>
             <tbody>
