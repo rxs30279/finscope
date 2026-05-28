@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
-from rns import _query
+from rns import _query, _fetch_market_caps_batch
 
 
 _UK_TZ      = ZoneInfo("Europe/London")
@@ -43,8 +43,11 @@ def _fetch_rows(hours: int = _WINDOW_H) -> list[dict]:
 
     Joins company_metadata for `ftse_index` (used to bucket rows into
     large/mid/small-cap sections) and ttm_financials for `market_cap`
-    (shown inline next to the ticker)."""
-    return _query("""
+    (shown inline next to the ticker). For rows missing ttm_financials
+    coverage (mostly AIM / FTSE SmallCap), falls back to a parallel
+    yfinance batch fetch — same helper rns_llm and /api/rns/market-caps
+    use."""
+    rows = _query("""
         SELECT r.id, r.published_at, r.ticker, r.symbol, r.company_name,
                r.headline, r.url, r.tier, r.category,
                r.score, r.llm_score, r.llm_thesis, r.llm_action, r.llm_risks,
@@ -59,6 +62,40 @@ def _fetch_rows(hours: int = _WINDOW_H) -> list[dict]:
                   r.published_at DESC
          LIMIT 200
     """, (str(hours),))
+
+    _backfill_market_caps(rows)
+    return rows
+
+
+def _backfill_market_caps(rows: list[dict]) -> None:
+    """Mutate `rows` in place: for any row with market_cap=None, try Yahoo.
+
+    Best-effort — failures (network errors, missing tickers) are swallowed
+    so the digest still sends without crashing."""
+    missing: list[dict] = [
+        r for r in rows
+        if r.get("market_cap") is None and (r.get("symbol") or r.get("ticker"))
+    ]
+    if not missing:
+        return
+
+    yahoo_for: dict[int, str] = {}
+    for r in missing:
+        if r.get("symbol"):
+            yahoo_for[id(r)] = r["symbol"]
+        else:
+            yahoo_for[id(r)] = f"{r['ticker'].rstrip('.')}.L"
+
+    try:
+        mc_map = _fetch_market_caps_batch(list(set(yahoo_for.values())))
+    except Exception as e:
+        print(f"[digest] yfinance market-cap backfill failed: {e}")
+        return
+
+    for r in missing:
+        sym = yahoo_for.get(id(r))
+        if sym and sym in mc_map:
+            r["market_cap"] = mc_map[sym]
 
 
 # ── Market-cap bucketing ──────────────────────────────────────────────────────
