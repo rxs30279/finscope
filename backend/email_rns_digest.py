@@ -288,14 +288,19 @@ def _render_section(bucket: str, rows: list[dict]) -> str:
     meta = _CAP_META[bucket]
     color = meta["color"]
 
+    # NB: margin-left on the children (rather than flex `gap`) keeps the
+    # spacing intact in Outlook desktop, which ignores `display:flex`.
     heading = f"""
       <div style="margin:24px 0 8px 0;padding:8px 12px;background:{color}15;
                   border-left:4px solid {color};display:flex;align-items:baseline;
-                  flex-wrap:wrap;gap:10px;">
+                  flex-wrap:wrap;">
         <span style="font-family:monospace;font-weight:700;color:{color};
-                     font-size:13px;letter-spacing:2px;text-transform:uppercase;">{meta['label']}</span>
-        <span style="font-family:monospace;color:#888;font-size:11px;">{meta['sub']}</span>
-        <span style="margin-left:auto;font-family:monospace;color:#666;font-size:11px;">{len(rows)} item{'s' if len(rows) != 1 else ''}</span>
+                     font-size:13px;letter-spacing:2px;text-transform:uppercase;
+                     padding-right:6px;">{meta['label']}</span>
+        <span style="font-family:monospace;color:#888;font-size:11px;
+                     margin-left:14px;">{meta['sub']}</span>
+        <span style="margin-left:auto;font-family:monospace;color:#666;font-size:11px;
+                     padding-left:14px;">{len(rows)} item{'s' if len(rows) != 1 else ''}</span>
       </div>"""
 
     if not rows:
