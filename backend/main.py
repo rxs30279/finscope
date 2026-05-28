@@ -659,7 +659,7 @@ _DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
 def digest(token: str = Query(...)):
     """HTTP endpoint for cron-job.org to trigger the RNS email digest.
 
-    Called by cron-job.org Mon–Fri at 06:30 and 07:30 UK time.
+    Called by cron-job.org Mon–Fri at 07:30 UK time.
     Requires ?token=<DIGEST_CRON_TOKEN> for basic auth.
     """
     if not _DIGEST_TOKEN:
