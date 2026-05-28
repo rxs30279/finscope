@@ -255,23 +255,25 @@ def _render_row(r: dict) -> str:
     # ── mobile card (hidden on desktop) ──
     # Stacks vertically inside a single full-width <td>. Header strip carries
     # time + tier + ticker + AI score so the eye gets all the meta in one row.
+    # NB: padding-right on each item (rather than flex `gap`) so spacing survives
+    # in clients that ignore display:flex / gap (notably Outlook).
     mobile = f"""
       <tr class="mb-row" style="display:none;">
         <td style="padding:0;">
           <div style="border:1px solid #eee;border-radius:6px;margin-bottom:10px;background:#fff;overflow:hidden;">
-            <div style="padding:8px 12px;background:#fafafa;border-bottom:1px solid #eee;display:flex;align-items:center;flex-wrap:wrap;gap:8px;">
-              <span style="font-family:monospace;color:#666;font-size:12px;">{time_s}</span>
-              {tier_pill}
-              <span style="font-family:monospace;font-weight:700;color:#111;font-size:13px;">{_esc(r.get('ticker'))}</span>
-              {mc_inline}
+            <div style="padding:8px 12px;background:#fafafa;border-bottom:1px solid #eee;display:flex;align-items:center;flex-wrap:wrap;">
+              <span style="font-family:monospace;color:#666;font-size:12px;padding-right:10px;">{time_s}</span>
+              <span style="display:inline-block;padding-right:10px;">{tier_pill}</span>
+              <span style="font-family:monospace;font-weight:700;color:#111;font-size:13px;padding-right:10px;">{_esc(r.get('ticker'))}</span>
+              {f'<span style="font-family:monospace;color:#888;font-size:11px;padding-right:10px;">{mc_s}</span>' if mc_s else ""}
               <span style="margin-left:auto;font-family:monospace;font-size:13px;">{ai_cell}</span>
             </div>
             <div style="padding:10px 12px;">
               <div style="font-weight:500;color:#222;font-size:13px;margin-bottom:2px;">{_esc(r.get('company_name'))}</div>
               <a href="{_esc(r['url'])}" style="color:#1d4ed8;text-decoration:none;font-size:14px;line-height:1.35;display:block;">{_esc(r['headline'])}</a>
               {thesis_block}
-              <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-                <span style="color:#666;font-size:11px;font-family:monospace;">{_esc(category)}</span>
+              <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+                <span style="color:#666;font-size:11px;font-family:monospace;padding-right:10px;">{_esc(category)}</span>
                 {action_cell}
               </div>
             </div>
