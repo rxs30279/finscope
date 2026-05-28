@@ -44,6 +44,7 @@ from breakout import (
     _upsert_signals,
     _compute_backtest,
 )
+from _mem import snapshot as _mem
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -63,7 +64,14 @@ if not _CRON_TOKEN:
 
 # ── Concurrency lock ──────────────────────────────────────────────────────────
 
-_lock = threading.Lock()
+# _run_mutex is held for the *entire* duration of a pipeline run — acquired in
+# the HTTP handler, released in the worker thread's finally. This prevents the
+# back-to-back race observed on 2026-05-22 where two cron-job.org pings landed
+# <1ms apart and both passed the "running" check because the previous run had
+# just cleared it.
+_run_mutex = threading.Lock()
+# _state_lock guards mutations to _run_state (short critical sections only).
+_state_lock = threading.Lock()
 _run_state: dict = {
     "running": False,
     "started_at": None,
@@ -77,54 +85,64 @@ _LOCK_TIMEOUT_S = 30 * 60  # 30-minute safety timeout
 
 
 def _acquire_lock() -> bool:
-    """Try to acquire the run lock. Returns True if acquired, False if busy."""
-    global _run_state
-    if not _lock.acquire(blocking=False):
-        return False
+    """Try to claim the right to start a pipeline run.
 
-    # Check safety timeout — if the previous run has been running for >30 min,
-    # assume it crashed and allow a new run anyway.
-    if _run_state["running"] and _run_state["started_at"] is not None:
-        elapsed = time.time() - _run_state["started_at"]
-        if elapsed > _LOCK_TIMEOUT_S:
-            print(
-                f"[render] previous run started {elapsed:.0f}s ago — "
-                f"exceeded safety timeout, allowing new run"
-            )
-            _run_state["running"] = False
+    On success, _run_mutex is held; caller must ensure _release_lock() runs
+    (the worker thread's finally block does this).
+    """
+    if not _run_mutex.acquire(blocking=False):
+        # Mutex held by an in-flight run. Check for a stale lock from a
+        # previous run that crashed without releasing (e.g. SIGKILL from OOM).
+        with _state_lock:
+            started_at = _run_state.get("started_at")
+            running = _run_state.get("running")
+        if running and started_at is not None:
+            elapsed = time.time() - started_at
+            if elapsed > _LOCK_TIMEOUT_S:
+                print(
+                    f"[render] previous run started {elapsed:.0f}s ago — "
+                    f"exceeded safety timeout, forcing release"
+                )
+                try:
+                    _run_mutex.release()
+                except RuntimeError:
+                    pass
+                if not _run_mutex.acquire(blocking=False):
+                    return False
+            else:
+                return False
         else:
-            _lock.release()
             return False
 
-    _run_state["running"] = True
-    _run_state["started_at"] = time.time()
-    _run_state["finished_at"] = None
-    _run_state["stage"] = None
-    _run_state["stages"] = {}
-    _run_state["error"] = None
-    _run_state["run_id"] += 1
-    _lock.release()
+    with _state_lock:
+        _run_state["running"] = True
+        _run_state["started_at"] = time.time()
+        _run_state["finished_at"] = None
+        _run_state["stage"] = None
+        _run_state["stages"] = {}
+        _run_state["error"] = None
+        _run_state["run_id"] += 1
     return True
 
 
 def _release_lock():
-    global _run_state
-    _lock.acquire()
-    _run_state["running"] = False
-    _run_state["finished_at"] = time.time()
-    _lock.release()
+    with _state_lock:
+        _run_state["running"] = False
+        _run_state["finished_at"] = time.time()
+    try:
+        _run_mutex.release()
+    except RuntimeError:
+        pass
 
 
 def _set_stage(stage: str):
-    _lock.acquire()
-    _run_state["stage"] = stage
-    _lock.release()
+    with _state_lock:
+        _run_state["stage"] = stage
 
 
 def _record_stage(name: str, result: dict):
-    _lock.acquire()
-    _run_state["stages"][name] = result
-    _lock.release()
+    with _state_lock:
+        _run_state["stages"][name] = result
 
 
 # ── Pipeline runner ───────────────────────────────────────────────────────────
@@ -136,10 +154,12 @@ def _run_pipeline():
     print(
         f"[render] [{run_id}] pipeline starting at {datetime.now(timezone.utc).isoformat()}"
     )
+    _mem("pipeline", "start", run_id=run_id)
 
     try:
         # Stage 1: Ingest
         _set_stage("ingest")
+        _mem("ingest", "start", run_id=run_id)
         max_pages, reason = _compute_max_pages()
         print(f"[render] [{run_id}] ingest: {reason}")
         ingest_result = _run_ingest(
@@ -147,24 +167,33 @@ def _run_pipeline():
         )
         _record_stage("ingest", {"ok": True, **ingest_result})
         print(f"[render] [{run_id}] ingest done — {ingest_result}")
+        _mem("ingest", "end", run_id=run_id, max_pages=max_pages,
+             inserted=ingest_result.get("inserted"))
 
         # Stage 2: Backfill summaries
         _set_stage("summaries")
+        _mem("summaries", "start", run_id=run_id)
         summary_result = _backfill_summaries(limit=50, sleep_s=1.0, tiers=("A", "B"))
         _record_stage("summaries", {"ok": True, **summary_result})
         print(f"[render] [{run_id}] summaries done — {summary_result}")
+        _mem("summaries", "end", run_id=run_id,
+             fetched=summary_result.get("fetched"))
 
         # Stage 3: LLM rank
         _set_stage("rank")
+        _mem("rank", "start", run_id=run_id)
         rank_result = _rank_pending(limit=50, tiers=("A", "B"), hours=48)
         _record_stage("rank", {"ok": True, **rank_result})
         print(f"[render] [{run_id}] ranking done — {rank_result}")
+        _mem("rank", "end", run_id=run_id, ranked=rank_result.get("ranked"))
 
         # Stage 4: Prune old rows (keep 14 days)
         _set_stage("prune")
+        _mem("prune", "start", run_id=run_id)
         prune_result = _prune_old(days=14)
         _record_stage("prune", {"ok": True, **prune_result})
         print(f"[render] [{run_id}] prune done — {prune_result}")
+        _mem("prune", "end", run_id=run_id, deleted=prune_result.get("deleted"))
 
         print(f"[render] [{run_id}] pipeline completed successfully")
 
@@ -172,12 +201,12 @@ def _run_pipeline():
         error_msg = f"{type(e).__name__}: {e}"
         print(f"[render] [{run_id}] pipeline FAILED — {error_msg}")
         traceback.print_exc()
-        _lock.acquire()
-        _run_state["error"] = error_msg
-        _lock.release()
+        with _state_lock:
+            _run_state["error"] = error_msg
         _record_stage("error", {"error": error_msg})
 
     finally:
+        _mem("pipeline", "end", run_id=run_id)
         _release_lock()
 
 
@@ -222,9 +251,8 @@ def run_pipeline(token: str = Query(...)):
 @app.get("/api/rns/status")
 def pipeline_status():
     """Return the current/last run state."""
-    _lock.acquire()
-    state = dict(_run_state)
-    _lock.release()
+    with _state_lock:
+        state = dict(_run_state)
 
     # Convert timestamps to ISO strings for JSON serialisation
     if state.get("started_at"):
@@ -269,14 +297,17 @@ def run_price_refresh(token: str = Query(...)):
     print(
         f"[render] price refresh starting at {datetime.now(timezone.utc).isoformat()}"
     )
+    _mem("price_refresh", "start")
     try:
         result = refresh_prices()
         print(f"[render] price refresh done — {result}")
+        _mem("price_refresh", "end", rows_added=result.get("rows_added"))
         return {"status": "ok", **result}
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         print(f"[render] price refresh FAILED — {error_msg}")
         traceback.print_exc()
+        _mem("price_refresh", "error")
         return {"status": "error", "error": error_msg}
 
 
@@ -295,8 +326,10 @@ def run_breakout(token: str = Query(...)):
     print(
         f"[render] breakout computation starting at {datetime.now(timezone.utc).isoformat()}"
     )
+    _mem("breakout", "start")
     try:
         results = _compute_breakout_scores()
+        _mem("breakout", "scores_computed", n=len(results))
         if not results:
             return {
                 "status": "ok",
@@ -308,9 +341,11 @@ def run_breakout(token: str = Query(...)):
 
         scores_count = _upsert_scores(results)
         signals_count = _upsert_signals(results)
+        _mem("breakout", "upserted", signals=signals_count)
 
         # Run backtest for today's signals
         backtest_result = _compute_backtest()
+        _mem("breakout", "end", signals=signals_count)
 
         print(
             f"[render] breakout done — {len(results)} stocks, {signals_count} signals"
@@ -326,6 +361,7 @@ def run_breakout(token: str = Query(...)):
         error_msg = f"{type(e).__name__}: {e}"
         print(f"[render] breakout FAILED — {error_msg}")
         traceback.print_exc()
+        _mem("breakout", "error")
         return {"status": "error", "error": error_msg}
 
 

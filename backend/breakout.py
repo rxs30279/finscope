@@ -23,6 +23,8 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from dotenv import load_dotenv
 
+from _mem import snapshot as _mem
+
 # Import query and _get_pool — works both when running from backend/ dir
 # and when running from project root (e.g. python -c "from backend.breakout import ...")
 try:
@@ -401,6 +403,8 @@ def _compute_breakout_scores(target_date: date = None) -> list:
     if target_date is None:
         target_date = date.today()
 
+    _mem("breakout_compute", "start")
+
     # Fetch all symbols
     symbols = [
         r["symbol"]
@@ -423,6 +427,8 @@ def _compute_breakout_scores(target_date: date = None) -> list:
         (symbols, start_date, target_date),
     )
 
+    _mem("breakout_compute", "history_fetched", n_symbols=len(symbols), n_rows=len(rows))
+
     if not rows:
         logger.warning("No price history found")
         return []
@@ -440,6 +446,8 @@ def _compute_breakout_scores(target_date: date = None) -> list:
                 "volume": int(r["volume"]),
             }
         )
+
+    _mem("breakout_compute", "df_map_built", n_groups=len(df_map))
 
     results = []
     for sym in symbols:
@@ -609,6 +617,7 @@ def _compute_breakout_scores(target_date: date = None) -> list:
         r.pop("vpt_slope", None)
         r.pop("close_pct_change", None)
 
+    _mem("breakout_compute", "end", n_results=len(results))
     return results
 
 

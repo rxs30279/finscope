@@ -9,6 +9,7 @@ import time
 import logging
 from datetime import date, timedelta
 from dotenv import load_dotenv
+from _mem import snapshot as _mem
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,15 @@ def _fetch_ohlcv(symbols, start_date):
                 _MAX_RETRIES,
             )
 
+        _mem(
+            "price_fetch",
+            "batch_done",
+            batch=i // _BATCH_SIZE + 1,
+            total_batches=(total + _BATCH_SIZE - 1) // _BATCH_SIZE,
+            rows_in_batch=len(rows) if rows else 0,
+            all_rows=len(all_rows),
+        )
+
         # Delay between batches (skip after last batch)
         if i + _BATCH_SIZE < total:
             time.sleep(_BATCH_SLEEP_S)
@@ -327,12 +337,31 @@ def refresh_prices():
         else:
             groups.setdefault(target_start, []).append(sym)
 
+    _mem(
+        "price_refresh",
+        "groups_computed",
+        n_groups=len(groups),
+        n_symbols=len(all_symbols),
+    )
+
     total_rows = 0
     for start_date, symbols in groups.items():
         if start_date > date.today():
             continue  # already up to date
+        _mem(
+            "price_refresh",
+            "group_start",
+            start_date=start_date.isoformat(),
+            n_symbols=len(symbols),
+        )
         rows = _fetch_ohlcv(symbols, start_date)
         total_rows += _upsert_rows(rows)
+        _mem(
+            "price_refresh",
+            "group_done",
+            start_date=start_date.isoformat(),
+            rows_added=len(rows),
+        )
 
     return {
         "updated": len(all_symbols),
