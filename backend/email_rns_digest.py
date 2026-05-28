@@ -9,8 +9,7 @@ schedule (refresh-rns.yml).
 Environment:
   RESEND_API_KEY   — required, https://resend.com/api-keys
   DIGEST_TO        — recipient (default: richard_stephens@hotmail.co.uk)
-  DIGEST_FROM      — sender   (default: onboarding@resend.dev — Resend's
-                     shared test sender; replace once a domain is verified)
+  DIGEST_FROM      — sender   (default: digest@alphamoveai.co.uk)
   DB_*             — same vars as the rest of the backend
 """
 import sys, os
@@ -33,9 +32,7 @@ from rns import _query
 _UK_TZ      = ZoneInfo("Europe/London")
 _WINDOW_H   = 24
 _DEFAULT_TO = "richard_stephens@hotmail.co.uk"
-# Resend's shared test sender — works without domain verification.
-# Replace once the user verifies their own domain on resend.com/domains.
-_DEFAULT_FROM = "Alpha Move AI <onboarding@resend.dev>"
+_DEFAULT_FROM = "Alpha Move AI <digest@alphamoveai.co.uk>"
 
 
 # ── Data ──────────────────────────────────────────────────────────────────────
