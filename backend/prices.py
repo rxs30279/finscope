@@ -4,12 +4,16 @@ import pandas as pd
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
+import holidays
 import os
 import time
 import logging
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from _mem import snapshot as _mem
+
+# LSE follows England & Wales bank holidays.
+_LSE_HOLIDAYS = holidays.UnitedKingdom(subdiv="ENG")
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +93,16 @@ def _upsert_rows(rows):
 
 
 def _next_trading_day(d: date) -> date:
-    """If *d* falls on a weekend, advance to the following Monday."""
+    """Advance *d* past weekends and UK bank holidays (LSE non-trading days).
+
+    Without this, a top-up scheduled the day after a UK bank holiday (e.g.
+    Tue after Spring Bank Holiday) would request data for the holiday itself
+    and yfinance would return empty for every symbol, triggering retries
+    that previously OOM'd the Render worker on 2026-05-26.
+    """
     # Monday=0 … Sunday=6
-    if d.weekday() == 5:  # Saturday
-        return d + timedelta(days=2)
-    if d.weekday() == 6:  # Sunday
-        return d + timedelta(days=1)
+    while d.weekday() >= 5 or d in _LSE_HOLIDAYS:
+        d += timedelta(days=1)
     return d
 
 
@@ -108,7 +116,9 @@ _MAX_RETRIES = 2  # retry a failed batch once
 def _fetch_ohlcv_batch(symbols, start_date):
     """Fetch adjusted daily OHLCV for a single batch of symbols.
     Returns list of (symbol, date, open, high, low, close, volume) tuples."""
-    end_date = date.today()
+    # yfinance's `end` is exclusive — use tomorrow so today's bar is included
+    # once the LSE has closed for the day.
+    end_date = date.today() + timedelta(days=1)
     if not symbols:
         return []
 

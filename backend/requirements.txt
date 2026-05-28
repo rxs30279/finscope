@@ -10,3 +10,4 @@ lxml
 curl_cffi
 openai
 psutil
+holidays
