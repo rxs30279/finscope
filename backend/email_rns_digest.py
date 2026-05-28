@@ -39,19 +39,64 @@ _DEFAULT_FROM = "Alpha Move AI <digest@alphamoveai.co.uk>"
 
 def _fetch_rows(hours: int = _WINDOW_H) -> list[dict]:
     """Tier A + B in the last `hours`. AI-ranked rows first (by llm_score),
-    then unranked by published_at desc. Mirrors the RnsTab default sort."""
+    then unranked by published_at desc. Mirrors the RnsTab default sort.
+
+    Joins company_metadata for `ftse_index` (used to bucket rows into
+    large/mid/small-cap sections) and ttm_financials for `market_cap`
+    (shown inline next to the ticker)."""
     return _query("""
-        SELECT id, published_at, ticker, symbol, company_name,
-               headline, url, tier, category,
-               score, llm_score, llm_thesis, llm_action, llm_risks
-          FROM rns_announcements
-         WHERE tier IN ('A', 'B')
-           AND published_at >= NOW() - (%s || ' hours')::interval
-         ORDER BY (llm_score IS NULL),    -- ranked first
-                  llm_score   DESC NULLS LAST,
-                  published_at DESC
+        SELECT r.id, r.published_at, r.ticker, r.symbol, r.company_name,
+               r.headline, r.url, r.tier, r.category,
+               r.score, r.llm_score, r.llm_thesis, r.llm_action, r.llm_risks,
+               m.ftse_index, f.market_cap
+          FROM rns_announcements r
+          LEFT JOIN company_metadata m ON m.symbol = r.symbol
+          LEFT JOIN ttm_financials   f ON f.company_symbol = r.symbol
+         WHERE r.tier IN ('A', 'B')
+           AND r.published_at >= NOW() - (%s || ' hours')::interval
+         ORDER BY (r.llm_score IS NULL),  -- ranked first
+                  r.llm_score   DESC NULLS LAST,
+                  r.published_at DESC
          LIMIT 200
     """, (str(hours),))
+
+
+# ── Market-cap bucketing ──────────────────────────────────────────────────────
+
+# Three sections. Anything not explicitly Large or Mid (incl. FTSE SmallCap,
+# AIM 100, AIM All-Share, unlisted, NULL) falls into Small.
+_CAP_BUCKETS = ("large", "mid", "small")
+_CAP_META = {
+    "large": {"label": "Large Cap", "sub": "FTSE 100",       "color": "#f97316"},
+    "mid":   {"label": "Mid Cap",   "sub": "FTSE 250",       "color": "#60a5fa"},
+    "small": {"label": "Small Cap", "sub": "SmallCap / AIM / other", "color": "#6b7280"},
+}
+
+
+def _cap_bucket(row: dict) -> str:
+    idx = row.get("ftse_index")
+    if idx == "FTSE 100":
+        return "large"
+    if idx == "FTSE 250":
+        return "mid"
+    return "small"
+
+
+def _format_mc(mc) -> str:
+    """Render market cap as a short string (£1.2bn / £480m / £52m)."""
+    if mc is None:
+        return ""
+    try:
+        v = float(mc)
+    except (TypeError, ValueError):
+        return ""
+    if v >= 1e9:
+        return f"£{v / 1e9:.1f}bn"
+    if v >= 1e6:
+        return f"£{v / 1e6:.0f}m"
+    if v >= 1e3:
+        return f"£{v / 1e3:.0f}k"
+    return f"£{v:.0f}"
 
 
 # ── HTML rendering ────────────────────────────────────────────────────────────
@@ -141,12 +186,25 @@ def _render_row(r: dict) -> str:
         f'border-radius:2px;font-family:monospace;font-size:10px;font-weight:700;">{r["tier"]}</span>'
     )
 
+    mc_s = _format_mc(r.get("market_cap"))
+    mc_line = (
+        f'<div style="font-family:monospace;color:#888;font-size:10px;margin-top:2px;">{mc_s}</div>'
+        if mc_s else ""
+    )
+    mc_inline = (
+        f'<span style="font-family:monospace;color:#888;font-size:11px;">{mc_s}</span>'
+        if mc_s else ""
+    )
+
     # ── desktop row (hidden on mobile) ──
     desktop = f"""
       <tr class="dt-row" style="border-bottom:1px solid #eee;">
         <td style="padding:10px 8px;font-family:monospace;color:#666;font-size:12px;white-space:nowrap;vertical-align:top;">{time_s}</td>
         <td style="padding:10px 8px;vertical-align:top;">{tier_pill}</td>
-        <td style="padding:10px 8px;font-family:monospace;font-weight:700;color:#111;font-size:13px;white-space:nowrap;vertical-align:top;">{_esc(r.get('ticker'))}</td>
+        <td style="padding:10px 8px;font-family:monospace;font-weight:700;color:#111;font-size:13px;white-space:nowrap;vertical-align:top;">
+          {_esc(r.get('ticker'))}
+          {mc_line}
+        </td>
         <td style="padding:10px 8px;color:#444;font-size:12px;vertical-align:top;">
           <div style="font-weight:500;color:#222;">{_esc(r.get('company_name'))}</div>
           <a href="{_esc(r['url'])}" style="color:#1d4ed8;text-decoration:none;font-size:13px;">{_esc(r['headline'])}</a>
@@ -168,6 +226,7 @@ def _render_row(r: dict) -> str:
               <span style="font-family:monospace;color:#666;font-size:12px;">{time_s}</span>
               {tier_pill}
               <span style="font-family:monospace;font-weight:700;color:#111;font-size:13px;">{_esc(r.get('ticker'))}</span>
+              {mc_inline}
               <span style="margin-left:auto;font-family:monospace;font-size:13px;">{ai_cell}</span>
             </div>
             <div style="padding:10px 12px;">
@@ -186,14 +245,26 @@ def _render_row(r: dict) -> str:
     return desktop + mobile
 
 
-def _render_html(rows: list[dict], window_h: int) -> str:
-    now_uk = datetime.now(_UK_TZ)
-    date_s = now_uk.strftime("%A %d %B %Y")
+def _render_section(bucket: str, rows: list[dict]) -> str:
+    """Render one cap-bucket section: a heading bar followed by a table of rows
+    (or a muted 'no items' note if the bucket is empty)."""
+    meta = _CAP_META[bucket]
+    color = meta["color"]
+
+    heading = f"""
+      <div style="margin:24px 0 8px 0;padding:8px 12px;background:{color}15;
+                  border-left:4px solid {color};display:flex;align-items:baseline;
+                  flex-wrap:wrap;gap:10px;">
+        <span style="font-family:monospace;font-weight:700;color:{color};
+                     font-size:13px;letter-spacing:2px;text-transform:uppercase;">{meta['label']}</span>
+        <span style="font-family:monospace;color:#888;font-size:11px;">{meta['sub']}</span>
+        <span style="margin-left:auto;font-family:monospace;color:#666;font-size:11px;">{len(rows)} item{'s' if len(rows) != 1 else ''}</span>
+      </div>"""
 
     if not rows:
         body = (
-            '<div style="padding:40px 20px;text-align:center;color:#666;'
-            'font-family:monospace;font-size:14px;">No significant items today.</div>'
+            '<div style="padding:16px 12px;text-align:center;color:#aaa;'
+            'font-family:monospace;font-size:12px;font-style:italic;">no items</div>'
         )
     else:
         body = f"""
@@ -213,6 +284,24 @@ def _render_html(rows: list[dict], window_h: int) -> str:
             {''.join(_render_row(r) for r in rows)}
           </tbody>
         </table>"""
+
+    return heading + body
+
+
+def _render_html(rows: list[dict], window_h: int) -> str:
+    now_uk = datetime.now(_UK_TZ)
+    date_s = now_uk.strftime("%A %d %B %Y")
+
+    if not rows:
+        body = (
+            '<div style="padding:40px 20px;text-align:center;color:#666;'
+            'font-family:monospace;font-size:14px;">No significant items today.</div>'
+        )
+    else:
+        buckets: dict[str, list[dict]] = {b: [] for b in _CAP_BUCKETS}
+        for r in rows:
+            buckets[_cap_bucket(r)].append(r)
+        body = "".join(_render_section(b, buckets[b]) for b in _CAP_BUCKETS)
 
     n_a = sum(1 for r in rows if r["tier"] == "A")
     n_b = sum(1 for r in rows if r["tier"] == "B")
