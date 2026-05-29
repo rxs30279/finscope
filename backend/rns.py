@@ -1061,9 +1061,10 @@ def get_latest(
                r.headline, r.url, r.tier, r.category, r.keyword_hits, r.score,
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_action, r.llm_risks,
                r.llm_model, r.llm_processed_at, r.fetched_at,
-               f.market_cap
+               f.market_cap, m.ftse_index
         FROM rns_announcements r
-        LEFT JOIN ttm_financials f ON f.company_symbol = r.symbol
+        LEFT JOIN ttm_financials   f ON f.company_symbol = r.symbol
+        LEFT JOIN company_metadata m ON m.symbol = r.symbol
         WHERE r.published_at >= NOW() - (%s || ' hours')::interval
           AND r.score >= %s
         ORDER BY r.published_at DESC

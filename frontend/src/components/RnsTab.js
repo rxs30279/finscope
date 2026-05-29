@@ -328,6 +328,20 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const tierA = useMemo(() => rows.filter((r) => r.tier === "A"), [rows]);
   const tierB = useMemo(() => rows.filter((r) => r.tier === "B"), [rows]);
   const ranked = useMemo(() => rows.filter((r) => r.llm_score != null), [rows]);
+
+  // Bucket filtered rows by FTSE index — same logic as the digest email.
+  // Anything not explicitly FTSE 100 / 250 falls into "small" (SmallCap, AIM,
+  // unlisted, or NULL ftse_index).
+  const buckets = useMemo(() => {
+    const out = { large: [], mid: [], small: [] };
+    for (const r of filtered) {
+      const idx = r.ftse_index;
+      if (idx === "FTSE 100") out.large.push(r);
+      else if (idx === "FTSE 250") out.mid.push(r);
+      else out.small.push(r);
+    }
+    return out;
+  }, [filtered]);
   const lastUpdatedAt = useMemo(() => {
     let m = 0;
     for (const r of rows) {
@@ -767,86 +781,131 @@ export default function RnsTab({ refreshKey, onSelect }) {
         />
       </div>
 
-      {/* Table */}
-      <div style={S.card}>
+      {/* Bucketed tables — one section per FTSE cap bucket. */}
+      {filtered.length === 0 && (
         <div
           style={{
-            maxHeight: "calc(100vh - 260px)",
-            overflowY: "auto",
+            ...S.card,
+            textAlign: "center",
+            color: "#444",
+            padding: 32,
+            fontFamily: "monospace",
+            fontSize: 12,
           }}
         >
-          <table
-            style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
-          >
-            <thead>
-              <tr style={{ borderBottom: "1px solid #2a2a2a" }}>
-                <th style={S.th}>Time</th>
-                <th style={S.th}>Tier</th>
-                <th
-                  style={{
-                    ...S.th,
-                    textAlign: "right",
-                    display: isMobile ? "none" : undefined,
-                  }}
-                >
-                  Mkt Cap
-                </th>
-                <th style={S.th}>Ticker</th>
-                <th style={S.th}>Company</th>
-                <th style={S.th}>Headline / AI Thesis</th>
-                <th style={{ ...S.th, display: isMobile ? "none" : undefined }}>
-                  Category
-                </th>
-                <th
-                  style={{
-                    ...S.th,
-                    textAlign: "right",
-                    display: isMobile ? "none" : undefined,
-                  }}
-                >
-                  Rules
-                </th>
-                <th
-                  style={{
-                    ...S.th,
-                    textAlign: "right",
-                    display: isMobile ? "none" : undefined,
-                  }}
-                >
-                  AI
-                </th>
-                <th
-                  style={{
-                    ...S.th,
-                    textAlign: "center",
-                    display: isMobile ? "none" : undefined,
-                  }}
-                >
-                  Action
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={10}
-                    style={{
-                      ...S.td,
-                      color: "#444",
-                      textAlign: "center",
-                      padding: 32,
-                    }}
-                  >
-                    No announcements in this window
-                  </td>
-                </tr>
-              )}
-              {filtered.map(renderRow)}
-            </tbody>
-          </table>
+          No announcements in this window
         </div>
-      </div>
+      )}
+
+      {[
+        { key: "large", label: "Large Cap", sub: "FTSE 100",                       color: "#f97316" },
+        { key: "mid",   label: "Mid Cap",   sub: "FTSE 250",                       color: "#60a5fa" },
+        { key: "small", label: "Small Cap", sub: "SmallCap / AIM / other",         color: "#6b7280" },
+      ].map(({ key, label, sub, color }) => {
+        const items = buckets[key];
+        if (!items || items.length === 0) return null;
+        return (
+          <div key={key} style={{ marginBottom: 18 }}>
+            {/* Section heading bar */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                flexWrap: "wrap",
+                gap: 12,
+                padding: "8px 12px",
+                marginBottom: 6,
+                background: `${color}15`,
+                borderLeft: `3px solid ${color}`,
+                borderRadius: 2,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: "monospace",
+                  fontWeight: 700,
+                  color,
+                  fontSize: 12,
+                  letterSpacing: 2,
+                  textTransform: "uppercase",
+                }}
+              >
+                {label}
+              </span>
+              <span style={{ fontFamily: "monospace", color: "#666", fontSize: 10 }}>
+                {sub}
+              </span>
+              <span
+                style={{
+                  marginLeft: "auto",
+                  fontFamily: "monospace",
+                  color: "#666",
+                  fontSize: 10,
+                }}
+              >
+                {items.length} item{items.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
+            {/* Section table */}
+            <div style={S.card}>
+              <table
+                style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
+              >
+                <thead>
+                  <tr style={{ borderBottom: "1px solid #2a2a2a" }}>
+                    <th style={S.th}>Time</th>
+                    <th style={S.th}>Tier</th>
+                    <th
+                      style={{
+                        ...S.th,
+                        textAlign: "right",
+                        display: isMobile ? "none" : undefined,
+                      }}
+                    >
+                      Mkt Cap
+                    </th>
+                    <th style={S.th}>Ticker</th>
+                    <th style={S.th}>Company</th>
+                    <th style={S.th}>Headline / AI Thesis</th>
+                    <th style={{ ...S.th, display: isMobile ? "none" : undefined }}>
+                      Category
+                    </th>
+                    <th
+                      style={{
+                        ...S.th,
+                        textAlign: "right",
+                        display: isMobile ? "none" : undefined,
+                      }}
+                    >
+                      Rules
+                    </th>
+                    <th
+                      style={{
+                        ...S.th,
+                        textAlign: "right",
+                        display: isMobile ? "none" : undefined,
+                      }}
+                    >
+                      AI
+                    </th>
+                    <th
+                      style={{
+                        ...S.th,
+                        textAlign: "center",
+                        display: isMobile ? "none" : undefined,
+                      }}
+                    >
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>{items.map(renderRow)}</tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -226,6 +226,46 @@ function CompanyDetail({ symbol, onBack }) {
                     </span>
                   ))}
               </div>
+              {/* External chart links — Yahoo + TradingView. */}
+              <div
+                style={{
+                  display: "flex",
+                  gap: 14,
+                  marginTop: 8,
+                  flexWrap: "wrap",
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  letterSpacing: 1,
+                  textTransform: "uppercase",
+                }}
+              >
+                <a
+                  href={`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#a78bfa",
+                    textDecoration: "none",
+                    borderBottom: "1px dashed #a78bfa55",
+                    paddingBottom: 1,
+                  }}
+                >
+                  Yahoo Finance ↗
+                </a>
+                <a
+                  href={`https://www.tradingview.com/symbols/LSE-${encodeURIComponent(symbol.replace(/\.L$/i, ""))}/`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#22d3ee",
+                    textDecoration: "none",
+                    borderBottom: "1px dashed #22d3ee55",
+                    paddingBottom: 1,
+                  }}
+                >
+                  TradingView ↗
+                </a>
+              </div>
             </div>
           </div>
           {meta?.description && (
