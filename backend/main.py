@@ -489,6 +489,10 @@ def _attach_risk_score(results):
     return results
 
 
+_screener_cache: dict = {}
+_SCREENER_TTL = 900  # 15 minutes — underlying data only refreshes once/day
+
+
 @app.get("/api/screener")
 def screener(
     sector: Optional[str] = None,
@@ -503,6 +507,16 @@ def screener(
     min_upside_pct: Optional[float] = None,
     limit: int = 100,
 ):
+    import time
+    cache_key = (
+        sector, exclude_sectors, country, ftse_index, min_market_cap, max_pe,
+        min_roe, min_revenue_growth, consensus, min_upside_pct, limit,
+    )
+    now = time.time()
+    cached = _screener_cache.get(cache_key)
+    if cached and now - cached[1] < _SCREENER_TTL:
+        return cached[0]
+
     wheres = ["1=1"]
     params = []
     if sector:
@@ -582,7 +596,9 @@ def screener(
     _attach_pegy(results)
     _attach_momentum(results)
     _attach_piotroski(results)
-    return _attach_risk_score(results)
+    final = _attach_risk_score(results)
+    _screener_cache[cache_key] = (final, now)
+    return final
 
 
 _quote_cache: dict = {}
