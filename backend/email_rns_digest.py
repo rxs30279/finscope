@@ -6,15 +6,15 @@ read-only — does not trigger ingest, summary fetching, or DeepSeek ranking.
 The pipeline that populates llm_* columns runs on its own GitHub Actions
 schedule (refresh-rns.yml).
 
-Recipients come from a Resend Audience (`RESEND_AUDIENCE_ID`). If unset,
+Recipients come from a Resend Segment (`RESEND_SEGMENT_ID`). If unset,
 falls back to the single `DIGEST_TO` address — useful for local dev and
 as a safety net during rollout. Each email carries RFC 8058 one-click
 List-Unsubscribe headers + a visible footer link.
 
 Environment:
   RESEND_API_KEY        — required, https://resend.com/api-keys
-  RESEND_AUDIENCE_ID    — optional; if set, send to all active contacts
-  UNSUBSCRIBE_SECRET    — required when audience mode is on (HMAC secret)
+  RESEND_SEGMENT_ID     — optional; if set, send to all active contacts
+  UNSUBSCRIBE_SECRET    — required when segment mode is on (HMAC secret)
   PUBLIC_BASE_URL       — public app URL used in unsub links (e.g. https://...)
   DIGEST_TO             — fallback single recipient (default: richard_stephens@hotmail.co.uk)
   DIGEST_FROM           — sender   (default: digest@alphamoveai.co.uk)
@@ -485,8 +485,8 @@ def main() -> int:
         return 1
 
     from_addr = os.environ.get("DIGEST_FROM", _DEFAULT_FROM)
-    audience_id = os.environ.get("RESEND_AUDIENCE_ID")
-    base_url    = os.environ.get("PUBLIC_BASE_URL", "")
+    segment_id = os.environ.get("RESEND_SEGMENT_ID")
+    base_url   = os.environ.get("PUBLIC_BASE_URL", "")
 
     rows = _fetch_rows(_WINDOW_H)
     print(f"[digest] {len(rows)} rows in last {_WINDOW_H}h (Tier A+B)")
@@ -497,8 +497,8 @@ def main() -> int:
     else:
         subject = f"RNS Digest {now_uk.strftime('%a %d %b')} — no significant items"
 
-    # ── Audience mode ─────────────────────────────────────────────────────────
-    if audience_id:
+    # ── Segment mode ──────────────────────────────────────────────────────────
+    if segment_id:
         try:
             from subscribers import list_active_contacts
             contacts = list_active_contacts()
@@ -516,10 +516,10 @@ def main() -> int:
                     sent += 1
                 else:
                     failed += 1
-            print(f"[digest] audience send complete: {sent} sent, {failed} failed (of {len(contacts)})")
+            print(f"[digest] segment send complete: {sent} sent, {failed} failed (of {len(contacts)})")
             return 0 if failed == 0 else 2
 
-        print("[digest] audience configured but empty — falling back to DIGEST_TO")
+        print("[digest] segment configured but empty — falling back to DIGEST_TO")
 
     # ── Single-recipient fallback (original behaviour) ────────────────────────
     to_addr = os.environ.get("DIGEST_TO", _DEFAULT_TO)

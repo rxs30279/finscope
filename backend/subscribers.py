@@ -1,8 +1,8 @@
 """Email subscription endpoints — signup + unsubscribe.
 
-Resend Audiences is the source of truth for the subscriber list. This
-module is a thin proxy over Resend's Contacts API; we do not keep a
-parallel DB table.
+Resend's Segments + workspace-scoped Contacts API is the source of truth
+for the subscriber list (Audiences are deprecated). This module is a thin
+proxy over those endpoints; we do not keep a parallel DB table.
 
 Endpoints:
   POST /api/subscribers/signup          — body {"email": "..."}
@@ -11,7 +11,7 @@ Endpoints:
 
 Env:
   RESEND_API_KEY        — Resend API key (same one the digest uses)
-  RESEND_AUDIENCE_ID    — UUID of the audience in Resend dashboard
+  RESEND_SEGMENT_ID     — UUID of the segment in Resend dashboard
   UNSUBSCRIBE_SECRET    — random hex string for HMAC token signing
 """
 import os
@@ -89,11 +89,11 @@ def _verify_token(email: str, token: str) -> bool:
     return hmac.compare_digest(expected, token)
 
 
-def _audience_id() -> str:
-    aid = os.environ.get("RESEND_AUDIENCE_ID")
-    if not aid:
-        raise HTTPException(500, "RESEND_AUDIENCE_ID not configured")
-    return aid
+def _segment_id() -> str:
+    sid = os.environ.get("RESEND_SEGMENT_ID")
+    if not sid:
+        raise HTTPException(500, "RESEND_SEGMENT_ID not configured")
+    return sid
 
 
 # ── Signup ────────────────────────────────────────────────────────────────────
@@ -104,17 +104,19 @@ class SignupBody(BaseModel):
 
 @router.post("/api/subscribers/signup")
 def signup(body: SignupBody):
-    """Create a contact in the Resend audience, or re-activate if already
+    """Create a contact in the Resend segment, or re-activate if already
     present. Single opt-in — instantly subscribed."""
     email = body.email.strip().lower()
     if not _EMAIL_RE.match(email):
         raise HTTPException(400, "Invalid email address")
-    aid   = _audience_id()
+    sid = _segment_id()
 
+    # Contacts are workspace-scoped in the Segments model. We associate the
+    # new contact with our segment via the `segments` array on create.
     status, payload = _resend(
         "POST",
-        f"/audiences/{aid}/contacts",
-        {"email": email, "unsubscribed": False},
+        "/contacts",
+        {"email": email, "segments": [sid], "unsubscribed": False},
     )
     if status in (200, 201):
         return {"ok": True, "status": "subscribed"}
@@ -123,8 +125,8 @@ def signup(body: SignupBody):
     if status in (409, 422):
         upd_status, _ = _resend(
             "PATCH",
-            f"/audiences/{aid}/contacts/{urllib.parse.quote(email)}",
-            {"unsubscribed": False},
+            f"/contacts/{urllib.parse.quote(email)}",
+            {"unsubscribed": False, "segments": [sid]},
         )
         if upd_status in (200, 201, 204):
             return {"ok": True, "status": "reactivated"}
@@ -158,13 +160,12 @@ _PAGE_BAD = """<!doctype html><html><head><meta charset="utf-8">
 
 
 def _do_unsubscribe(email: str) -> None:
-    aid = _audience_id()
     status, payload = _resend(
         "PATCH",
-        f"/audiences/{aid}/contacts/{urllib.parse.quote(email)}",
+        f"/contacts/{urllib.parse.quote(email)}",
         {"unsubscribed": True},
     )
-    # 404 = contact wasn't in the audience; treat as already-unsubscribed.
+    # 404 = contact never existed; treat as already-unsubscribed.
     if status not in (200, 201, 204, 404):
         raise HTTPException(502, f"Resend error: {payload}")
 
@@ -236,11 +237,25 @@ def build_unsubscribe_url(email: str) -> str:
 
 
 def list_active_contacts() -> list[dict]:
-    """Return all contacts in the audience that are NOT unsubscribed.
-    Used by email_rns_digest.py to populate the recipient list."""
-    aid = _audience_id()
-    status, payload = _resend("GET", f"/audiences/{aid}/contacts", None)
-    if status != 200:
-        raise RuntimeError(f"Resend list contacts failed: {status} {payload}")
-    data = payload.get("data") or []
-    return [c for c in data if not c.get("unsubscribed")]
+    """Return all contacts in the segment that are NOT unsubscribed.
+    Used by email_rns_digest.py to populate the recipient list.
+
+    Paginates via Resend's cursor-based `after` param (max 100/page)."""
+    sid = _segment_id()
+    out: list[dict] = []
+    after: str | None = None
+    while True:
+        path = f"/segments/{sid}/contacts?limit=100"
+        if after:
+            path += f"&after={urllib.parse.quote(after)}"
+        status, payload = _resend("GET", path, None)
+        if status != 200:
+            raise RuntimeError(f"Resend list contacts failed: {status} {payload}")
+        data = payload.get("data") or []
+        out.extend(c for c in data if not c.get("unsubscribed"))
+        if not payload.get("has_more") or not data:
+            break
+        after = data[-1].get("id")
+        if not after:
+            break
+    return out
