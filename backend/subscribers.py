@@ -113,10 +113,11 @@ def signup(body: SignupBody):
 
     # Contacts are workspace-scoped in the Segments model. We associate the
     # new contact with our segment via the `segments` array on create.
+    # Resend expects each entry as an object {"id": "<uuid>"}, not a bare string.
     status, payload = _resend(
         "POST",
         "/contacts",
-        {"email": email, "segments": [sid], "unsubscribed": False},
+        {"email": email, "segments": [{"id": sid}], "unsubscribed": False},
     )
     if status in (200, 201):
         return {"ok": True, "status": "subscribed"}
@@ -126,7 +127,7 @@ def signup(body: SignupBody):
         upd_status, _ = _resend(
             "PATCH",
             f"/contacts/{urllib.parse.quote(email)}",
-            {"unsubscribed": False, "segments": [sid]},
+            {"unsubscribed": False, "segments": [{"id": sid}]},
         )
         if upd_status in (200, 201, 204):
             return {"ok": True, "status": "reactivated"}
