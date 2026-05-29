@@ -37,6 +37,7 @@ import RnsTab from "./components/RnsTab";
 import AnalyticsTab from "./components/AnalyticsTab";
 import NewsTab from "./components/NewsTab";
 import BreakoutTab from "./components/BreakoutTab";
+import SubscribeTab from "./components/SubscribeTab";
 
 function MetricCard({ label, value, color }) {
   return (
@@ -2352,7 +2353,12 @@ function Screener({
 // ── App Shell ─────────────────────────────────────────────────────────────────
 export default function App() {
   const isMobile = useIsMobile();
-  const [page, setPage] = useState("screener"); // screener | watchlist | rotation | breadth | cross-asset | signals | company
+  const [page, setPage] = useState(() => {
+    // Deep-link support: emails point at /?tab=subscribe.
+    if (typeof window === "undefined") return "screener";
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return t || "screener";
+  }); // screener | watchlist | rotation | breadth | cross-asset | signals | company | subscribe
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [watchlist, setWatchlist] = useState(() => new Set(loadWatchlist()));
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -2475,6 +2481,7 @@ export default function App() {
     { id: "analyst-monitor", label: "Analysts" },
     { id: "rns", label: "RNS News" },
     { id: "analytics", label: "Analytics" },
+    { id: "subscribe", label: "Subscribe" },
     {
       id: "markets",
       label: "Markets",
@@ -3084,6 +3091,7 @@ export default function App() {
           {page === "analytics" && (
             <AnalyticsTab refreshKey={refreshKey} onSelect={selectCompany} />
           )}
+          {page === "subscribe" && <SubscribeTab />}
           {page === "company" && selectedSymbol && (
             <CompanyDetail symbol={selectedSymbol} onBack={goBack} />
           )}
