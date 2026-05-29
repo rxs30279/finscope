@@ -1,7 +1,7 @@
 import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
@@ -495,6 +495,7 @@ _SCREENER_TTL = 900  # 15 minutes — underlying data only refreshes once/day
 
 @app.get("/api/screener")
 def screener(
+    response: Response,
     sector: Optional[str] = None,
     exclude_sectors: Optional[str] = None,
     country: Optional[str] = None,
@@ -507,6 +508,10 @@ def screener(
     min_upside_pct: Optional[float] = None,
     limit: int = 100,
 ):
+    # Vercel edge CDN cache — fresh for 15 min, then serve stale up to 1h
+    # while refetching in the background. Keeps cold-start delays off the
+    # critical path for nearly all users.
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
     import time
     cache_key = (
         sector, exclude_sectors, country, ftse_index, min_market_cap, max_pe,
