@@ -155,8 +155,10 @@ def test_attach_momentum_empty_results():
 
 def test_get_prices_returns_list(client):
     rows = [
-        {'date': date(2024, 1, 2), 'close': 310.5},
-        {'date': date(2024, 1, 3), 'close': 315.0},
+        {'date': date(2024, 1, 2), 'open': 308.0, 'high': 312.0, 'low': 307.0,
+         'close': 310.5, 'volume': 1234567},
+        {'date': date(2024, 1, 3), 'open': 311.0, 'high': 316.0, 'low': 310.0,
+         'close': 315.0, 'volume': 987654},
     ]
     with patch('prices.query', return_value=rows):
         r = client.get('/api/prices/SHEL.L')
@@ -165,6 +167,10 @@ def test_get_prices_returns_list(client):
     assert len(data) == 2
     assert data[0]['date'] == '2024-01-02'
     assert data[0]['close'] == 310.5
+    assert data[0]['open'] == 308.0
+    assert data[0]['high'] == 312.0
+    assert data[0]['low'] == 307.0
+    assert data[0]['volume'] == 1234567
 
 
 def test_get_prices_404_when_no_data(client):

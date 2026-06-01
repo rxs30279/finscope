@@ -7,6 +7,8 @@ import {
   AreaChart,
   Area,
   ComposedChart,
+  Cell,
+  Customized,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -977,9 +979,13 @@ function HybridSelect({
 function PriceChart({ symbol }) {
   const [priceData, setPriceData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [range, setRange] = useState("1Y");
+  const [range, setRange] = useState("6M");
   const [showMA20, setShowMA20] = useState(true);
-  const [showMA50, setShowMA50] = useState(true);
+  const [showMA50, setShowMA50] = useState(false);
+  const [showVolume, setShowVolume] = useState(true);
+  const [showCandles, setShowCandles] = useState(true);
+  const [showMACD, setShowMACD] = useState(false);
+  const [showRSI, setShowRSI] = useState(false);
 
   useEffect(() => {
     if (!symbol) return;
@@ -1006,6 +1012,55 @@ function PriceChart({ symbol }) {
   const ma20 = computeMA(priceData, 20);
   const ma50 = computeMA(priceData, 50);
 
+  // MACD (12/26/9) over close. EMA seeded on the first value; computed across
+  // the full 5Y history so it's fully warmed up before any visible window.
+  const emaSeries = (vals, period) => {
+    const k = 2 / (period + 1);
+    let prev = null;
+    return vals.map((v) => {
+      if (v == null) return null;
+      prev = prev == null ? v : v * k + prev * (1 - k);
+      return prev;
+    });
+  };
+  const closes = priceData.map((d) => d.close);
+  const ema12 = emaSeries(closes, 12);
+  const ema26 = emaSeries(closes, 26);
+  const macdArr = closes.map((_, i) =>
+    ema12[i] != null && ema26[i] != null ? ema12[i] - ema26[i] : null
+  );
+  const signalArr = emaSeries(macdArr, 9);
+  const histArr = macdArr.map((v, i) =>
+    v != null && signalArr[i] != null ? v - signalArr[i] : null
+  );
+
+  // RSI(14), Wilder's smoothing. >70 overbought, <30 oversold.
+  const computeRSI = (period = 14) => {
+    const rsi = new Array(closes.length).fill(null);
+    let avgGain = 0;
+    let avgLoss = 0;
+    for (let i = 1; i < closes.length; i++) {
+      const ch = closes[i] - closes[i - 1];
+      const gain = ch > 0 ? ch : 0;
+      const loss = ch < 0 ? -ch : 0;
+      if (i <= period) {
+        avgGain += gain;
+        avgLoss += loss;
+        if (i === period) {
+          avgGain /= period;
+          avgLoss /= period;
+          rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+        }
+      } else {
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+        rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+      }
+    }
+    return rsi;
+  };
+  const rsiArr = computeRSI(14);
+
   const RANGE_DAYS = {
     "1M": 30,
     "3M": 90,
@@ -1025,18 +1080,243 @@ function PriceChart({ symbol }) {
   const chartData = priceData
     .map((d, i) => ({
       date: d.date,
+      open: d.open,
+      high: d.high,
+      low: d.low,
       close: d.close,
+      volume: d.volume,
       ma20: ma20[i],
       ma50: ma50[i],
+      macd: macdArr[i],
+      signal: signalArr[i],
+      hist: histArr[i],
+      rsi: rsiArr[i],
     }))
     .filter((d) => !cutoff || new Date(d.date) >= cutoff);
 
+  // Axis tick label: short ranges show day+month, long ranges show month+year.
   const tickFormatter = (dateStr) => {
     const d = new Date(dateStr);
     const mon = d.toLocaleString("default", { month: "short" });
-    if (["3Y", "5Y"].includes(range))
-      return `${mon}${String(d.getFullYear()).slice(2)}`;
-    return mon;
+    if (["3Y", "5Y"].includes(range)) return `${mon} ${d.getFullYear()}`;
+    if (["1M", "3M"].includes(range)) return `${d.getDate()} ${mon}`;
+    return mon; // 6M, 1Y
+  };
+
+  // Tooltip label: always the full, unambiguous date.
+  const labelFormatter = (dateStr) =>
+    new Date(dateStr).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+
+  // Price-axis label with thousands separators (e.g. 13,500) so large-cap,
+  // high-priced stocks read cleanly.
+  const fmtAxisPrice = (v) =>
+    v == null
+      ? ""
+      : Number(v).toLocaleString("en-GB", { maximumFractionDigits: 2 });
+
+  // Compact volume label, e.g. 1.2M / 845K.
+  const fmtVolume = (v) => {
+    if (v == null) return "—";
+    if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
+    if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+    if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+    return String(v);
+  };
+
+  // Evenly spaced ticks pulled from the actual data so labels never duplicate
+  // or crowd, regardless of the selected range.
+  const TICK_COUNT = 7;
+  const axisTicks =
+    chartData.length <= TICK_COUNT
+      ? chartData.map((d) => d.date)
+      : Array.from({ length: TICK_COUNT }, (_, i) =>
+          chartData[Math.round((i * (chartData.length - 1)) / (TICK_COUNT - 1))]
+            .date
+        );
+
+  // In candle mode the candles are drawn as an SVG overlay (not a data series),
+  // so the price axis won't auto-scale to their highs/lows. Derive an explicit
+  // domain with a little padding so wicks aren't clipped.
+  const UP = "#22c55e";
+  const DOWN = "#ef4444";
+  const priceDomain = (() => {
+    if (!showCandles) return ["auto", "auto"];
+    const lows = chartData.map((d) => d.low).filter((v) => v != null);
+    const highs = chartData.map((d) => d.high).filter((v) => v != null);
+    if (!lows.length || !highs.length) return ["auto", "auto"];
+    const lo = Math.min(...lows);
+    const hi = Math.max(...highs);
+    const span = hi - lo || hi || 1;
+    // Round the padded bounds to a "nice" increment (1/2/5 × 10ⁿ) so Recharts
+    // generates clean tick values instead of fractional noise — important for
+    // high-priced stocks like AZN.L where raw bounds produce labels like 13245.7.
+    const mag = Math.pow(10, Math.floor(Math.log10(span / 5)));
+    const norm = span / 5 / mag;
+    const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+    const domLo = Math.floor((lo - span * 0.05) / step) * step;
+    const domHi = Math.ceil((hi + span * 0.05) / step) * step;
+    return [Math.max(0, domLo), domHi];
+  })();
+
+  // Candlestick overlay. <Customized> hands us the live axis scales, letting us
+  // position wicks/bodies exactly without fighting Recharts' bar layout.
+  const renderCandles = ({ xAxisMap, yAxisMap }) => {
+    if (!showCandles || !xAxisMap || !yAxisMap) return null;
+    const xAxis = xAxisMap[Object.keys(xAxisMap)[0]];
+    const priceKey =
+      Object.keys(yAxisMap).find((k) => k !== "vol") ??
+      Object.keys(yAxisMap)[0];
+    const yAxis = yAxisMap[priceKey];
+    if (!xAxis || !yAxis) return null;
+    const xScale = xAxis.scale;
+    const yScale = yAxis.scale;
+    // Band scale (when a Bar is present) maps to the band's left edge and has a
+    // real bandwidth; point scale (candles only) maps to the centre and reports
+    // bandwidth() === 0, so fall back to step()/spacing for the candle width.
+    const bw = typeof xScale.bandwidth === "function" ? xScale.bandwidth() : 0;
+    const isBand = bw > 0;
+    const step =
+      typeof xScale.step === "function"
+        ? xScale.step()
+        : chartData.length > 1
+        ? Math.abs(xScale(chartData[1].date) - xScale(chartData[0].date))
+        : 6;
+    const band = isBand ? bw : step;
+    const bodyW = Math.max(1, band * 0.6);
+    return (
+      <g>
+        {chartData.map((d, i) => {
+          if (
+            d.open == null ||
+            d.high == null ||
+            d.low == null ||
+            d.close == null
+          )
+            return null;
+          const cx = isBand ? xScale(d.date) + bw / 2 : xScale(d.date);
+          const color = d.close >= d.open ? UP : DOWN;
+          const yHigh = yScale(d.high);
+          const yLow = yScale(d.low);
+          const yOpen = yScale(d.open);
+          const yClose = yScale(d.close);
+          const bodyTop = Math.min(yOpen, yClose);
+          const bodyH = Math.max(1, Math.abs(yClose - yOpen));
+          return (
+            <g key={i}>
+              <line
+                x1={cx}
+                y1={yHigh}
+                x2={cx}
+                y2={yLow}
+                stroke={color}
+                strokeWidth={1}
+              />
+              <rect
+                x={cx - bodyW / 2}
+                y={bodyTop}
+                width={bodyW}
+                height={bodyH}
+                fill={color}
+              />
+            </g>
+          );
+        })}
+      </g>
+    );
+  };
+
+  // Custom tooltip: reads the full data point so every active series (OHLC in
+  // candle mode, Close otherwise, plus MAs and Volume) is listed in full.
+  const ChartTooltip = ({ active, payload }) => {
+    if (!active || !payload || !payload.length) return null;
+    const d = payload[0].payload;
+    if (!d) return null;
+    const f = (x) => (x == null ? "—" : x.toFixed(2));
+    const row = (label, val, color) => (
+      <div
+        key={label}
+        style={{ display: "flex", justifyContent: "space-between", gap: 16 }}
+      >
+        <span style={{ color: color || "#94a3b8" }}>{label}</span>
+        <span style={{ color: "#e5e5e5" }}>{val}</span>
+      </div>
+    );
+    return (
+      <div style={{ ...S.tooltip, padding: "6px 10px" }}>
+        <div style={{ marginBottom: 4, color: "#cbd5e1" }}>
+          {labelFormatter(d.date)}
+        </div>
+        {showCandles
+          ? [
+              row("O", f(d.open)),
+              row("H", f(d.high)),
+              row("L", f(d.low)),
+              row("C", f(d.close)),
+            ]
+          : row("Close", f(d.close), "#818cf8")}
+        {showMA20 && d.ma20 != null && row("MA20", f(d.ma20), "#f59e0b")}
+        {showMA50 && d.ma50 != null && row("MA50", f(d.ma50), "#a855f7")}
+        {showVolume &&
+          d.volume != null &&
+          row("Vol", fmtVolume(d.volume), "#22d3ee")}
+      </div>
+    );
+  };
+
+  // Tooltip for the MACD sub-panel.
+  const MacdTooltip = ({ active, payload }) => {
+    if (!active || !payload || !payload.length) return null;
+    const d = payload[0].payload;
+    if (!d) return null;
+    const f = (x) => (x == null ? "—" : x.toFixed(2));
+    const row = (label, val, color) => (
+      <div
+        key={label}
+        style={{ display: "flex", justifyContent: "space-between", gap: 16 }}
+      >
+        <span style={{ color: color || "#94a3b8" }}>{label}</span>
+        <span style={{ color: "#e5e5e5" }}>{val}</span>
+      </div>
+    );
+    return (
+      <div style={{ ...S.tooltip, padding: "6px 10px" }}>
+        <div style={{ marginBottom: 4, color: "#cbd5e1" }}>
+          {labelFormatter(d.date)}
+        </div>
+        {row("MACD", f(d.macd), "#38bdf8")}
+        {row("Signal", f(d.signal), "#f59e0b")}
+        {row("Hist", f(d.hist), d.hist >= 0 ? UP : DOWN)}
+      </div>
+    );
+  };
+
+  // Tooltip for the RSI sub-panel, with an overbought/oversold tag.
+  const RsiTooltip = ({ active, payload }) => {
+    if (!active || !payload || !payload.length) return null;
+    const d = payload[0].payload;
+    if (!d || d.rsi == null) return null;
+    const status =
+      d.rsi >= 70
+        ? ["Overbought", DOWN]
+        : d.rsi <= 30
+        ? ["Oversold", UP]
+        : ["Neutral", "#94a3b8"];
+    return (
+      <div style={{ ...S.tooltip, padding: "6px 10px" }}>
+        <div style={{ marginBottom: 4, color: "#cbd5e1" }}>
+          {labelFormatter(d.date)}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+          <span style={{ color: "#a78bfa" }}>RSI</span>
+          <span style={{ color: "#e5e5e5" }}>{d.rsi.toFixed(1)}</span>
+        </div>
+        <div style={{ marginTop: 2, color: status[1] }}>{status[0]}</div>
+      </div>
+    );
   };
 
   const pillBase = {
@@ -1064,6 +1344,30 @@ function PriceChart({ symbol }) {
     ...pillBase,
     ...(active
       ? { background: "#4c1d95", color: "#ddd6fe", borderColor: "#5b21b6" }
+      : { color: "#64748b" }),
+  });
+  const volPill = (active) => ({
+    ...pillBase,
+    ...(active
+      ? { background: "#155e75", color: "#cffafe", borderColor: "#0e7490" }
+      : { color: "#64748b" }),
+  });
+  const candlePill = (active) => ({
+    ...pillBase,
+    ...(active
+      ? { background: "#14532d", color: "#bbf7d0", borderColor: "#166534" }
+      : { color: "#64748b" }),
+  });
+  const macdPill = (active) => ({
+    ...pillBase,
+    ...(active
+      ? { background: "#0c4a6e", color: "#bae6fd", borderColor: "#075985" }
+      : { color: "#64748b" }),
+  });
+  const rsiPill = (active) => ({
+    ...pillBase,
+    ...(active
+      ? { background: "#581c87", color: "#e9d5ff", borderColor: "#6b21a8" }
       : { color: "#64748b" }),
   });
 
@@ -1102,13 +1406,13 @@ function PriceChart({ symbol }) {
       <div
         style={{
           display: "flex",
+          flexDirection: "column",
           gap: 8,
           marginBottom: 12,
-          flexWrap: "wrap",
-          alignItems: "center",
+          alignItems: "flex-start",
         }}
       >
-        <div style={{ display: "flex", gap: 4 }}>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
           {["1M", "3M", "6M", "1Y", "3Y", "5Y"].map((r) => (
             <button
               key={r}
@@ -1119,7 +1423,13 @@ function PriceChart({ symbol }) {
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          <button
+            onClick={() => setShowCandles((v) => !v)}
+            style={candlePill(showCandles)}
+          >
+            Candles
+          </button>
           <button
             onClick={() => setShowMA20((v) => !v)}
             style={ma20Pill(showMA20)}
@@ -1131,6 +1441,24 @@ function PriceChart({ symbol }) {
             style={ma50Pill(showMA50)}
           >
             MA50
+          </button>
+          <button
+            onClick={() => setShowVolume((v) => !v)}
+            style={volPill(showVolume)}
+          >
+            Vol
+          </button>
+          <button
+            onClick={() => setShowMACD((v) => !v)}
+            style={macdPill(showMACD)}
+          >
+            MACD
+          </button>
+          <button
+            onClick={() => setShowRSI((v) => !v)}
+            style={rsiPill(showRSI)}
+          >
+            RSI
           </button>
         </div>
       </div>
@@ -1147,28 +1475,71 @@ function PriceChart({ symbol }) {
           </defs>
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 10 }}
-            interval="preserveStartEnd"
+            tick={showMACD || showRSI ? false : { fontSize: 10 }}
+            ticks={axisTicks}
+            interval={0}
             tickFormatter={tickFormatter}
+            height={showMACD || showRSI ? 4 : 30}
           />
-          <YAxis tick={{ fontSize: 10 }} domain={["auto", "auto"]} width={60} />
-          <Tooltip
-            contentStyle={S.tooltip}
-            labelFormatter={tickFormatter}
-            formatter={(val, name) => [
-              val != null ? val.toFixed(2) : "—",
-              name,
-            ]}
+          <YAxis
+            tick={{ fontSize: 10 }}
+            domain={priceDomain}
+            tickFormatter={fmtAxisPrice}
+            width={64}
           />
-          <Area
-            type="monotone"
-            dataKey="close"
-            stroke="#6366f1"
-            fill="url(#gPrice)"
-            strokeWidth={2}
-            dot={false}
-            name="Close"
-          />
+          {showVolume && (
+            <YAxis
+              yAxisId="vol"
+              orientation="right"
+              hide
+              domain={[0, (dataMax) => (dataMax || 0) * 4]}
+            />
+          )}
+          <Tooltip content={<ChartTooltip />} />
+          {showVolume && (
+            <Bar
+              yAxisId="vol"
+              dataKey="volume"
+              fill="#0e7490"
+              opacity={0.5}
+              name="Volume"
+              isAnimationActive={false}
+            >
+              {["1M", "3M", "6M"].includes(range) &&
+                chartData.map((d, i) => (
+                  <Cell
+                    key={i}
+                    fill={d.open != null && d.close < d.open ? DOWN : UP}
+                  />
+                ))}
+            </Bar>
+          )}
+          {showCandles ? (
+            <>
+              {/* Invisible series so hovering registers (the candles are an SVG
+                  overlay, not a data series); it feeds the data point to the
+                  tooltip even when MAs and Volume are toggled off. */}
+              <Line
+                type="monotone"
+                dataKey="close"
+                stroke="transparent"
+                dot={false}
+                name="OHLC"
+                isAnimationActive={false}
+              />
+              <Customized component={renderCandles} />
+            </>
+          ) : (
+            <Area
+              type="monotone"
+              dataKey="close"
+              stroke="#6366f1"
+              fill="url(#gPrice)"
+              strokeWidth={2}
+              dot={false}
+              name="Close"
+            />
+          )}
           {showMA20 && (
             <Line
               type="monotone"
@@ -1194,6 +1565,115 @@ function PriceChart({ symbol }) {
           )}
         </ComposedChart>
       </ResponsiveContainer>
+      {showMACD && (
+        <ResponsiveContainer width="100%" height={150}>
+          <ComposedChart
+            data={chartData}
+            margin={{ top: 4, right: 10, bottom: 5, left: 0 }}
+          >
+            <text
+              x={70}
+              y={12}
+              fill="#64748b"
+              fontSize={11}
+              fontFamily="monospace"
+            >
+              MACD (12, 26, 9)
+            </text>
+            <XAxis
+              dataKey="date"
+              tick={showRSI ? false : { fontSize: 10 }}
+              ticks={axisTicks}
+              interval={0}
+              tickFormatter={tickFormatter}
+              height={showRSI ? 4 : 30}
+            />
+            <YAxis
+              tick={{ fontSize: 10 }}
+              tickFormatter={fmtAxisPrice}
+              width={64}
+            />
+            <Tooltip content={<MacdTooltip />} />
+            <ReferenceLine y={0} stroke="#334155" />
+            <Bar dataKey="hist" name="Hist" isAnimationActive={false}>
+              {chartData.map((d, i) => (
+                <Cell key={i} fill={d.hist != null && d.hist < 0 ? DOWN : UP} />
+              ))}
+            </Bar>
+            <Line
+              type="monotone"
+              dataKey="macd"
+              stroke="#38bdf8"
+              strokeWidth={1.5}
+              dot={false}
+              name="MACD"
+              connectNulls={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="signal"
+              stroke="#f59e0b"
+              strokeWidth={1.5}
+              dot={false}
+              name="Signal"
+              connectNulls={false}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
+      {showRSI && (
+        <ResponsiveContainer width="100%" height={130}>
+          <ComposedChart
+            data={chartData}
+            margin={{ top: 4, right: 10, bottom: 5, left: 0 }}
+          >
+            <text
+              x={70}
+              y={12}
+              fill="#64748b"
+              fontSize={11}
+              fontFamily="monospace"
+            >
+              RSI (14)
+            </text>
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10 }}
+              ticks={axisTicks}
+              interval={0}
+              tickFormatter={tickFormatter}
+            />
+            <YAxis
+              tick={{ fontSize: 10 }}
+              domain={[0, 100]}
+              ticks={[30, 50, 70]}
+              width={64}
+            />
+            <Tooltip content={<RsiTooltip />} />
+            <ReferenceLine
+              y={70}
+              stroke={DOWN}
+              strokeDasharray="4 2"
+              label={{ value: "70", position: "right", fontSize: 9, fill: DOWN }}
+            />
+            <ReferenceLine
+              y={30}
+              stroke={UP}
+              strokeDasharray="4 2"
+              label={{ value: "30", position: "right", fontSize: 9, fill: UP }}
+            />
+            <Line
+              type="monotone"
+              dataKey="rsi"
+              stroke="#a78bfa"
+              strokeWidth={1.5}
+              dot={false}
+              name="RSI"
+              connectNulls={false}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }
@@ -1694,6 +2174,7 @@ function Screener({
           fontFamily: "DM Serif Display,serif",
           fontSize: 26,
           color: "#f1f5f9",
+          marginTop: 0,
           marginBottom: 4,
         }}
       >
@@ -2025,7 +2506,7 @@ function Screener({
         <div
           style={{
             overflow: "auto",
-            maxHeight: "calc(100vh - 280px)",
+            maxHeight: "calc(100vh - 245px)",
             scrollbarGutter: "stable",
           }}
         >
@@ -3091,7 +3572,7 @@ export default function App() {
         <main
           style={{
             flex: 1,
-            padding: isMobile ? "16px 12px" : "32px 24px",
+            padding: isMobile ? "12px 12px" : "16px 24px",
             minWidth: 0,
           }}
         >

@@ -39,7 +39,7 @@ export default function Sidebar({ refreshKey }) {
       .catch(() => {});
   }, [refreshKey]);
 
-  const labelStyle = { color:'#444', fontSize:9, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:8 };
+  const labelStyle = { color:'#666', fontSize:9, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:8 };
   const rowStyle   = { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 };
   const nameStyle  = { color:'#94a3b8', fontSize:10 };
 

@@ -446,14 +446,25 @@ def refresh_prices():
 
 @router.get("/api/prices/{symbol}")
 def get_prices(symbol: str):
-    """Return full close history for a symbol, oldest first."""
+    """Return full OHLCV history for a symbol, oldest first."""
     rows = query(
-        "SELECT date, close FROM price_history WHERE symbol = %s ORDER BY date ASC",
+        "SELECT date, open, high, low, close, volume FROM price_history"
+        " WHERE symbol = %s ORDER BY date ASC",
         (symbol,),
     )
     if not rows:
         raise HTTPException(status_code=404, detail="No price history")
-    return [{"date": str(r["date"]), "close": float(r["close"])} for r in rows]
+    return [
+        {
+            "date": str(r["date"]),
+            "open": float(r["open"]) if r.get("open") is not None else None,
+            "high": float(r["high"]) if r.get("high") is not None else None,
+            "low": float(r["low"]) if r.get("low") is not None else None,
+            "close": float(r["close"]),
+            "volume": int(r["volume"]) if r.get("volume") is not None else None,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/api/prices/refresh/{symbol}")
