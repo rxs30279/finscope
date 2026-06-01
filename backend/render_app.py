@@ -38,12 +38,6 @@ from rns import _run_ingest, _backfill_summaries, _prune_old
 from rns_llm import _rank_pending
 from refresh_rns import _compute_max_pages
 from prices import refresh_prices
-from breakout import (
-    _compute_breakout_scores,
-    _upsert_scores,
-    _upsert_signals,
-    _compute_backtest,
-)
 from _mem import snapshot as _mem
 
 # ── App setup ─────────────────────────────────────────────────────────────────
@@ -82,6 +76,17 @@ _run_state: dict = {
     "run_id": 0,
 }
 _LOCK_TIMEOUT_S = 30 * 60  # 30-minute safety timeout
+
+# Separate lightweight guard for the daily price refresh so it can't overlap
+# itself and never blocks (or is blocked by) the RNS pipeline above.
+_price_lock = threading.Lock()
+_price_state: dict = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+    "result": None,
+}
 
 
 def _acquire_lock() -> bool:
@@ -283,17 +288,8 @@ def pipeline_log(lines: int = Query(50, ge=1, le=500)):
     }
 
 
-@app.get("/api/prices/run")
-def run_price_refresh(token: str = Query(...)):
-    """Trigger a daily price refresh for all stocks.
-
-    Called by cron-job.org once daily after market close.
-    Requires ?token=<CRON_AUTH_TOKEN>.
-    Runs synchronously — fetches missing OHLCV data from yfinance and upserts.
-    """
-    if _CRON_TOKEN and token != _CRON_TOKEN:
-        raise HTTPException(status_code=403, detail="Invalid token")
-
+def _run_price_refresh():
+    """Execute the full price refresh; runs in a background thread."""
     print(
         f"[render] price refresh starting at {datetime.now(timezone.utc).isoformat()}"
     )
@@ -302,67 +298,71 @@ def run_price_refresh(token: str = Query(...)):
         result = refresh_prices()
         print(f"[render] price refresh done — {result}")
         _mem("price_refresh", "end", rows_added=result.get("rows_added"))
-        return {"status": "ok", **result}
+        with _state_lock:
+            _price_state["result"] = result
+            _price_state["error"] = None
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         print(f"[render] price refresh FAILED — {error_msg}")
         traceback.print_exc()
         _mem("price_refresh", "error")
-        return {"status": "error", "error": error_msg}
+        with _state_lock:
+            _price_state["error"] = error_msg
+    finally:
+        with _state_lock:
+            _price_state["running"] = False
+            _price_state["finished_at"] = time.time()
+        try:
+            _price_lock.release()
+        except RuntimeError:
+            pass
 
 
-@app.get("/api/breakout/run")
-def run_breakout(token: str = Query(...)):
-    """Compute breakout scores for all stocks.
+@app.get("/api/prices/run")
+def run_price_refresh(token: str = Query(...)):
+    """Trigger a daily price refresh for all stocks.
 
-    Called by cron-job.org ~30 min after the daily price refresh.
+    Called by cron-job.org once daily after market close.
     Requires ?token=<CRON_AUTH_TOKEN>.
-    Runs synchronously — fetches price history, computes indicators, upserts.
+
+    Returns immediately with status "started" (or "skipped" if a refresh is
+    already in progress) and runs the actual fetch in a background thread.
+    The full universe takes minutes to fetch, so a synchronous response would
+    exceed cron-job.org's 30s timeout.
     """
     if _CRON_TOKEN and token != _CRON_TOKEN:
         raise HTTPException(status_code=403, detail="Invalid token")
 
-    t0 = time.time()
-    print(
-        f"[render] breakout computation starting at {datetime.now(timezone.utc).isoformat()}"
-    )
-    _mem("breakout", "start")
-    try:
-        results = _compute_breakout_scores()
-        _mem("breakout", "scores_computed", n=len(results))
-        if not results:
-            return {
-                "status": "ok",
-                "stocks_processed": 0,
-                "signals": 0,
-                "duration_seconds": round(time.time() - t0, 1),
-                "message": "No stocks processed",
-            }
+    if not _price_lock.acquire(blocking=False):
+        return {"status": "skipped", "reason": "Price refresh already in progress"}
 
-        scores_count = _upsert_scores(results)
-        signals_count = _upsert_signals(results)
-        _mem("breakout", "upserted", signals=signals_count)
+    with _state_lock:
+        _price_state["running"] = True
+        _price_state["started_at"] = time.time()
+        _price_state["finished_at"] = None
+        _price_state["error"] = None
+        _price_state["result"] = None
 
-        # Run backtest for today's signals
-        backtest_result = _compute_backtest()
-        _mem("breakout", "end", signals=signals_count)
+    t = threading.Thread(target=_run_price_refresh, daemon=True)
+    t.start()
 
-        print(
-            f"[render] breakout done — {len(results)} stocks, {signals_count} signals"
-        )
-        return {
-            "status": "ok",
-            "stocks_processed": len(results),
-            "signals": signals_count,
-            "duration_seconds": round(time.time() - t0, 1),
-            "backtest": backtest_result,
-        }
-    except Exception as e:
-        error_msg = f"{type(e).__name__}: {e}"
-        print(f"[render] breakout FAILED — {error_msg}")
-        traceback.print_exc()
-        _mem("breakout", "error")
-        return {"status": "error", "error": error_msg}
+    return {
+        "status": "started",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/prices/status")
+def price_refresh_status():
+    """Return the current/last price-refresh state (for debugging cron runs)."""
+    with _state_lock:
+        state = dict(_price_state)
+    for key in ("started_at", "finished_at"):
+        if state.get(key):
+            state[key] = datetime.fromtimestamp(
+                state[key], tz=timezone.utc
+            ).isoformat()
+    return state
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

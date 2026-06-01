@@ -29,11 +29,14 @@ def _fake_yf_download(symbols, start, rows=300):
 def test_refresh_returns_summary(client):
     with patch('prices.yf.download', return_value=_fake_yf_download(['SHEL.L'], None)) as mock_dl, \
          patch('prices.query') as mock_query, \
-         patch('prices._upsert_rows', return_value=10) as mock_upsert:
+         patch('prices._upsert_rows', return_value=10) as mock_upsert, \
+         patch('prices._update_activity', return_value=[]) as mock_activity:
         mock_query.side_effect = [
-            # all symbols from company_metadata
+            # active symbols from company_metadata
             [{'symbol': 'SHEL.L'}],
             # latest dates from price_history (empty — no history yet)
+            [],
+            # earliest dates from price_history (empty — no history yet)
             [],
         ]
         r = client.post('/api/prices/refresh')
@@ -42,6 +45,36 @@ def test_refresh_returns_summary(client):
     assert 'rows_added' in data
     assert 'updated' in data
     assert 'duration_seconds' in data
+    # delisted-symbol bookkeeping ran for the attempted universe
+    mock_activity.assert_called_once()
+
+
+def test_refresh_deactivates_persistently_empty_symbols():
+    """A symbol that comes back empty crosses the threshold and is deactivated."""
+    import prices
+    # SHEL.L returned data; DEAD.L was attempted but came back empty.
+    rows_returned = [
+        # symbol seen empty for the (_DEACTIVATE_AFTER - 1)th time already
+        ('DEAD.L', False),
+    ]
+    fake_cur = MagicMock()
+    fake_cur.fetchall.return_value = rows_returned
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value = fake_cur
+    fake_pool = MagicMock()
+    fake_pool.getconn.return_value = fake_conn
+    with patch('prices._get_pool', return_value=fake_pool):
+        deactivated = prices._update_activity({'SHEL.L'}, {'DEAD.L'})
+    assert deactivated == ['DEAD.L']
+    fake_conn.commit.assert_called_once()
+
+
+def test_update_activity_noop_when_nothing_to_record():
+    import prices
+    with patch('prices._get_pool') as mock_pool:
+        result = prices._update_activity(set(), set())
+    assert result == []
+    mock_pool.assert_not_called()
 
 
 # ── _attach_momentum tests ────────────────────────────────────────────────────
@@ -102,7 +135,9 @@ def test_refresh_symbol_already_up_to_date(client):
     from datetime import date as _date
     today = _date.today()
     yesterday = today - timedelta(days=1)
-    with patch('prices.query', return_value=[{'latest': yesterday}]):
+    # earliest old enough to skip backfill; latest=today so no top-up either
+    with patch('prices.query',
+               return_value=[{'earliest': _date(2018, 1, 1), 'latest': today}]):
         r = client.post('/api/prices/refresh/SHEL.L')
     assert r.status_code == 200
     assert r.json() == {'rows_added': 0}
@@ -111,8 +146,10 @@ def test_refresh_symbol_already_up_to_date(client):
 def test_refresh_symbol_fetches_missing_rows(client):
     from datetime import date as _date
     stale_date = _date(2026, 4, 2)
-    with patch('prices.query', return_value=[{'latest': stale_date}]), \
-         patch('prices._fetch_closes', return_value=[('SHEL.L', _date(2026, 4, 3), 320.0)]) as mock_fetch, \
+    # earliest is old (5Y present) so only the top-up path runs — one fetch
+    with patch('prices.query',
+               return_value=[{'earliest': _date(2018, 1, 1), 'latest': stale_date}]), \
+         patch('prices._fetch_ohlcv', return_value=[('SHEL.L', _date(2026, 4, 3), 1, 2, 0, 320.0, 5)]) as mock_fetch, \
          patch('prices._upsert_rows', return_value=1) as mock_upsert:
         r = client.post('/api/prices/refresh/SHEL.L')
     assert r.status_code == 200
@@ -123,8 +160,8 @@ def test_refresh_symbol_fetches_missing_rows(client):
 
 def test_refresh_symbol_no_history_uses_3yr_start(client):
     from datetime import date as _date
-    with patch('prices.query', return_value=[{'latest': None}]), \
-         patch('prices._fetch_closes', return_value=[]) as mock_fetch, \
+    with patch('prices.query', return_value=[{'earliest': None, 'latest': None}]), \
+         patch('prices._fetch_ohlcv', return_value=[]) as mock_fetch, \
          patch('prices._upsert_rows', return_value=0):
         r = client.post('/api/prices/refresh/NEW.L')
     assert r.status_code == 200

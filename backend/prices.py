@@ -111,6 +111,7 @@ def _next_trading_day(d: date) -> date:
 _BATCH_SIZE = 25  # yfinance chokes on large batches — keep small
 _BATCH_SLEEP_S = 1.5  # delay between batches to avoid rate limiting
 _MAX_RETRIES = 2  # retry a failed batch once
+_DEACTIVATE_AFTER = 3  # consecutive empty refreshes before a symbol is dropped
 
 
 def _fetch_ohlcv_batch(symbols, start_date):
@@ -249,6 +250,52 @@ def _fetch_ohlcv(symbols, start_date):
     return all_rows
 
 
+# ── Activity tracking ───────────────────────────────────────────────────────
+
+
+def _update_activity(fetched, missed):
+    """Maintain is_active / empty_fetch_count on company_metadata.
+
+    *fetched* — symbols that returned at least one row this run.
+    *missed*  — symbols we attempted but got nothing back (likely delisted).
+
+    Symbols that come back empty on _DEACTIVATE_AFTER consecutive refreshes are
+    flipped to is_active=false so refresh_prices() stops querying them (and
+    yfinance stops printing "possibly delisted" spam). Returns the list of
+    symbols deactivated on this run.
+    """
+    deactivated = []
+    if not fetched and not missed:
+        return deactivated
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        if fetched:
+            cur.execute(
+                "UPDATE company_metadata SET empty_fetch_count = 0"
+                " WHERE symbol = ANY(%s) AND empty_fetch_count <> 0",
+                (list(fetched),),
+            )
+        if missed:
+            cur.execute(
+                "UPDATE company_metadata"
+                "   SET empty_fetch_count = empty_fetch_count + 1,"
+                "       is_active = (empty_fetch_count + 1 < %s)"
+                " WHERE symbol = ANY(%s)"
+                " RETURNING symbol, is_active",
+                (_DEACTIVATE_AFTER, list(missed)),
+            )
+            deactivated = [row[0] for row in cur.fetchall() if not row[1]]
+        conn.commit()
+        return deactivated
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
 # ── Momentum scoring ──────────────────────────────────────────────────────────
 
 
@@ -310,10 +357,13 @@ def refresh_prices():
     """Fetch missing price history for all stocks via yfinance and upsert."""
     t0 = time.time()
 
-    # All symbols in the universe
+    # Active symbols in the universe (delisted tickers are dropped — see
+    # _update_activity / migrations/001_company_active_flag.sql)
     all_symbols = [
         r["symbol"]
-        for r in query("SELECT symbol FROM company_metadata ORDER BY symbol")
+        for r in query(
+            "SELECT symbol FROM company_metadata WHERE is_active ORDER BY symbol"
+        )
     ]
 
     # Latest stored date per symbol
@@ -355,9 +405,12 @@ def refresh_prices():
     )
 
     total_rows = 0
+    attempted = set()  # symbols we actually tried to fetch this run
+    fetched = set()  # symbols that returned at least one row
     for start_date, symbols in groups.items():
         if start_date > date.today():
             continue  # already up to date
+        attempted.update(symbols)
         _mem(
             "price_refresh",
             "group_start",
@@ -365,6 +418,7 @@ def refresh_prices():
             n_symbols=len(symbols),
         )
         rows = _fetch_ohlcv(symbols, start_date)
+        fetched.update(row[0] for row in rows)
         total_rows += _upsert_rows(rows)
         _mem(
             "price_refresh",
@@ -373,9 +427,30 @@ def refresh_prices():
             rows_added=len(rows),
         )
 
+    # Mark symbols that came back empty; deactivate persistently-empty ones.
+    # Prices are already committed, so don't fail the run if this can't write
+    # (e.g. migration not yet applied) — just log and carry on.
+    missed = attempted - fetched
+    try:
+        deactivated = _update_activity(fetched, missed)
+    except Exception as e:
+        logger.warning("activity update skipped: %s", e)
+        deactivated = []
+    if deactivated:
+        logger.info("Deactivated %d delisted symbols: %s",
+                    len(deactivated), ", ".join(sorted(deactivated)))
+    _mem(
+        "price_refresh",
+        "activity_updated",
+        fetched=len(fetched),
+        missed=len(missed),
+        deactivated=len(deactivated),
+    )
+
     return {
         "updated": len(all_symbols),
         "rows_added": total_rows,
+        "deactivated": deactivated,
         "duration_seconds": round(time.time() - t0, 1),
     }
 
