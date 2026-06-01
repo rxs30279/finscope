@@ -1678,6 +1678,392 @@ function PriceChart({ symbol }) {
   );
 }
 
+// ── Trending ──────────────────────────────────────────────────────────────────
+// Prices are stored in pence (LSE convention); show as pounds like the watchlist.
+const fmtPence = (p) => (p == null ? "—" : `£${(p / 100).toFixed(2)}`);
+
+function StreakBadge({ days, up }) {
+  return (
+    <span
+      style={{
+        flexShrink: 0,
+        background: up ? "#0d2318" : "#2a0d0d",
+        color: up ? "#10b981" : "#ef4444",
+        border: `1px solid ${up ? "#10b98133" : "#ef444433"}`,
+        padding: "2px 7px",
+        borderRadius: 2,
+        fontSize: 11,
+        fontFamily: "monospace",
+        fontWeight: 700,
+        minWidth: 42,
+        textAlign: "center",
+      }}
+    >
+      {up ? "▲" : "▼"} {days}d
+    </span>
+  );
+}
+
+function TrendingList({ title, accent, up, items, selected, onSelect, height }) {
+  return (
+    <div
+      style={{
+        ...S.card,
+        padding: 0,
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        height,
+      }}
+    >
+      <div
+        style={{
+          padding: "10px 14px",
+          borderBottom: "1px solid #2a2a2a",
+          color: accent,
+          fontSize: 11,
+          fontFamily: "monospace",
+          textTransform: "uppercase",
+          letterSpacing: 1,
+          fontWeight: 700,
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        <span>{title}</span>
+        <span style={{ color: "#555" }}>{items.length}</span>
+      </div>
+      <div
+        style={{
+          overflowY: "auto",
+          flex: height && height !== "auto" ? "1 1 auto" : "none",
+          maxHeight: height && height !== "auto" ? "none" : "calc(100vh - 220px)",
+          minHeight: 0,
+        }}
+      >
+        {items.length === 0 ? (
+          <div
+            style={{
+              padding: 24,
+              color: "#555",
+              fontSize: 12,
+              fontFamily: "monospace",
+              textAlign: "center",
+            }}
+          >
+            None on a 3+ day run
+          </div>
+        ) : (
+          items.map((it) => {
+            const active = it.symbol === selected;
+            return (
+              <button
+                key={it.symbol}
+                onClick={() => onSelect(it.symbol)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  width: "100%",
+                  textAlign: "left",
+                  background: active ? "#1f1200" : "none",
+                  border: "none",
+                  borderBottom: "1px solid #1a1a1a",
+                  borderLeft: `2px solid ${active ? accent : "transparent"}`,
+                  padding: "10px 12px",
+                  cursor: "pointer",
+                }}
+              >
+                <StreakBadge days={it.streak} up={up} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      color: "#e5e5e5",
+                      fontSize: 12,
+                      fontFamily: "monospace",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {it.symbol.replace(".L", "")}
+                  </div>
+                  <div
+                    style={{
+                      color: "#64748b",
+                      fontSize: 10,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {it.name}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div
+                    style={{
+                      color: "#f1f5f9",
+                      fontSize: 12,
+                      fontFamily: "monospace",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {fmtPence(it.price)}
+                  </div>
+                  <div
+                    style={{
+                      color: "#94a3b8",
+                      fontSize: 11,
+                      fontFamily: "monospace",
+                      marginTop: 1,
+                    }}
+                  >
+                    {fmt(it.market_cap, "currency", it.currency)}
+                  </div>
+                </div>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TrendingProfile({ symbol, onOpenFull }) {
+  const [meta, setMeta] = useState(null);
+  const [snap, setSnap] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    const enc = encodeURIComponent(symbol);
+    Promise.all([
+      fetch(`${API}/company?symbol=${enc}`).then((r) => r.json()),
+      fetch(`${API}/snapshot?symbol=${enc}`).then((r) => r.json()),
+    ])
+      .then(([m, s]) => {
+        setMeta(m);
+        setSnap(s);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [symbol]);
+
+  if (loading) return <div style={S.loading}>Loading {symbol}…</div>;
+  if (!snap) return <div style={S.loading}>No data for {symbol}</div>;
+
+  const fcur = meta?.financial_currency || "GBP";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <h2
+            style={{
+              margin: 0,
+              fontFamily: "DM Serif Display,serif",
+              fontSize: 22,
+              color: "#f1f5f9",
+            }}
+          >
+            {meta?.name || symbol}
+          </h2>
+          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+            {[symbol, meta?.sector, meta?.ftse_index]
+              .filter(Boolean)
+              .map((t) => (
+                <span key={t} style={S.badge}>
+                  {t}
+                </span>
+              ))}
+          </div>
+        </div>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div
+            style={{
+              fontSize: 22,
+              fontFamily: "DM Serif Display,serif",
+              color: "#f1f5f9",
+            }}
+          >
+            {fmt(snap.market_cap, "currency", fcur)}
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>Market Cap</div>
+          <button onClick={() => onOpenFull(symbol)} style={S.backBtn}>
+            Open full view →
+          </button>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill,minmax(120px,1fr))",
+          gap: 8,
+        }}
+      >
+        <MetricCard label="P/E" value={fmt(snap.price_to_earnings, "ratio")} />
+        <MetricCard label="P/B" value={fmt(snap.price_to_book, "ratio")} />
+        <MetricCard
+          label="ROE"
+          value={fmt(snap.roe, "pct")}
+          color={gc(snap.roe)}
+        />
+        <MetricCard
+          label="Rev Growth"
+          value={fmt(snap.revenue_growth, "pct")}
+          color={gc(snap.revenue_growth)}
+        />
+        <MetricCard
+          label="Net Margin"
+          value={fmt(snap.net_income_margin, "pct")}
+          color={gc(snap.net_income_margin)}
+        />
+        <MetricCard
+          label="Risk"
+          value={snap.risk_score == null ? "—" : snap.risk_score}
+          color={
+            snap.risk_score == null
+              ? "#94a3b8"
+              : snap.risk_score <= 3
+                ? "#10b981"
+                : snap.risk_score <= 6
+                  ? "#f59e0b"
+                  : "#ef4444"
+          }
+        />
+      </div>
+
+      <PriceChart symbol={symbol} />
+    </div>
+  );
+}
+
+function TrendingTab({ onSelect }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [sel, setSel] = useState(null);
+  const isMobile = useIsMobile();
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API}/trending`)
+      .then((r) => r.json())
+      .then((d) => {
+        setData(d);
+        setSel(
+          (cur) => cur || d.risers?.[0]?.symbol || d.fallers?.[0]?.symbol || null,
+        );
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div style={S.loading}>Loading trending stocks…</div>;
+
+  const risers = data?.risers || [];
+  const fallers = data?.fallers || [];
+
+  // Shared height for the three top boxes so the Risers/Fallers lists and the
+  // profile (graph) box bottoms line up. The News box sits below the profile.
+  const colH = isMobile ? "auto" : "calc(100vh - 200px)";
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <h1
+          style={{
+            margin: 0,
+            fontFamily: "DM Serif Display,serif",
+            fontSize: 26,
+            color: "#f1f5f9",
+          }}
+        >
+          Trending <span style={{ color: "#64748b" }}>— Risers and Fallers</span>
+        </h1>
+        <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
+          Stocks on a run of 3 or more consecutive up or down days, ranked by
+          streak length.
+        </div>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: isMobile
+            ? "1fr"
+            : "minmax(210px,1fr) minmax(210px,1fr) minmax(360px,1.5fr)",
+          gap: 16,
+          alignItems: "start",
+        }}
+      >
+        <TrendingList
+          title="Risers"
+          accent="#10b981"
+          up
+          items={risers}
+          selected={sel}
+          onSelect={setSel}
+          height={colH}
+        />
+        <TrendingList
+          title="Fallers"
+          accent="#ef4444"
+          up={false}
+          items={fallers}
+          selected={sel}
+          onSelect={setSel}
+          height={colH}
+        />
+        <div>
+          {sel ? (
+            <div
+              style={{
+                ...S.card,
+                height: colH,
+                overflowY: isMobile ? "visible" : "auto",
+                minHeight: 0,
+              }}
+            >
+              <TrendingProfile symbol={sel} onOpenFull={onSelect} />
+            </div>
+          ) : (
+            <div style={{ ...S.card, ...S.loading }}>
+              Select a stock to see its profile and news.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Full-width news below the three columns */}
+      {sel && (
+        <div style={{ ...S.card, marginTop: 16 }}>
+          <h2
+            style={{
+              margin: "0 0 16px",
+              fontFamily: "DM Serif Display,serif",
+              fontSize: 20,
+              color: "#f1f5f9",
+            }}
+          >
+            News{" "}
+            <span style={{ color: "#64748b", fontSize: 15 }}>
+              — {sel.replace(".L", "")}
+            </span>
+          </h2>
+          <NewsTab symbol={sel} split />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Screener ──────────────────────────────────────────────────────────────────
 const EMPTY_FILTERS = {
   sector: "",
@@ -2996,6 +3382,7 @@ export default function App() {
 
   const NAV_GROUPS = [
     { id: "screener", label: "Screener" },
+    { id: "trending", label: "Trending" },
     { id: "watchlist", label: "Watchlist" },
     { id: "analyst-monitor", label: "Analysts" },
     { id: "rns", label: "RNS News" },
@@ -3592,6 +3979,7 @@ export default function App() {
               watchlistMode
             />
           </div>
+          {page === "trending" && <TrendingTab onSelect={selectCompany} />}
           {page === "rotation" && <RotationTab refreshKey={refreshKey} />}
           {page === "breadth" && <BreadthTab refreshKey={refreshKey} />}
           {page === "fear-greed" && <FearGreedTab refreshKey={refreshKey} />}

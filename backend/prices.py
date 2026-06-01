@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 import yfinance as yf
 import pandas as pd
 import psycopg2
@@ -465,6 +465,126 @@ def get_prices(symbol: str):
         }
         for r in rows
     ]
+
+
+# ── Trending (consecutive up / down day streaks) ──────────────────────────────
+
+_trending_cache: dict = {}
+_TRENDING_TTL = 900  # 15 min — price history only refreshes once/day
+
+
+def _trailing_streak(closes):
+    """Signed streak of consecutive same-direction days at the end of *closes*.
+
+    *closes* is oldest-first. A "day" is one close vs the prior close. Returns
+    +k for k consecutive up days, -k for k consecutive down days, 0 if the most
+    recent move is flat or there's too little history.
+    """
+    if len(closes) < 2:
+        return 0
+    diffs = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    last = diffs[-1]
+    if last == 0:
+        return 0
+    direction = 1 if last > 0 else -1
+    count = 0
+    for d in reversed(diffs):
+        if (direction > 0 and d > 0) or (direction < 0 and d < 0):
+            count += 1
+        else:
+            break
+    return direction * count
+
+
+@router.get("/api/trending")
+def trending(response: Response, min_streak: int = 3, limit: int = 40):
+    """Stocks on a run of consecutive up days (risers) or down days (fallers).
+
+    Streak = trailing run of same-direction daily closes. Only stocks with a
+    streak of *min_streak* days or more are returned, ranked by streak length
+    (longest first). Each row carries the latest price and market cap. Cached
+    15 min since the underlying price data only refreshes once/day.
+    """
+    # Vercel edge CDN cache — fresh 15 min, serve stale up to 1h while
+    # revalidating, mirroring /api/screener so cold-starts stay off the path.
+    response.headers["Cache-Control"] = (
+        "public, s-maxage=900, stale-while-revalidate=3600"
+    )
+    cache_key = (min_streak, limit)
+    now = time.time()
+    cached = _trending_cache.get(cache_key)
+    if cached and now - cached[1] < _TRENDING_TTL:
+        return cached[0]
+
+    # Last ~40 closes per active symbol, oldest-first within each symbol
+    # (ORDER BY rn DESC puts the largest rn — oldest date — first).
+    rows = query(
+        """
+        WITH numbered AS (
+            SELECT p.symbol, p.close,
+                   ROW_NUMBER() OVER (PARTITION BY p.symbol ORDER BY p.date DESC) AS rn
+            FROM price_history p
+            JOIN company_metadata m ON m.symbol = p.symbol AND m.is_active
+        )
+        SELECT symbol, close FROM numbered
+        WHERE rn <= 40
+        ORDER BY symbol, rn DESC
+        """
+    )
+
+    closes_map = {}
+    for r in rows:
+        closes_map.setdefault(r["symbol"], []).append(float(r["close"]))
+
+    qualifying = {}
+    for sym, closes in closes_map.items():
+        streak = _trailing_streak(closes)
+        if abs(streak) < min_streak:
+            continue
+        k = abs(streak)
+        start = closes[-(k + 1)]
+        latest = closes[-1]
+        pct = (latest / start - 1) * 100 if start else None
+        qualifying[sym] = {
+            "symbol": sym,
+            "streak": k,
+            "price": latest,
+            "pct": round(pct, 2) if pct is not None else None,
+            "_dir": 1 if streak > 0 else -1,
+        }
+
+    # Attach name, market cap and reporting currency for the qualifying symbols.
+    if qualifying:
+        meta = query(
+            """
+            SELECT m.symbol, m.name, m.sector, m.financial_currency, t.market_cap
+            FROM company_metadata m
+            LEFT JOIN ttm_financials t ON t.company_symbol = m.symbol
+            WHERE m.symbol = ANY(%s)
+            """,
+            (list(qualifying.keys()),),
+        )
+        meta_map = {r["symbol"]: r for r in meta}
+        for sym, item in qualifying.items():
+            m = meta_map.get(sym, {})
+            item["name"] = m.get("name") or sym
+            item["sector"] = m.get("sector")
+            item["currency"] = m.get("financial_currency") or "GBP"
+            item["market_cap"] = (
+                float(m["market_cap"]) if m.get("market_cap") is not None else None
+            )
+
+    risers, fallers = [], []
+    for item in qualifying.values():
+        (risers if item.pop("_dir") > 0 else fallers).append(item)
+
+    # Rank by streak length first, then by size of the move over the streak.
+    risers.sort(key=lambda x: (x["streak"], x["pct"] or 0), reverse=True)
+    fallers.sort(key=lambda x: (x["streak"], -(x["pct"] or 0)), reverse=True)
+
+    result = {"risers": risers[:limit], "fallers": fallers[:limit]}
+    _trending_cache[cache_key] = (result, now)
+    return result
 
 
 @router.post("/api/prices/refresh/{symbol}")

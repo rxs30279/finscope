@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { API } from '../utils';
+import { useIsMobile } from '../useMediaQuery';
 
 const TIER_STYLE = {
   A: { bg:'#0d3320', color:'#10b981', label:'A' },
@@ -22,7 +23,8 @@ function fmtTime(iso) {
   const diffH = diffMs / (1000 * 60 * 60);
   if (diffH < 24) return `${Math.max(1, Math.round(diffH))}h ago`;
   const diffD = diffH / 24;
-  if (diffD < 30) return `${Math.round(diffD)}d ago`;
+  // Within 3 days, show a relative "Nd ago"; older than that, show the date.
+  if (diffD <= 3) return `${Math.round(diffD)}d ago`;
   return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'2-digit' });
 }
 
@@ -82,13 +84,14 @@ function GoogleRow({ r }) {
   );
 }
 
-export default function NewsTab({ symbol }) {
+export default function NewsTab({ symbol, split = false }) {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [summary, setSummary] = useState(null);
   const [summarising, setSummarising] = useState(false);
   const [summaryError, setSummaryError] = useState(null);
+  const isMobile = useIsMobile();
 
   const load = (force = false) => {
     if (force) setRefreshing(true); else setLoading(true);
@@ -232,26 +235,38 @@ export default function NewsTab({ symbol }) {
         </div>
       </div>
 
-      <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4 }}>
-        <div style={{ padding:'10px 14px', borderBottom:'1px solid #2a2a2a', color:'#f97316', fontSize:11, fontFamily:'monospace', textTransform:'uppercase', letterSpacing:1, fontWeight:700 }}>
-          Regulatory (RNS)
-        </div>
-        {rns.length === 0 ? (
-          <div style={{ padding:20, color:'#555', fontSize:12, fontFamily:'monospace', textAlign:'center' }}>
-            No RNS announcements in the last 6 months
+      {/* Press (left) and RNS (right). In split mode they sit side-by-side and
+          auto-stack (Press first) when the box is too narrow; otherwise they
+          stack vertically as before. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: split && !isMobile ? '1fr 1fr' : '1fr',
+          gap: 20,
+          alignItems: 'start',
+        }}
+      >
+        <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4 }}>
+          <div style={{ padding:'10px 14px', borderBottom:'1px solid #2a2a2a', color:'#f97316', fontSize:11, fontFamily:'monospace', textTransform:'uppercase', letterSpacing:1, fontWeight:700 }}>
+            Press / Google News
           </div>
-        ) : rns.map(r => <RnsRow key={r.id} r={r} />)}
-      </div>
+          {google.length === 0 ? (
+            <div style={{ padding:20, color:'#555', fontSize:12, fontFamily:'monospace', textAlign:'center' }}>
+              No press articles yet — try ↻ Refresh news above
+            </div>
+          ) : google.map(r => <GoogleRow key={r.id} r={r} />)}
+        </div>
 
-      <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4 }}>
-        <div style={{ padding:'10px 14px', borderBottom:'1px solid #2a2a2a', color:'#f97316', fontSize:11, fontFamily:'monospace', textTransform:'uppercase', letterSpacing:1, fontWeight:700 }}>
-          Press / Google News
-        </div>
-        {google.length === 0 ? (
-          <div style={{ padding:20, color:'#555', fontSize:12, fontFamily:'monospace', textAlign:'center' }}>
-            No press articles yet — try ↻ Refresh news above
+        <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4 }}>
+          <div style={{ padding:'10px 14px', borderBottom:'1px solid #2a2a2a', color:'#f97316', fontSize:11, fontFamily:'monospace', textTransform:'uppercase', letterSpacing:1, fontWeight:700 }}>
+            Regulatory (RNS)
           </div>
-        ) : google.map(r => <GoogleRow key={r.id} r={r} />)}
+          {rns.length === 0 ? (
+            <div style={{ padding:20, color:'#555', fontSize:12, fontFamily:'monospace', textAlign:'center' }}>
+              No RNS announcements in the last 6 months
+            </div>
+          ) : rns.map(r => <RnsRow key={r.id} r={r} />)}
+        </div>
       </div>
     </div>
   );
