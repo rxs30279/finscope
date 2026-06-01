@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer
+  Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { API, fmt } from '../utils';
 
@@ -9,6 +9,16 @@ const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
   Hold: { bg: '#1a1400', color: '#f59e0b' },
   Sell: { bg: '#2a0d0d', color: '#ef4444' },
+};
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// "2026-06-01" → "1 Jun" (axis tick); falls back to the raw value if unparseable.
+const fmtTickDate = (s) => {
+  if (typeof s !== 'string') return s;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return s;
+  return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}`;
 };
 
 function ConsensusBadge({ value }) {
@@ -87,15 +97,17 @@ function PriceTargetRange({ row }) {
           left: `${pct(low)}%`, width: `${pct(mean) - pct(low)}%`,
           height: 4, background: '#10b98144', transform: 'translateY(-50%)'
         }} />
-        {/* Markers */}
-        {markers.map(({ val, label, color }) => (
+        {/* Markers — labels staggered (alternating rows) so close values don't collide */}
+        {[...markers]
+          .sort((a, b) => pct(a.val) - pct(b.val))
+          .map(({ val, label, color }, i) => (
           <div key={label} style={{
             position: 'absolute', top: '50%', left: `${pct(val)}%`,
-            transform: 'translate(-50%, -50%)',
+            transform: 'translate(-50%, -50%)', zIndex: 2 - (i % 2),
           }}>
             <div style={{ width: 12, height: 12, borderRadius: '50%', background: color, border: '2px solid #0a0a0a' }} />
             <div style={{
-              position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+              position: 'absolute', top: i % 2 ? 30 : 16, left: '50%', transform: 'translateX(-50%)',
               fontSize: 9, color, fontFamily: 'monospace', whiteSpace: 'nowrap'
             }}>
               {label}<br />{val?.toFixed(0)}p
@@ -137,6 +149,12 @@ export default function AnalystTab({ symbol }) {
     date: r.snapshot_date,
     buy_pct: r.buy_pct,
   }));
+  const targetTrend = history.map(r => ({
+    date: r.snapshot_date,
+    target: r.price_target_mean,
+    price: r.current_price,
+  }));
+  const hasTargetTrend = targetTrend.filter(d => d.target != null).length >= 2;
 
   const cardStyle = {
     background: '#141414', border: '1px solid #2a2a2a',
@@ -183,13 +201,34 @@ export default function AnalystTab({ symbol }) {
           <ResponsiveContainer width="100%" height={160}>
             <LineChart data={trendData} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} />
+              <XAxis dataKey="date" tickFormatter={fmtTickDate} minTickGap={24} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} />
               <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} unit="%" />
               <Tooltip
                 formatter={v => [`${v?.toFixed(1)}%`, 'Buy%']}
                 contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
               />
               <Line type="monotone" dataKey="buy_pct" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} name="Buy%" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Panel 3b: Price target vs price trend (only if ≥2 snapshots with targets) */}
+      {hasTargetTrend && (
+        <div style={cardStyle}>
+          <p style={titleStyle}>Mean Target vs Price</p>
+          <ResponsiveContainer width="100%" height={160}>
+            <LineChart data={targetTrend} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
+              <XAxis dataKey="date" tickFormatter={fmtTickDate} minTickGap={24} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} />
+              <YAxis domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} unit="p" />
+              <Tooltip
+                formatter={(v, name) => [v != null ? `${v.toFixed(0)}p` : '—', name]}
+                contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
+              />
+              <Legend wrapperStyle={{ fontSize: 10, fontFamily: 'monospace' }} />
+              <Line type="monotone" dataKey="target" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} name="Mean Target" connectNulls />
+              <Line type="monotone" dataKey="price" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Price" connectNulls />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -212,6 +251,16 @@ export default function AnalystTab({ symbol }) {
                 <span style={{ color: '#e5e5e5' }}>{val != null ? val.toFixed(2) : '—'}</span>
               </div>
             ))}
+            <div style={{ fontSize: 10, color: '#555', margin: '16px 0 10px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>Revenue Estimates</div>
+            {[
+              ['Current Year', latest.rev_est_current_yr],
+              ['Next Year',    latest.rev_est_next_yr],
+            ].map(([label, val]) => (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #1a1a1a', fontSize: 12, fontFamily: 'monospace' }}>
+                <span style={{ color: '#666' }}>{label}</span>
+                <span style={{ color: '#e5e5e5' }}>{val != null ? fmt(val, 'currency') : '—'}</span>
+              </div>
+            ))}
           </div>
           <div>
             <div style={{ fontSize: 10, color: '#555', marginBottom: 10, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>Estimate Revisions (30d)</div>
@@ -229,6 +278,14 @@ export default function AnalystTab({ symbol }) {
                 <div style={{ fontSize: 10, color: '#444' }}>Down</div>
               </div>
             </div>
+            {(latest.revisions_up_7d != null || latest.revisions_down_7d != null) && (
+              <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace', marginBottom: 12 }}>
+                Last 7d:{' '}
+                <span style={{ color: '#10b981' }}>↑{latest.revisions_up_7d ?? 0}</span>
+                {'  '}
+                <span style={{ color: '#ef4444' }}>↓{latest.revisions_down_7d ?? 0}</span>
+              </div>
+            )}
             {[
               ['Current Year EPS Growth', latest.eps_growth_current_yr],
               ['Next Year EPS Growth',    latest.eps_growth_next_yr],

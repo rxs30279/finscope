@@ -53,6 +53,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast]     = useState(null);
   const [search, setSearch]   = useState('');
+  const [consensusFilter, setConsensusFilter] = useState('All');
   const [sortKey, setSortKey] = useState('buy_pct');
   const [sortDir, setSortDir] = useState('desc');
 
@@ -98,8 +99,16 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
     [stocksWithData]
   );
 
+  const dataAsOf = useMemo(
+    () => stocksWithData.reduce((max, r) => (r.snapshot_date > max ? r.snapshot_date : max), ''),
+    [stocksWithData]
+  );
+
   const filtered = useMemo(() => {
     let rows = stocksWithData;
+    if (consensusFilter !== 'All') {
+      rows = rows.filter(r => r.consensus === consensusFilter);
+    }
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(r =>
@@ -110,7 +119,10 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
       );
     }
     const isStringKey = sortKey === 'name' || sortKey === 'sector' || sortKey === 'ftse_index';
-    const getNum = sortKey === 'buy_pct' ? shrunkBuyPct : (r) => r[sortKey];
+    const getNum =
+      sortKey === 'buy_pct' ? shrunkBuyPct :
+      sortKey === 'signal'  ? compositeScore :
+      (r) => r[sortKey];
     return [...rows].sort((a, b) => {
       if (isStringKey) {
         const av = (a[sortKey] || '').toLowerCase();
@@ -122,7 +134,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
       const bv = getNum(b) ?? -Infinity;
       return sortDir === 'desc' ? bv - av : av - bv;
     });
-  }, [stocksWithData, search, sortKey, sortDir]);
+  }, [stocksWithData, search, consensusFilter, sortKey, sortDir]);
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
@@ -153,6 +165,9 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
         </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {toast && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{toast}</span>}
+          {dataAsOf && (
+            <span style={{ fontSize: 10, color: '#555', fontFamily: 'monospace' }}>Data as of {dataAsOf}</span>
+          )}
           <button
             onClick={handleRefresh}
             disabled={refreshing}
@@ -200,17 +215,15 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
-                  {r.total_analysts != null && (
-                    <span title="Number of analysts" style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>
-                      {r.total_analysts}a
-                    </span>
-                  )}
-                  <UpsideCell value={r.upside_pct} />
-                  {r.revision_score != null && (
-                    <span style={{ fontSize: 10, color: r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#555', fontFamily: 'monospace' }}>
-                      {r.revision_score > 0 ? `↑${r.revision_score}` : r.revision_score < 0 ? `↓${Math.abs(r.revision_score)}` : '—'}
-                    </span>
-                  )}
+                  <span title="Number of analysts" style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', display: 'inline-block', width: 34, textAlign: 'right' }}>
+                    {r.total_analysts != null ? `${r.total_analysts}a` : ''}
+                  </span>
+                  <span style={{ display: 'inline-block', width: 60, textAlign: 'right' }}>
+                    <UpsideCell value={r.upside_pct} />
+                  </span>
+                  <span style={{ fontSize: 10, fontFamily: 'monospace', display: 'inline-block', width: 28, textAlign: 'right', color: r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#555' }}>
+                    {r.revision_score != null ? (r.revision_score > 0 ? `↑${r.revision_score}` : r.revision_score < 0 ? `↓${Math.abs(r.revision_score)}` : '—') : ''}
+                  </span>
                 </div>
               </div>
             ))}
@@ -223,13 +236,34 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
 
         {/* Full table */}
         <div style={S.card}>
-          <div style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Filter by symbol, name, sector or market…"
-              style={{ background: '#0a0a0a', border: '1px solid #2a2a2a', color: '#e5e5e5', padding: '6px 10px', borderRadius: 2, fontFamily: 'monospace', fontSize: 11, width: '100%', boxSizing: 'border-box' }}
+              style={{ background: '#0a0a0a', border: '1px solid #2a2a2a', color: '#e5e5e5', padding: '6px 10px', borderRadius: 2, fontFamily: 'monospace', fontSize: 11, flex: 1, minWidth: 180, boxSizing: 'border-box' }}
             />
+            <div style={{ display: 'flex', gap: 4 }}>
+              {['All', 'Buy', 'Hold', 'Sell'].map(c => {
+                const active = consensusFilter === c;
+                const accent = CONSENSUS_COLORS[c]?.color || '#94a3b8';
+                return (
+                  <button
+                    key={c}
+                    onClick={() => setConsensusFilter(c)}
+                    style={{
+                      background: active ? (CONSENSUS_COLORS[c]?.bg || '#1a1a1a') : '#0a0a0a',
+                      color: active ? accent : '#555',
+                      border: `1px solid ${active ? accent : '#2a2a2a'}`,
+                      padding: '5px 10px', borderRadius: 2, fontFamily: 'monospace',
+                      fontSize: 10, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: 1,
+                    }}
+                  >
+                    {c}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -247,6 +281,13 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   </th>
                   <th style={S.th}>Consensus</th>
                   <th
+                    style={{ ...colStyle('signal'), textAlign: 'right' }}
+                    onClick={() => toggleSort('signal')}
+                    title="Composite bullish signal: coverage-adjusted Buy% + upside + revision momentum (drives Top Bullish/Bearish)"
+                  >
+                    Signal {sortKey === 'signal' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                  </th>
+                  <th
                     style={{ ...colStyle('buy_pct'), textAlign: 'right' }}
                     onClick={() => toggleSort('buy_pct')}
                     title="Buy % adjusted for analyst coverage (shrunk toward 50% with k=5)"
@@ -255,6 +296,9 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   </th>
                   <th style={{ ...colStyle('upside_pct'), textAlign: 'right' }} onClick={() => toggleSort('upside_pct')}>
                     Upside {sortKey === 'upside_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                  </th>
+                  <th style={{ ...colStyle('price_target_mean'), textAlign: 'right' }} onClick={() => toggleSort('price_target_mean')} title="Mean analyst price target">
+                    Target {sortKey === 'price_target_mean' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
                   </th>
                   <th style={{ ...colStyle('revision_score'), textAlign: 'right' }} onClick={() => toggleSort('revision_score')}>
                     Revisions {sortKey === 'revision_score' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
@@ -266,7 +310,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={9} style={{ ...S.td, color: '#444', textAlign: 'center', padding: 24 }}>No results</td></tr>
+                  <tr><td colSpan={11} style={{ ...S.td, color: '#444', textAlign: 'center', padding: 24 }}>No results</td></tr>
                 )}
                 {filtered.map(r => (
                   <tr key={r.symbol} style={{ borderBottom: '1px solid #141414' }}>
@@ -284,10 +328,16 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                     <td style={{ ...S.td, color: '#94a3b8' }}>{r.sector || '—'}</td>
                     <td style={{ ...S.td, color: '#64748b' }}>{r.ftse_index?.replace('FTSE ', '') || '—'}</td>
                     <td style={S.td}><ConsensusBadge value={r.consensus} /></td>
+                    {(() => { const sig = compositeScore(r); return (
+                      <td style={{ ...S.tdR, color: sig >= 50 ? '#10b981' : sig <= 35 ? '#ef4444' : '#94a3b8', fontWeight: 700 }}>
+                        {sig.toFixed(0)}
+                      </td>
+                    ); })()}
                     <td style={S.tdR} title={r.buy_pct != null ? `Raw: ${r.buy_pct.toFixed(1)}% over ${r.total_analysts ?? 0} analysts` : ''}>
                       {r.buy_pct != null ? `${shrunkBuyPct(r).toFixed(1)}%` : '—'}
                     </td>
                     <td style={S.tdR}><UpsideCell value={r.upside_pct} /></td>
+                    <td style={{ ...S.tdR, color: '#94a3b8' }}>{r.price_target_mean != null ? `${r.price_target_mean.toFixed(0)}p` : '—'}</td>
                     <td style={{ ...S.tdR, color: r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#555' }}>
                       {r.revision_score != null ? (r.revision_score > 0 ? `+${r.revision_score}` : r.revision_score) : '—'}
                     </td>
@@ -338,7 +388,18 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   </span>
                 </div>
               )}
-              {c.upside_pct != null && (
+              {c.upside_pct != null && c.prev_upside != null &&
+               Math.abs(c.upside_pct - c.prev_upside) > 0.05 ? (
+                <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                  <span style={{ color: '#555' }}>Upside </span>
+                  <span style={{ color: '#666' }}>{c.prev_upside.toFixed(0)}%</span>
+                  {' → '}
+                  <UpsideCell value={c.upside_pct} />
+                  <span style={{ color: c.upside_pct >= c.prev_upside ? '#10b981' : '#ef4444', marginLeft: 4 }}>
+                    ({c.upside_pct >= c.prev_upside ? '+' : ''}{(c.upside_pct - c.prev_upside).toFixed(1)}pts)
+                  </span>
+                </div>
+              ) : c.upside_pct != null && (
                 <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
                   <span style={{ color: '#555' }}>Upside </span>
                   <UpsideCell value={c.upside_pct} />
