@@ -36,7 +36,6 @@ import AnalystMonitorTab from "./components/AnalystMonitorTab";
 import RnsTab from "./components/RnsTab";
 import AnalyticsTab from "./components/AnalyticsTab";
 import NewsTab from "./components/NewsTab";
-import BreakoutTab from "./components/BreakoutTab";
 import SubscribeTab from "./components/SubscribeTab";
 
 function MetricCard({ label, value, color }) {
@@ -2517,7 +2516,6 @@ export default function App() {
   const NAV_GROUPS = [
     { id: "screener", label: "Screener" },
     { id: "watchlist", label: "Watchlist" },
-    { id: "breakout", label: "Breakouts" },
     { id: "analyst-monitor", label: "Analysts" },
     { id: "rns", label: "RNS News" },
     { id: "analytics", label: "Analytics" },
@@ -3117,7 +3115,6 @@ export default function App() {
           {page === "breadth" && <BreadthTab refreshKey={refreshKey} />}
           {page === "fear-greed" && <FearGreedTab refreshKey={refreshKey} />}
           {page === "cross-asset" && <CrossAssetTab refreshKey={refreshKey} />}
-          {page === "breakout" && <BreakoutTab refreshKey={refreshKey} />}
           {page === "signals" && <SignalsTab refreshKey={refreshKey} />}
           {page === "analyst-monitor" && (
             <AnalystMonitorTab

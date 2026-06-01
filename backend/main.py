@@ -15,7 +15,6 @@ from analysts import router as analysts_router
 from rns import router as rns_router
 from rns_llm import router as rns_llm_router
 from news import router as news_router
-from breakout import router as breakout_router
 from subscribers import router as subscribers_router
 from email_rns_digest import main as run_digest
 
@@ -36,7 +35,6 @@ app.include_router(analysts_router)
 app.include_router(rns_router)
 app.include_router(rns_llm_router)
 app.include_router(news_router)
-app.include_router(breakout_router)
 app.include_router(subscribers_router)
 
 DB_CONFIG = {
