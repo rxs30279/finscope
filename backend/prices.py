@@ -138,58 +138,47 @@ def _fetch_ohlcv_batch(symbols, start_date):
     if df is None or df.empty:
         return []
 
-    # yfinance returns MultiIndex columns for multiple tickers,
-    # flat columns for a single ticker
-    if len(symbols) == 1:
-        required = {"Open", "High", "Low", "Close", "Volume"}
-        if not required.issubset(df.columns):
-            return []
-        ohlcv = df[list(required)].copy()
-        ohlcv.columns = symbols  # flatten: each col becomes the symbol name
-    else:
-        top = df.columns.get_level_values(0)
-        required = {"Open", "High", "Low", "Close", "Volume"}
-        if not required.issubset(top):
-            return []
-        ohlcv = df  # keep MultiIndex, we'll index by (attr, sym) below
-
+    # Branch on the actual column shape, NOT len(symbols). yfinance returns a
+    # MultiIndex (attr, symbol) whenever `tickers` is a *list* — even a
+    # single-element list — and flat columns only for a bare string ticker.
+    # The old len==1 path assumed flat columns, so `{"Open",...}.issubset(...)`
+    # always failed against the MultiIndex and every solo-symbol batch silently
+    # returned [] despite yfinance returning full data — stragglers never caught
+    # up and looked "delisted".
+    required = {"Open", "High", "Low", "Close", "Volume"}
     rows = []
-    if len(symbols) == 1:
-        sym = symbols[0]
-        for dt, row in ohlcv.iterrows():
-            rows.append(
-                (
-                    sym,
-                    dt.date(),
-                    float(row["Open"]),
-                    float(row["High"]),
-                    float(row["Low"]),
-                    float(row["Close"]),
-                    int(row["Volume"]),
-                )
-            )
-    else:
+    if isinstance(df.columns, pd.MultiIndex):
+        if not required.issubset(set(df.columns.get_level_values(0))):
+            return []
         for sym in symbols:
-            for dt in ohlcv.index:
-                o = ohlcv["Open"][sym][dt]
-                h = ohlcv["High"][sym][dt]
-                l = ohlcv["Low"][sym][dt]
-                c = ohlcv["Close"][sym][dt]
-                v = ohlcv["Volume"][sym][dt]
-                # Skip rows where any OHLC value is NaN
+            if ("Close", sym) not in df.columns:
+                continue  # yfinance dropped a failed/unknown symbol from the frame
+            for dt in df.index:
+                o = df[("Open", sym)][dt]
+                h = df[("High", sym)][dt]
+                l = df[("Low", sym)][dt]
+                c = df[("Close", sym)][dt]
+                v = df[("Volume", sym)][dt]
                 if any(pd.isna(x) for x in (o, h, l, c)):
                     continue
                 rows.append(
-                    (
-                        sym,
-                        dt.date(),
-                        float(o),
-                        float(h),
-                        float(l),
-                        float(c),
-                        int(v),
-                    )
+                    (sym, dt.date(), float(o), float(h), float(l), float(c),
+                     int(v) if pd.notna(v) else 0)
                 )
+    else:
+        if not required.issubset(df.columns):
+            return []
+        sym = symbols[0]
+        for dt, row in df.iterrows():
+            o, h, l, c, v = (
+                row["Open"], row["High"], row["Low"], row["Close"], row["Volume"]
+            )
+            if any(pd.isna(x) for x in (o, h, l, c)):
+                continue
+            rows.append(
+                (sym, dt.date(), float(o), float(h), float(l), float(c),
+                 int(v) if pd.notna(v) else 0)
+            )
     return rows
 
 

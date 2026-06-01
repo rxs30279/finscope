@@ -77,6 +77,50 @@ def test_update_activity_noop_when_nothing_to_record():
     mock_pool.assert_not_called()
 
 
+# ── _fetch_ohlcv_batch parsing tests ──────────────────────────────────────────
+
+def _single_ticker_multiindex(sym, vols):
+    """Build the MultiIndex frame yfinance returns for a 1-element ticker list."""
+    n = len(vols)
+    dates = pd.bdate_range(end=pd.Timestamp('2026-06-01'), periods=n)
+    df = pd.DataFrame(
+        {
+            ('Open', sym): [1.0] * n,
+            ('High', sym): [2.0] * n,
+            ('Low', sym): [0.5] * n,
+            ('Close', sym): [1.5] * n,
+            ('Volume', sym): vols,
+        },
+        index=dates,
+    )
+    df.columns = pd.MultiIndex.from_tuples(df.columns)
+    return df
+
+
+def test_fetch_ohlcv_batch_single_ticker_multiindex():
+    """A 1-element ticker list yields a MultiIndex; the parser must still emit
+    rows. Regression: the old len==1 path assumed flat columns and returned []."""
+    import prices
+    from datetime import date as _date
+    df = _single_ticker_multiindex('WISE.L', [10, 20, 30])
+    with patch('prices.yf.download', return_value=df):
+        rows = prices._fetch_ohlcv_batch(['WISE.L'], _date(2026, 1, 1))
+    assert len(rows) == 3
+    assert all(len(r) == 7 and r[0] == 'WISE.L' for r in rows)
+    assert rows[0][6] == 10  # volume preserved
+
+
+def test_fetch_ohlcv_batch_handles_nan_volume():
+    """A NaN volume must not crash int() (latent bug in the old paths)."""
+    import prices
+    from datetime import date as _date
+    df = _single_ticker_multiindex('X.L', [np.nan, 5])
+    with patch('prices.yf.download', return_value=df):
+        rows = prices._fetch_ohlcv_batch(['X.L'], _date(2026, 1, 1))
+    assert len(rows) == 2
+    assert rows[0][6] == 0  # NaN volume coerced to 0
+
+
 # ── _attach_momentum tests ────────────────────────────────────────────────────
 
 def test_attach_momentum_scores_range():
