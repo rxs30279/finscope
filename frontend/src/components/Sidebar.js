@@ -132,10 +132,7 @@ export default function Sidebar({ refreshKey }) {
       )}
 
       {/* Sectors */}
-      <div style={{ ...labelStyle, marginTop:16, display:'flex', alignItems:'center', gap:5 }}>
-        <span>ICB Sectors</span>
-        <span style={{ color:'#444', fontSize:8, fontWeight:400, letterSpacing:0, textTransform:'none' }}>(tap to list members)</span>
-      </div>
+      <div style={{ ...labelStyle, marginTop:16 }}>ICB Sectors</div>
       {data?.sectors?.map(s => {
         const isOpen = expandedSector === s.name;
         const members = constituents?.[s.name];
