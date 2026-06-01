@@ -30,7 +30,7 @@ BENCHMARK_TICKERS = {
     "All-Share": "^FTAS",
 }
 
-# 2 representative stocks per ICB sector — basket average used as sector proxy
+# Representative constituents per ICB sector — basket average used as sector proxy
 SECTOR_TICKERS = {
     "Energy": ["SHEL.L", "BP.L", "HBR.L"],
     "Financials": [
@@ -47,7 +47,6 @@ SECTOR_TICKERS = {
         "PRU.L",
         "SDR.L",
         "III.L",
-        "EXPN.L",
     ],
     "Industrials": [
         "RR.L",
@@ -58,6 +57,8 @@ SECTOR_TICKERS = {
         "RTO.L",
         "ITRK.L",
         "MRO.L",
+        "EXPN.L",
+        "HLMA.L",
     ],
     "Consumer Discretionary": [
         "CPG.L",
@@ -71,8 +72,6 @@ SECTOR_TICKERS = {
         "EZJ.L",
         "ENT.L",
         "FLTR.L",
-        "ABF.L",
-        "SBRY.L",
         "PSN.L",
         "TW.L",
         "WPP.L",
@@ -86,12 +85,20 @@ SECTOR_TICKERS = {
         "ANTO.L",
         "FRES.L",
         "MNDI.L",
-        "SKG.L",
         "CRDA.L",
     ],
-    "Consumer Staples": ["BATS.L", "ULVR.L", "RKT.L", "TSCO.L", "DGE.L", "IMB.L"],
+    "Consumer Staples": [
+        "BATS.L",
+        "ULVR.L",
+        "RKT.L",
+        "TSCO.L",
+        "DGE.L",
+        "IMB.L",
+        "SBRY.L",
+        "ABF.L",
+    ],
     "Health Care": ["AZN.L", "GSK.L", "HLN.L", "SN.L", "HIK.L"],
-    "Technology": ["REL.L", "HLMA.L", "SGE.L", "AUTO.L", "RMV.L"],
+    "Technology": ["REL.L", "SGE.L", "AUTO.L", "RMV.L"],
     "Telecommunications": ["VOD.L", "BT-A.L", "AAF.L"],
     "Utilities": ["NG.L", "SSE.L", "CNA.L", "SVT.L", "UU.L"],
     "Real Estate": ["LAND.L", "SGRO.L", "BLND.L", "BBOX.L", "PCTN.L", "GPE.L"],

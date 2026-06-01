@@ -31,6 +31,9 @@ function PctBadge({ value }) {
 
 export default function Sidebar({ refreshKey }) {
   const [data, setData] = useState(null);
+  // Click-to-reveal: which companies make up each ICB sector basket.
+  const [constituents, setConstituents] = useState(null); // { sector: [{symbol,name}] }
+  const [expandedSector, setExpandedSector] = useState(null);
 
   useEffect(() => {
     fetch(`${API}/market/sidebar`)
@@ -38,6 +41,20 @@ export default function Sidebar({ refreshKey }) {
       .then(setData)
       .catch(() => {});
   }, [refreshKey]);
+
+  // Refetch constituent prices on every refresh cycle so the per-company
+  // colours stay in step with the sector badges rather than the once-only,
+  // state-cached copy from first expand.
+  useEffect(() => {
+    fetch(`${API}/sector-constituents`)
+      .then(r => r.json())
+      .then(d => setConstituents(d && typeof d === 'object' ? d : {}))
+      .catch(() => setConstituents({}));
+  }, [refreshKey]);
+
+  const toggleSector = (name) => {
+    setExpandedSector(prev => (prev === name ? null : name));
+  };
 
   const labelStyle = { color:'#666', fontSize:9, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:8 };
   const rowStyle   = { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 };
@@ -115,13 +132,45 @@ export default function Sidebar({ refreshKey }) {
       )}
 
       {/* Sectors */}
-      <div style={{ ...labelStyle, marginTop:16 }}>ICB Sectors</div>
-      {data?.sectors?.map(s => (
-        <div key={s.name} style={rowStyle}>
-          <span style={{ ...nameStyle, maxWidth:110, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>
-          <PctBadge value={s.pct_change} />
-        </div>
-      )) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
+      <div style={{ ...labelStyle, marginTop:16, display:'flex', alignItems:'center', gap:5 }}>
+        <span>ICB Sectors</span>
+        <span style={{ color:'#444', fontSize:8, fontWeight:400, letterSpacing:0, textTransform:'none' }}>(tap to list members)</span>
+      </div>
+      {data?.sectors?.map(s => {
+        const isOpen = expandedSector === s.name;
+        const members = constituents?.[s.name];
+        return (
+          <div key={s.name}>
+            <div
+              onClick={() => toggleSector(s.name)}
+              style={{ ...rowStyle, cursor:'pointer' }}
+              title="Show companies in this sector"
+            >
+              <span style={{ display:'flex', alignItems:'center', gap:3, maxWidth:120, overflow:'hidden' }}>
+                <span style={{ color: isOpen ? '#94a3b8' : '#444', fontSize:7, flexShrink:0 }}>{isOpen ? '▾' : '▸'}</span>
+                <span style={{ ...nameStyle, color: isOpen ? '#cbd5e1' : nameStyle.color, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>
+              </span>
+              <PctBadge value={s.pct_change} />
+            </div>
+            {isOpen && (
+              <div style={{ margin:'2px 0 8px 10px', paddingLeft:6, borderLeft:'1px solid #1e1e1e' }}>
+                {members === undefined ? (
+                  <div style={{ color:'#333', fontSize:9 }}>Loading…</div>
+                ) : members.length === 0 ? (
+                  <div style={{ color:'#333', fontSize:9 }}>No data</div>
+                ) : (
+                  members.map(c => (
+                    <div key={c.symbol} style={{ display:'flex', justifyContent:'space-between', gap:6, marginBottom:2 }}>
+                      <span style={{ color:pctColor(c.pct_change), fontSize:9, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.name}</span>
+                      <span style={{ color:'#475569', fontSize:9, fontFamily:'monospace', flexShrink:0 }}>{c.symbol.replace('.L','')}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
 
       {/* Signal Summary */}
       {data?.signal_summary && (

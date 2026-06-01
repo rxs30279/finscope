@@ -671,6 +671,37 @@ def filters():
     }
 
 
+@app.get("/api/sector-constituents")
+def sector_constituents(response: Response):
+    """Constituents of each ICB sector basket shown in the sidebar.
+
+    The sidebar's per-sector move is the basket average of these representative
+    stocks (market.SECTOR_TICKERS). This returns the same baskets enriched with
+    company names so the sidebar can show which companies sit in each sector.
+    """
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
+    from market import SECTOR_TICKERS, _get_prices, _pct_change_today
+
+    all_syms = [s for tickers in SECTOR_TICKERS.values() for s in tickers]
+    rows = query(
+        "SELECT symbol, name FROM company_metadata WHERE symbol = ANY(%s)",
+        (all_syms,),
+    )
+    names = {r["symbol"]: r["name"] for r in rows}
+    prices = _get_prices()
+    return {
+        sector: [
+            {
+                "symbol": s,
+                "name": names.get(s) or s.replace(".L", ""),
+                "pct_change": _pct_change_today(prices, s),
+            }
+            for s in tickers
+        ]
+        for sector, tickers in SECTOR_TICKERS.items()
+    }
+
+
 # ── Cron-job.org digest endpoint ──────────────────────────────────────────────
 
 _DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
