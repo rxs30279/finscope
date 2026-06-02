@@ -186,6 +186,15 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
         ].map(({ title, stocks, accent }) => (
           <div key={title} style={S.card}>
             <div style={{ fontSize: 10, color: accent, textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace', marginBottom: 12 }}>{title}</div>
+            {/* Column headers for the metric columns on the right */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingBottom: 6, marginBottom: 4, borderBottom: '1px solid #2a2a2a' }}>
+              <div style={{ flex: 1, fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace' }}>Stock</div>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
+                <span style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 0.5, fontFamily: 'monospace', width: 50, textAlign: 'right' }}>Analysts</span>
+                <span style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace', width: 60, textAlign: 'right' }}>Upside</span>
+                <span style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace', width: 28, textAlign: 'right' }}>Rev</span>
+              </div>
+            </div>
             {stocks.length === 0 && <div style={{ color: '#444', fontSize: 11 }}>No data yet</div>}
             {stocks.map(r => (
               <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: '1px solid #1a1a1a' }}>
@@ -215,7 +224,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
-                  <span title="Number of analysts" style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', display: 'inline-block', width: 34, textAlign: 'right' }}>
+                  <span title="Number of analysts" style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', display: 'inline-block', width: 50, textAlign: 'right' }}>
                     {r.total_analysts != null ? `${r.total_analysts}a` : ''}
                   </span>
                   <span style={{ display: 'inline-block', width: 60, textAlign: 'right' }}>
@@ -290,7 +299,19 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   <th
                     style={{ ...colStyle('buy_pct'), textAlign: 'right' }}
                     onClick={() => toggleSort('buy_pct')}
-                    title="Buy % adjusted for analyst coverage (shrunk toward 50% with k=5)"
+                    title={
+                      "Buy% (adj) — the share of covering analysts rating the stock a Buy, " +
+                      "adjusted for how many analysts actually cover it.\n\n" +
+                      "Raw Buy% is unreliable when coverage is thin (one bullish analyst = 100%), " +
+                      "so it's shrunk toward a neutral 50% prior with weight k=5: " +
+                      "adj = (rawBuy% × analysts + 50 × 5) / (analysts + 5).\n\n" +
+                      "Effect — the fewer the analysts, the more it's pulled toward 50%:\n" +
+                      "• 1 analyst at 100% Buy → ~58%\n" +
+                      "• 5 analysts at 100% Buy → ~75%\n" +
+                      "• 10 analysts at 100% Buy → ~83%\n" +
+                      "• well-covered names stay close to their raw Buy%.\n\n" +
+                      "Hover a row's value to see its raw Buy% and analyst count."
+                    }
                   >
                     Buy% (adj) {sortKey === 'buy_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
                   </th>
