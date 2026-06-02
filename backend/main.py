@@ -431,9 +431,16 @@ def _attach_pegy(results):
         if growth <= 0:
             continue
 
-        dps = _f(r.get("dividends_per_share")) or 0.0
-        price = _f(r.get("period_end_price")) or 0.0
-        yld = (dps / price) if price > 0 else 0.0
+        # Dividend yield (as a fraction). Prefer the clean, currency-free
+        # dividend_yield (from yfinance info['dividendYield']); fall back to the
+        # legacy dividends_per_share / period_end_price only when it's absent.
+        # The fallback is unreliable for non-GBP reporters (per-share figure is in
+        # the reporting currency while price is GBp) — see migration 002.
+        yld = _f(r.get("dividend_yield"))
+        if yld is None:
+            dps = _f(r.get("dividends_per_share")) or 0.0
+            price = _f(r.get("period_end_price")) or 0.0
+            yld = (dps / price) if price > 0 else 0.0
 
         denom_pct = (growth + yld) * 100
         if denom_pct < 2:
@@ -629,7 +636,7 @@ def screener(
                t.revenue_growth, t.eps_diluted_growth, t.fcf_growth,
                t.debt_to_equity, t.current_ratio, t.fcf, t.ebitda,
                t.revenue_cagr_10, t.eps_cagr_10, t.eps_diluted, t.period_end_date,
-               t.fcf_margin, t.dividends_per_share, t.period_end_price,
+               t.fcf_margin, t.dividends_per_share, t.dividend_yield, t.period_end_price,
                t.gross_margin_median, t.operating_margin_median,
                t.net_margin_median, t.roe_median, t.roic_median,
                a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score,

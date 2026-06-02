@@ -187,6 +187,12 @@ def process_stock(symbol: str):
         yahoo_trailing_pe = info.get("trailingPE")
         yahoo_price_to_sales = info.get("priceToSalesTrailing12Months")
         yahoo_price_to_book = info.get("priceToBook")
+        # info['dividendYield'] is a currency-free percentage (e.g. 5.35 for BATS)
+        # and is reliable for .L tickers — unlike trailingAnnualDividendYield, which
+        # yfinance miscomputes (£ rate / pence price). Store it as a fraction.
+        # Applied only to the most-recent year below (it's a current snapshot).
+        _dy = info.get("dividendYield")
+        yahoo_dividend_yield = (_dy / 100.0) if (_dy is not None and 0 < _dy < 100) else None
 
         valid_cols = []
         for col in inc_a.columns:
@@ -461,7 +467,13 @@ def process_stock(symbol: str):
                     "eps_diluted": eps_diluted,
                     "shares_basic": shares_basic,
                     "shares_diluted": shares_diluted,
-                    "dividends_per_share": None,
+                    # dividends_per_share is deliberately not written here — yfinance
+                    # has no clean per-share figure and the old `None` actively wiped
+                    # any existing value on every run. Yield now comes from
+                    # dividend_yield below.
+                    "dividend_yield": (
+                        yahoo_dividend_yield if col == most_recent_col else None
+                    ),
                     "cash_and_equiv": cash,
                     "total_current_assets": curr_assets,
                     "total_current_liabilities": curr_liab,

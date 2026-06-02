@@ -18,6 +18,7 @@ def _row(**kw):
         "eps_growth_next_yr": None,
         "eps_cagr_10": None,
         "total_analysts": 0,
+        "dividend_yield": None,
         "dividends_per_share": None,
         "period_end_price": None,
     }
@@ -37,10 +38,22 @@ def test_pegy_basic_from_cagr():
     assert _pegy(price_to_earnings=20.0, eps_cagr_10=0.10) == 2.0
 
 
-def test_pegy_includes_dividend_yield():
-    # growth=10%, yield = 5/100 = 5% → denom 15% → 20/15 = 1.33
+def test_pegy_uses_dividend_yield_field():
+    # growth=10%, dividend_yield=0.05 (5%) → denom 15% → 20/15 = 1.33
+    assert _pegy(price_to_earnings=20.0, eps_cagr_10=0.10, dividend_yield=0.05) == 1.33
+
+
+def test_pegy_falls_back_to_dps_over_price_when_yield_absent():
+    # No dividend_yield → derive from dps/price: 5/100 = 5% → denom 15% → 1.33
     assert _pegy(price_to_earnings=20.0, eps_cagr_10=0.10,
                  dividends_per_share=5.0, period_end_price=100.0) == 1.33
+
+
+def test_dividend_yield_field_takes_precedence_over_dps():
+    # When both present, the clean dividend_yield (8%) wins over dps/price (5%):
+    # denom 18% → 20/18 = 1.11
+    assert _pegy(price_to_earnings=20.0, eps_cagr_10=0.10, dividend_yield=0.08,
+                 dividends_per_share=5.0, period_end_price=100.0) == 1.11
 
 
 # ── Growth capping ──────────────────────────────────────────────────────────────
