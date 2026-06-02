@@ -30,17 +30,41 @@ function UpsideCell({ value }) {
 // Shrinkage pulls buy_pct toward a neutral 50% prior with weight k=5, so a 1-analyst
 // "100% bullish" stock counts as ~58%, while well-covered names stay close to their raw value.
 const SHRINK_K = 5;
-const shrunkBuyPct = (r) => {
-  const n = r.total_analysts || 0;
-  const raw = r.buy_pct || 0;
-  if (n === 0) return 50;
-  return (raw * n + 50 * SHRINK_K) / (n + SHRINK_K);
+// Shrink a raw buy% toward a neutral 50% prior by analyst count.
+const shrink = (buyPct, n) => {
+  const total = n || 0;
+  if (total === 0) return 50;
+  return ((buyPct || 0) * total + 50 * SHRINK_K) / (total + SHRINK_K);
 };
+const shrunkBuyPct = (r) => shrink(r.buy_pct, r.total_analysts);
 
 const compositeScore = (r) =>
   shrunkBuyPct(r) +
   Math.min(Math.max(r.upside_pct || 0, -50), 100) * 0.5 +
   (r.revision_score || 0) * 10;
+
+// ── Biggest Movers (window-delta) ──────────────────────────────────────────────
+// Lookback window for the movers panel; mirrors the backend default.
+const MOVER_WINDOW_DAYS = 30;
+
+// How much analysts have revised their view over the window. Combines the change in
+// coverage-adjusted Buy% (rating) with the % change in mean price target (valuation).
+// Both legs are roughly "points"; a row needs at least one leg to qualify.
+const moverDeltas = (r) => {
+  const hasBuy = r.buy_pct != null && r.base_buy_pct != null;
+  const deltaBuy = hasBuy
+    ? shrink(r.buy_pct, r.total_analysts) - shrink(r.base_buy_pct, r.base_total_analysts)
+    : null;
+  const hasTarget = r.price_target_mean != null && r.base_target != null && r.base_target > 0;
+  const deltaTargetPct = hasTarget
+    ? (r.price_target_mean - r.base_target) / r.base_target * 100
+    : null;
+  const score = (deltaBuy ?? 0) + (deltaTargetPct ?? 0);
+  return { deltaBuy, deltaTargetPct, hasBuy, hasTarget, score };
+};
+
+// Ignore tiny wobbles so the lists show genuine moves only.
+const MOVER_MIN_SCORE = 3;
 
 export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const tickerLink = {
@@ -48,7 +72,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
     cursor: 'pointer', textDecoration: 'none',
   };
   const [latest, setLatest]   = useState([]);
-  const [changes, setChanges] = useState([]);
+  const [movers, setMovers]   = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast]     = useState(null);
@@ -61,11 +85,11 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
     setLoading(true);
     Promise.all([
       fetch(`${API}/analysts/latest`).then(r => r.json()),
-      fetch(`${API}/analysts/changes`).then(r => r.json()),
+      fetch(`${API}/analysts/movers?window_days=${MOVER_WINDOW_DAYS}`).then(r => r.json()),
     ])
-      .then(([l, c]) => {
+      .then(([l, m]) => {
         setLatest(Array.isArray(l) ? l : []);
-        setChanges(Array.isArray(c) ? c : []);
+        setMovers(Array.isArray(m) ? m : []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -102,6 +126,36 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const dataAsOf = useMemo(
     () => stocksWithData.reduce((max, r) => (r.snapshot_date > max ? r.snapshot_date : max), ''),
     [stocksWithData]
+  );
+
+  // Movers scored once, then split into ranked upgrade / downgrade lists.
+  const scoredMovers = useMemo(
+    () => movers
+      .map(r => ({ ...r, ...moverDeltas(r) }))
+      .filter(r => r.hasBuy || r.hasTarget),
+    [movers]
+  );
+
+  const topUpgraded = useMemo(
+    () => scoredMovers
+      .filter(r => r.score >= MOVER_MIN_SCORE)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6),
+    [scoredMovers]
+  );
+
+  const topDowngraded = useMemo(
+    () => scoredMovers
+      .filter(r => r.score <= -MOVER_MIN_SCORE)
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 6),
+    [scoredMovers]
+  );
+
+  // Most recent baseline date across movers — the "compared against" anchor.
+  const moverBaseDate = useMemo(
+    () => movers.reduce((max, r) => (r.base_date > max ? r.base_date : max), ''),
+    [movers]
   );
 
   const filtered = useMemo(() => {
@@ -201,14 +255,14 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div>
                     <span
-                      onClick={() => onSelect?.(r.symbol)}
+                      onClick={() => onSelect?.(r.symbol, 'analysts')}
                       style={{ ...tickerLink, fontSize: 12 }}
                     >
                       {r.symbol}
                     </span>
                     {r.name && (
                       <span
-                        onClick={() => onSelect?.(r.symbol)}
+                        onClick={() => onSelect?.(r.symbol, 'analysts')}
                         style={{ color: '#cbd5e1', fontFamily: 'monospace', fontSize: 11, marginLeft: 8, cursor: 'pointer' }}
                       >
                         {r.name}
@@ -336,12 +390,12 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                 {filtered.map(r => (
                   <tr key={r.symbol} style={{ borderBottom: '1px solid #141414' }}>
                     <td style={S.td}>
-                      <span onClick={() => onSelect?.(r.symbol)} style={{ ...tickerLink, fontSize: 12 }}>
+                      <span onClick={() => onSelect?.(r.symbol, 'analysts')} style={{ ...tickerLink, fontSize: 12 }}>
                         {r.symbol}
                       </span>
                     </td>
                     <td
-                      onClick={() => onSelect?.(r.symbol)}
+                      onClick={() => onSelect?.(r.symbol, 'analysts')}
                       style={{ ...S.td, color: '#cbd5e1', cursor: 'pointer' }}
                     >
                       {r.name || '—'}
@@ -370,62 +424,83 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
           </div>
         </div>
 
-        {/* Change feed */}
+        {/* Biggest movers (window-delta) */}
         <div style={S.card}>
-          <div style={{ fontSize: 10, color: '#f97316', textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace', marginBottom: 12 }}>
-            Recent Changes
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 }}>
+            <span
+              style={{ fontSize: 10, color: '#f97316', textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace' }}
+              title={`How far analysts have shifted their view over the last ${MOVER_WINDOW_DAYS} days — combines the change in coverage-adjusted Buy% with the % change in mean price target. Ranked, biggest moves first.`}
+            >
+              Biggest Movers · {MOVER_WINDOW_DAYS}d
+            </span>
+            <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace' }}>
+              vs {moverBaseDate || `${MOVER_WINDOW_DAYS}d ago`}
+            </span>
           </div>
-          {changes.length === 0 && (
+
+          {scoredMovers.length === 0 && (
             <div style={{ color: '#444', fontSize: 11, fontFamily: 'monospace' }}>
-              No significant changes since last refresh
+              Not enough history yet — needs ~{MOVER_WINDOW_DAYS} days of snapshots
             </div>
           )}
-          {changes.map((c, i) => (
-            <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid #1a1a1a' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                <span onClick={() => onSelect?.(c.symbol)} style={{ ...tickerLink, fontSize: 12 }}>
-                  {c.symbol}
-                </span>
-                <span style={{ color: '#444', fontSize: 10, fontFamily: 'monospace' }}>{c.snapshot_date}</span>
+
+          {[
+            { title: '↑ Upgraded', stocks: topUpgraded, accent: '#10b981' },
+            { title: '↓ Downgraded', stocks: topDowngraded, accent: '#ef4444' },
+          ].map(({ title, stocks, accent }) => (
+            <div key={title} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 9, color: accent, textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'monospace', marginBottom: 4 }}>
+                {title}
               </div>
-              {c.prev_consensus !== c.consensus && (
-                <div style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>
-                  <span style={{ color: '#666' }}>{c.prev_consensus || '—'}</span>
-                  {' → '}
-                  <span style={{ color: CONSENSUS_COLORS[c.consensus]?.color || '#94a3b8' }}>{c.consensus}</span>
-                </div>
+              {scoredMovers.length > 0 && stocks.length === 0 && (
+                <div style={{ color: '#444', fontSize: 10, fontFamily: 'monospace', padding: '2px 0' }}>None</div>
               )}
-              {c.buy_pct != null && c.prev_buy_pct != null &&
-               Math.abs(c.buy_pct - c.prev_buy_pct) > 5 && (
-                <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                  <span style={{ color: '#555' }}>Bullish </span>
-                  <span style={{ color: '#666' }}>{c.prev_buy_pct.toFixed(0)}%</span>
-                  {' → '}
-                  <span style={{ color: c.buy_pct >= c.prev_buy_pct ? '#10b981' : '#ef4444' }}>
-                    {c.buy_pct.toFixed(0)}%
-                  </span>
-                  <span style={{ color: c.buy_pct >= c.prev_buy_pct ? '#10b981' : '#ef4444', marginLeft: 4 }}>
-                    ({c.buy_pct >= c.prev_buy_pct ? '+' : ''}{(c.buy_pct - c.prev_buy_pct).toFixed(1)}pts)
-                  </span>
-                </div>
-              )}
-              {c.upside_pct != null && c.prev_upside != null &&
-               Math.abs(c.upside_pct - c.prev_upside) > 0.05 ? (
-                <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                  <span style={{ color: '#555' }}>Upside </span>
-                  <span style={{ color: '#666' }}>{c.prev_upside.toFixed(0)}%</span>
-                  {' → '}
-                  <UpsideCell value={c.upside_pct} />
-                  <span style={{ color: c.upside_pct >= c.prev_upside ? '#10b981' : '#ef4444', marginLeft: 4 }}>
-                    ({c.upside_pct >= c.prev_upside ? '+' : ''}{(c.upside_pct - c.prev_upside).toFixed(1)}pts)
-                  </span>
-                </div>
-              ) : c.upside_pct != null && (
-                <div style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                  <span style={{ color: '#555' }}>Upside </span>
-                  <UpsideCell value={c.upside_pct} />
-                </div>
-              )}
+              {stocks.map(r => {
+                const flipped = r.base_consensus && r.consensus && r.base_consensus !== r.consensus;
+                return (
+                  <div key={r.symbol} style={{ padding: '7px 0', borderBottom: '1px solid #1a1a1a' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span onClick={() => onSelect?.(r.symbol, 'analysts')} style={{ ...tickerLink, fontSize: 12 }}>{r.symbol}</span>
+                        {r.name && (
+                          <span onClick={() => onSelect?.(r.symbol, 'analysts')} style={{ color: '#94a3b8', fontFamily: 'monospace', fontSize: 10, marginLeft: 6, cursor: 'pointer' }}>
+                            {r.name}
+                          </span>
+                        )}
+                      </span>
+                      {flipped && (
+                        <span style={{ fontSize: 10, fontFamily: 'monospace', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          <span style={{ color: '#666' }}>{r.base_consensus}</span>
+                          <span style={{ color: '#555' }}>{' → '}</span>
+                          <span style={{ color: CONSENSUS_COLORS[r.consensus]?.color || '#94a3b8' }}>{r.consensus}</span>
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, fontFamily: 'monospace', marginTop: 2, color: '#64748b', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      {r.hasBuy && (
+                        <span>
+                          Buy% {shrink(r.base_buy_pct, r.base_total_analysts).toFixed(0)}
+                          {' → '}
+                          {shrink(r.buy_pct, r.total_analysts).toFixed(0)}
+                          <span style={{ color: r.deltaBuy >= 0 ? '#10b981' : '#ef4444', marginLeft: 3 }}>
+                            ({r.deltaBuy >= 0 ? '+' : ''}{r.deltaBuy.toFixed(0)}pt)
+                          </span>
+                        </span>
+                      )}
+                      {r.hasTarget && (
+                        <span>
+                          Target {r.base_target.toFixed(0)}p
+                          {' → '}
+                          {r.price_target_mean.toFixed(0)}p
+                          <span style={{ color: r.deltaTargetPct >= 0 ? '#10b981' : '#ef4444', marginLeft: 3 }}>
+                            ({r.deltaTargetPct >= 0 ? '+' : ''}{r.deltaTargetPct.toFixed(0)}%)
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ))}
         </div>

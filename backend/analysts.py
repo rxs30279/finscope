@@ -385,6 +385,49 @@ def get_changes():
         ORDER BY cur.snapshot_date DESC
     """)
 
+@router.get("/movers")
+def get_movers(window_days: int = Query(30, ge=1, le=365)):
+    """Per stock, compare the latest snapshot to the closest snapshot on or before
+    `window_days` ago. Returns current + baseline analyst fields so the frontend can
+    rank biggest upgrades/downgrades over the window.
+
+    Only stocks with a baseline snapshot that old (enough history) are returned.
+    """
+    return _query("""
+        WITH latest AS (
+            SELECT DISTINCT ON (symbol)
+                symbol, snapshot_date AS cur_date,
+                consensus, buy_pct, upside_pct, price_target_mean,
+                total_analysts, revision_score
+            FROM analyst_snapshots
+            ORDER BY symbol, snapshot_date DESC
+        ),
+        baseline AS (
+            SELECT DISTINCT ON (s.symbol)
+                s.symbol,
+                s.snapshot_date    AS base_date,
+                s.consensus        AS base_consensus,
+                s.buy_pct          AS base_buy_pct,
+                s.upside_pct       AS base_upside,
+                s.price_target_mean AS base_target,
+                s.total_analysts   AS base_total_analysts
+            FROM analyst_snapshots s
+            JOIN latest l ON l.symbol = s.symbol
+            WHERE s.snapshot_date <= l.cur_date - (%(window_days)s || ' days')::interval
+            ORDER BY s.symbol, s.snapshot_date DESC
+        )
+        SELECT
+            l.symbol, l.cur_date, l.consensus, l.buy_pct, l.upside_pct,
+            l.price_target_mean, l.total_analysts, l.revision_score,
+            b.base_date, b.base_consensus, b.base_buy_pct, b.base_upside,
+            b.base_target, b.base_total_analysts,
+            m.name, m.sector, m.ftse_index
+        FROM latest l
+        JOIN baseline b ON b.symbol = l.symbol
+        LEFT JOIN company_metadata m ON m.symbol = l.symbol
+    """, {"window_days": window_days})
+
+
 # Refresh dispatches the refresh-analysts.yml GitHub Actions workflow rather
 # than running _run_refresh in-process: yfinance pulls for ~350 stocks take
 # minutes and Vercel kills serverless functions when the response returns.

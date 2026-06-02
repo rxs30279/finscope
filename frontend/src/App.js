@@ -3139,6 +3139,13 @@ export default function App() {
     setSearchQ("");
     setSearchResults([]);
     if (typeof window !== "undefined") {
+      // Record the page we're leaving on the current history entry so the
+      // browser Back button returns there (e.g. the Analysts monitor) rather
+      // than defaulting to the screener. Skip when already on a company entry —
+      // its state is already correct.
+      if (page !== "company") {
+        window.history.replaceState({ page }, "");
+      }
       window.history.pushState(
         { page: "company", symbol: sym },
         "",
@@ -3165,6 +3172,8 @@ export default function App() {
       if (st && st.page === "company" && st.symbol) {
         setSelectedSymbol(st.symbol);
         setPage("company");
+      } else if (st && st.page) {
+        setPage(st.page);
       } else {
         setPage("screener");
       }
