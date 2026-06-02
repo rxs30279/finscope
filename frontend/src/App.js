@@ -23,8 +23,6 @@ import {
   currSym,
   loadWatchlist,
   saveWatchlist,
-  loadTargets,
-  saveTargets,
 } from "./utils";
 import { useIsMobile } from "./useMediaQuery";
 import Sidebar from "./components/Sidebar";
@@ -39,6 +37,7 @@ import RnsTab from "./components/RnsTab";
 import AnalyticsTab from "./components/AnalyticsTab";
 import NewsTab from "./components/NewsTab";
 import SubscribeTab from "./components/SubscribeTab";
+import WatchlistTab from "./components/WatchlistTab";
 
 function MetricCard({ label, value, color }) {
   return (
@@ -77,13 +76,19 @@ function MetricCard({ label, value, color }) {
 }
 
 // ── Company Detail ────────────────────────────────────────────────────────────
-function CompanyDetail({ symbol, onBack }) {
+function CompanyDetail({ symbol, onBack, initialTab }) {
   const [meta, setMeta] = useState(null);
   const [snap, setSnap] = useState(null);
   const [annual, setAnnual] = useState([]);
   const [quarterly, setQuarterly] = useState([]);
-  const [tab, setTab] = useState("chart");
+  const [tab, setTab] = useState(initialTab || "chart");
   const [loading, setLoading] = useState(true);
+
+  // Honour a requested tab (e.g. opening straight to News from the watchlist),
+  // and reset to that tab when the viewed company changes.
+  useEffect(() => {
+    setTab(initialTab || "chart");
+  }, [symbol, initialTab]);
 
   useEffect(() => {
     setLoading(true);
@@ -924,7 +929,7 @@ function CompanyDetail({ symbol, onBack }) {
       {tab === "analysts" && <AnalystTab symbol={symbol} />}
 
       {/* NEWS */}
-      {tab === "news" && <NewsTab symbol={symbol} />}
+      {tab === "news" && <NewsTab symbol={symbol} split />}
     </div>
   );
 }
@@ -2110,11 +2115,6 @@ const FUND_COLS = [
   ["Value", true, "piotroski_score"],
   ["Risk", true, "risk_score"],
 ];
-const WATCHLIST_FUND_COLS = [
-  ...FUND_COLS_BASE,
-  ["Price", true, "current_price"],
-  ["Target buy", true, "target_price"],
-];
 const ANALYST_COLS = [
   ["Symbol", false, "symbol"],
   ["Name", false, "name"],
@@ -2299,58 +2299,11 @@ function StarButton({ active, onClick }) {
   );
 }
 
-function TargetInput({ symbol, target, current, onCommit }) {
-  const [draft, setDraft] = useState(target != null ? String(target) : "");
-  useEffect(() => {
-    setDraft(target != null ? String(target) : "");
-  }, [target]);
-  let color = "#cbd5e1";
-  if (target != null && current != null) {
-    color = Number(target) >= Number(current) ? "#10b981" : "#ef4444";
-  }
-  const commit = () => {
-    if (draft === "" && target == null) return;
-    if (draft !== (target != null ? String(target) : ""))
-      onCommit(symbol, draft);
-  };
-  return (
-    <input
-      type="text"
-      inputMode="decimal"
-      value={draft}
-      placeholder="—"
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          commit();
-          e.currentTarget.blur();
-        }
-      }}
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        width: 56,
-        textAlign: "right",
-        background: "#0d0d0d",
-        border: "1px solid #2a2a2a",
-        borderRadius: 2,
-        padding: "3px 6px",
-        fontFamily: "monospace",
-        fontSize: 12,
-        fontWeight: 700,
-        color,
-        outline: "none",
-      }}
-    />
-  );
-}
-
 function Screener({
   onSelect,
   highlightSymbol,
   watchlist,
   onToggleWatchlist,
-  watchlistMode = false,
 }) {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [selectModes, setSelectModes] = useState(EMPTY_MODES);
@@ -2362,45 +2315,6 @@ function Screener({
   const [tableView, setTableView] = useState("fundamentals");
   const [sortCol, setSortCol] = useState(null);
   const [sortDir, setSortDir] = useState("desc");
-  const [targets, setTargets] = useState(() => loadTargets());
-  const [liveQuotes, setLiveQuotes] = useState({});
-
-  useEffect(() => {
-    if (!watchlistMode) return;
-    const symbols = [
-      ...(watchlist instanceof Set ? watchlist : new Set(watchlist || [])),
-    ];
-    if (symbols.length === 0) {
-      setLiveQuotes({});
-      return;
-    }
-    let cancelled = false;
-    const fetchQuotes = () => {
-      fetch(`${API}/quotes?symbols=${encodeURIComponent(symbols.join(","))}`)
-        .then((r) => r.json())
-        .then((d) => {
-          if (!cancelled && d && typeof d === "object") setLiveQuotes(d);
-        })
-        .catch(() => {});
-    };
-    fetchQuotes();
-    const id = setInterval(fetchQuotes, 60000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [watchlistMode, watchlist]);
-
-  const setTarget = (symbol, value) => {
-    setTargets((prev) => {
-      const next = { ...prev };
-      const num = parseFloat(value);
-      if (!Number.isFinite(num) || num <= 0) delete next[symbol];
-      else next[symbol] = num;
-      saveTargets(next);
-      return next;
-    });
-  };
 
   useEffect(() => {
     fetch(`${API}/filters`)
@@ -2490,7 +2404,6 @@ function Screener({
   const watchlistSet =
     watchlist instanceof Set ? watchlist : new Set(watchlist || []);
   const displayed = results.filter((r) => {
-    if (watchlistMode && !watchlistSet.has(r.symbol)) return false;
     const sf = scoreFilters;
     if (
       sf.min_momentum &&
@@ -2532,11 +2445,7 @@ function Screener({
     }
   };
 
-  const lookup = (r, key) => {
-    if (key === "target_price") return targets[r.symbol];
-    if (key === "current_price") return liveQuotes[r.symbol] ?? r.current_price;
-    return r[key];
-  };
+  const lookup = (r, key) => r[key];
   const sorted =
     sortCol == null
       ? displayed
@@ -2564,7 +2473,7 @@ function Screener({
           marginBottom: 4,
         }}
       >
-        {watchlistMode ? "Watchlist" : "Stock Screener"}
+        Stock Screener
       </h2>
       <div
         style={{
@@ -2575,11 +2484,7 @@ function Screener({
         }}
       >
         <div style={{ fontSize: 13, color: "#64748b" }}>
-          {watchlistMode
-            ? watchlistSet.size === 0
-              ? "No companies saved yet"
-              : `${watchlistSet.size} saved`
-            : `${filters.ftse_index || "All indices"}${filters.sector ? ` · ${filters.sector}` : ""}`}
+          {`${filters.ftse_index || "All indices"}${filters.sector ? ` · ${filters.sector}` : ""}`}
         </div>
         <div
           style={{
@@ -2598,80 +2503,76 @@ function Screener({
         </div>
       </div>
 
-      {!watchlistMode && (
-        <div
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+          marginBottom: 8,
+          alignItems: "center",
+        }}
+      >
+        <SectorDropdown
+          sectors={filterOpts.sectors}
+          value={filters.sector}
+          excluded={excludedSectors}
+          onSelect={(v) => update("sector", v)}
+          onToggleExclude={toggleExcludeSector}
+        />
+        <select
+          style={S.select}
+          value={filters.ftse_index}
+          onChange={(e) => update("ftse_index", e.target.value)}
+        >
+          <option value="">FTSE Market</option>
+          <option value="FTSE 100">FTSE 100</option>
+          <option value="FTSE 250">FTSE 250</option>
+          <option value="FTSE 350">FTSE 350</option>
+          <option value="FTSE SmallCap">FTSE SmallCap</option>
+          <option value="FTSE AIM 100">AIM 100</option>
+        </select>
+        <HybridSelect
+          selectMode={selectModes.min_market_cap}
+          onSelectChange={(mode) => handleSelectMode("min_market_cap", mode)}
+          onCustomCommit={(v) =>
+            handleCustomCommit("min_market_cap", v, (n) => Math.round(n * 1e9))
+          }
+          placeholder="£B"
+          inputWidth={70}
+        >
+          <option value="">Any Market Cap</option>
+          <option value="1000000000">£1B+</option>
+          <option value="10000000000">£10B+</option>
+          <option value="50000000000">£50B+</option>
+        </HybridSelect>
+        <button
+          onClick={() => setShowAdvanced((v) => !v)}
           style={{
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginBottom: 8,
-            alignItems: "center",
+            ...S.select,
+            cursor: "pointer",
+            color: showAdvanced || hasAdvancedFilters ? "#f97316" : "#888",
+            borderColor: hasAdvancedFilters ? "#f97316" : "#2a2a2a",
           }}
         >
-          <SectorDropdown
-            sectors={filterOpts.sectors}
-            value={filters.sector}
-            excluded={excludedSectors}
-            onSelect={(v) => update("sector", v)}
-            onToggleExclude={toggleExcludeSector}
-          />
-          <select
-            style={S.select}
-            value={filters.ftse_index}
-            onChange={(e) => update("ftse_index", e.target.value)}
-          >
-            <option value="">FTSE Market</option>
-            <option value="FTSE 100">FTSE 100</option>
-            <option value="FTSE 250">FTSE 250</option>
-            <option value="FTSE 350">FTSE 350</option>
-            <option value="FTSE SmallCap">FTSE SmallCap</option>
-            <option value="FTSE AIM 100">AIM 100</option>
-          </select>
-          <HybridSelect
-            selectMode={selectModes.min_market_cap}
-            onSelectChange={(mode) => handleSelectMode("min_market_cap", mode)}
-            onCustomCommit={(v) =>
-              handleCustomCommit("min_market_cap", v, (n) =>
-                Math.round(n * 1e9),
-              )
-            }
-            placeholder="£B"
-            inputWidth={70}
-          >
-            <option value="">Any Market Cap</option>
-            <option value="1000000000">£1B+</option>
-            <option value="10000000000">£10B+</option>
-            <option value="50000000000">£50B+</option>
-          </HybridSelect>
+          Advanced {showAdvanced ? "▲" : "▼"}
+          {hasAdvancedFilters ? " ●" : ""}
+        </button>
+        {hasActiveFilters && (
           <button
-            onClick={() => setShowAdvanced((v) => !v)}
+            onClick={clearFilters}
             style={{
               ...S.select,
               cursor: "pointer",
-              color: showAdvanced || hasAdvancedFilters ? "#f97316" : "#888",
-              borderColor: hasAdvancedFilters ? "#f97316" : "#2a2a2a",
+              color: "#ef4444",
+              borderColor: "#3a1a1a",
             }}
           >
-            Advanced {showAdvanced ? "▲" : "▼"}
-            {hasAdvancedFilters ? " ●" : ""}
+            Clear filters ✕
           </button>
-          {hasActiveFilters && (
-            <button
-              onClick={clearFilters}
-              style={{
-                ...S.select,
-                cursor: "pointer",
-                color: "#ef4444",
-                borderColor: "#3a1a1a",
-              }}
-            >
-              Clear filters ✕
-            </button>
-          )}
-        </div>
-      )}
+        )}
+      </div>
 
-      {!watchlistMode && showAdvanced && (
+      {showAdvanced && (
         <div
           style={{
             display: "flex",
@@ -2785,7 +2686,7 @@ function Screener({
         </div>
       )}
 
-      {!watchlistMode && excludedSectors.length > 0 && (
+      {excludedSectors.length > 0 && (
         <div
           style={{
             display: "flex",
@@ -2871,23 +2772,6 @@ function Screener({
 
       {loading ? (
         <div style={S.loading}>Screening…</div>
-      ) : watchlistMode && watchlistSet.size === 0 ? (
-        <div
-          style={{
-            textAlign: "center",
-            padding: 64,
-            color: "#64748b",
-            fontFamily: "monospace",
-            fontSize: 13,
-            lineHeight: 1.8,
-          }}
-        >
-          Your watchlist is empty.
-          <br />
-          Go to the <span style={{ color: "#f97316" }}>Screener</span> and click
-          the <span style={{ color: "#f59e0b", fontSize: 16 }}>☆</span> next to
-          a ticker to add it.
-        </div>
       ) : (
         <div
           style={{
@@ -2904,27 +2788,24 @@ function Screener({
           >
             <thead>
               <tr>
-                {(tableView === "fundamentals"
-                  ? watchlistMode
-                    ? WATCHLIST_FUND_COLS
-                    : FUND_COLS
-                  : ANALYST_COLS
-                ).map(([h, num, key]) => (
-                  <th
-                    key={h}
-                    onClick={() => handleSort(key)}
-                    style={{
-                      ...S.th,
-                      textAlign: num ? "right" : "left",
-                      cursor: "pointer",
-                      userSelect: "none",
-                      color: sortCol === key ? "#fb923c" : "#f97316",
-                    }}
-                  >
-                    {h}
-                    {sortCol === key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
-                  </th>
-                ))}
+                {(tableView === "fundamentals" ? FUND_COLS : ANALYST_COLS).map(
+                  ([h, num, key]) => (
+                    <th
+                      key={h}
+                      onClick={() => handleSort(key)}
+                      style={{
+                        ...S.th,
+                        textAlign: num ? "right" : "left",
+                        cursor: "pointer",
+                        userSelect: "none",
+                        color: sortCol === key ? "#fb923c" : "#f97316",
+                      }}
+                    >
+                      {h}
+                      {sortCol === key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
+                    </th>
+                  ),
+                )}
               </tr>
             </thead>
             <tbody>
@@ -3033,123 +2914,70 @@ function Screener({
                         >
                           {r.pegy ?? "—"}
                         </td>
-                        {watchlistMode ? (
-                          (() => {
-                            const live = liveQuotes[r.symbol];
-                            const pence = live != null ? live : r.current_price;
-                            const pounds = pence != null ? pence / 100 : null;
-                            const isLive = live != null;
-                            return (
-                              <>
-                                <td
-                                  style={{
-                                    ...S.tdNum,
-                                    color: "#f1f5f9",
-                                    fontWeight: 700,
-                                  }}
-                                  title={
-                                    isLive
-                                      ? "Live (yfinance, 60s cache)"
-                                      : "Last close"
-                                  }
-                                >
-                                  {pounds != null
-                                    ? `£${pounds.toFixed(2)}`
-                                    : "—"}
-                                  {isLive && (
-                                    <span
-                                      style={{
-                                        marginLeft: 4,
-                                        fontSize: 9,
-                                        color: "#10b981",
-                                      }}
-                                    >
-                                      ●
-                                    </span>
-                                  )}
-                                </td>
-                                <td
-                                  style={{ ...S.tdNum }}
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <TargetInput
-                                    symbol={r.symbol}
-                                    target={targets[r.symbol]}
-                                    current={pounds}
-                                    onCommit={setTarget}
-                                  />
-                                </td>
-                              </>
-                            );
-                          })()
-                        ) : (
-                          <>
-                            <td
-                              style={{
-                                ...S.tdNum,
-                                color:
-                                  r.momentum_score == null
-                                    ? "#444"
-                                    : r.momentum_score >= 7
-                                      ? "#10b981"
-                                      : r.momentum_score >= 4
-                                        ? "#f59e0b"
-                                        : "#ef4444",
-                                fontWeight: 700,
-                              }}
-                            >
-                              {r.momentum_score ?? "—"}
-                            </td>
-                            <td
-                              style={{
-                                ...S.tdNum,
-                                color:
-                                  r.quality_score == null
-                                    ? "#444"
-                                    : r.quality_score >= 7
-                                      ? "#10b981"
-                                      : r.quality_score >= 4
-                                        ? "#f59e0b"
-                                        : "#ef4444",
-                                fontWeight: 700,
-                              }}
-                            >
-                              {r.quality_score ?? "—"}
-                            </td>
-                            <td
-                              style={{
-                                ...S.tdNum,
-                                color:
-                                  r.piotroski_score == null
-                                    ? "#444"
-                                    : r.piotroski_score >= 7
-                                      ? "#10b981"
-                                      : r.piotroski_score >= 4
-                                        ? "#f59e0b"
-                                        : "#ef4444",
-                                fontWeight: 700,
-                              }}
-                            >
-                              {r.piotroski_score ?? "—"}
-                            </td>
-                            <td
-                              style={{
-                                ...S.tdNum,
-                                color:
-                                  r.risk_score == null
-                                    ? "#444"
-                                    : r.risk_score <= 3
-                                      ? "#10b981"
-                                      : r.risk_score <= 6
-                                        ? "#f59e0b"
-                                        : "#ef4444",
-                                fontWeight: 700,
-                              }}
-                            >
-                              {r.risk_score ?? "—"}
-                            </td>
-                          </>
-                        )}
+                        <td
+                          style={{
+                            ...S.tdNum,
+                            color:
+                              r.momentum_score == null
+                                ? "#444"
+                                : r.momentum_score >= 7
+                                  ? "#10b981"
+                                  : r.momentum_score >= 4
+                                    ? "#f59e0b"
+                                    : "#ef4444",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {r.momentum_score ?? "—"}
+                        </td>
+                        <td
+                          style={{
+                            ...S.tdNum,
+                            color:
+                              r.quality_score == null
+                                ? "#444"
+                                : r.quality_score >= 7
+                                  ? "#10b981"
+                                  : r.quality_score >= 4
+                                    ? "#f59e0b"
+                                    : "#ef4444",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {r.quality_score ?? "—"}
+                        </td>
+                        <td
+                          style={{
+                            ...S.tdNum,
+                            color:
+                              r.piotroski_score == null
+                                ? "#444"
+                                : r.piotroski_score >= 7
+                                  ? "#10b981"
+                                  : r.piotroski_score >= 4
+                                    ? "#f59e0b"
+                                    : "#ef4444",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {r.piotroski_score ?? "—"}
+                        </td>
+                        <td
+                          style={{
+                            ...S.tdNum,
+                            color:
+                              r.risk_score == null
+                                ? "#444"
+                                : r.risk_score <= 3
+                                  ? "#10b981"
+                                  : r.risk_score <= 6
+                                    ? "#f59e0b"
+                                    : "#ef4444",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {r.risk_score ?? "—"}
+                        </td>
                       </>
                     ) : (
                       <>
@@ -3266,6 +3094,7 @@ export default function App() {
     return t || "screener";
   }); // screener | watchlist | rotation | breadth | cross-asset | signals | company | subscribe
   const [selectedSymbol, setSelectedSymbol] = useState(null);
+  const [selectedTab, setSelectedTab] = useState(null);
   const [watchlist, setWatchlist] = useState(() => new Set(loadWatchlist()));
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -3301,8 +3130,9 @@ export default function App() {
       .then(setSearchResults);
   };
 
-  const selectCompany = (sym) => {
+  const selectCompany = (sym, tab = null) => {
     setSelectedSymbol(sym);
+    setSelectedTab(tab);
     setPage("company");
     setHighlightSymbol(null);
     setShowSearch(false);
@@ -3971,14 +3801,13 @@ export default function App() {
               onToggleWatchlist={toggleWatchlist}
             />
           </div>
-          <div style={{ display: page === "watchlist" ? "block" : "none" }}>
-            <Screener
+          {page === "watchlist" && (
+            <WatchlistTab
               onSelect={selectCompany}
               watchlist={watchlist}
               onToggleWatchlist={toggleWatchlist}
-              watchlistMode
             />
-          </div>
+          )}
           {page === "trending" && <TrendingTab onSelect={selectCompany} />}
           {page === "rotation" && <RotationTab refreshKey={refreshKey} />}
           {page === "breadth" && <BreadthTab refreshKey={refreshKey} />}
@@ -3999,7 +3828,11 @@ export default function App() {
           )}
           {page === "subscribe" && <SubscribeTab />}
           {page === "company" && selectedSymbol && (
-            <CompanyDetail symbol={selectedSymbol} onBack={goBack} />
+            <CompanyDetail
+              symbol={selectedSymbol}
+              onBack={goBack}
+              initialTab={selectedTab}
+            />
           )}
         </main>
       </div>

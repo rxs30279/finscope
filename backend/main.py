@@ -10,7 +10,7 @@ from typing import Optional
 from dotenv import load_dotenv
 import os
 from market import router as market_router
-from prices import router as prices_router, _attach_momentum
+from prices import router as prices_router, _attach_momentum, _trailing_streak
 from analysts import router as analysts_router
 from rns import router as rns_router
 from rns_llm import router as rns_llm_router
@@ -655,6 +655,132 @@ def quotes(symbols: str):
                 _quote_cache[sym] = (price, now)
 
     return out
+
+
+@app.get("/api/watchlist")
+def watchlist(symbols: str):
+    """Per-stock monitoring data for the watchlist page.
+
+    Takes a comma-separated symbol list (the user's saved watchlist) and returns
+    one enriched row per symbol focused on *what changed / what's actionable*:
+    latest + previous close (for day change), 52-week range position, the trailing
+    up/down streak, analyst consensus/upside/revision, risk score, and recent RNS
+    and press activity. Built for a small curated set, so it computes everything in
+    a handful of bulk queries rather than per-stock. Prices are in pence (LSE
+    convention); the frontend converts and derives day-change / range / target-gap.
+    """
+    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not requested:
+        return []
+
+    # 1. Base metadata + the TTM fields the risk scorer needs + latest analyst snapshot.
+    rows = query(
+        """
+        SELECT m.symbol, m.name, m.sector, m.ftse_index, m.financial_currency,
+               t.market_cap, t.revenue, t.operating_margin, t.price_to_book,
+               CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END AS price_to_earnings,
+               a.consensus, a.upside_pct, a.revision_score, a.total_analysts
+        FROM company_metadata m
+        LEFT JOIN ttm_financials t ON t.company_symbol = m.symbol
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol)
+                symbol, consensus, upside_pct, revision_score, total_analysts
+            FROM analyst_snapshots
+            ORDER BY symbol, snapshot_date DESC
+        ) a ON a.symbol = m.symbol
+        WHERE m.symbol = ANY(%s)
+        """,
+        (requested,),
+    )
+    by_symbol = {r["symbol"]: r for r in rows}
+
+    # 2. Price history (last 252 closes per symbol, oldest-first) → current/prev
+    #    close (day change), 52-week high/low (range position), and the streak.
+    price_rows = query(
+        """
+        WITH numbered AS (
+            SELECT symbol, close,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM price_history
+            WHERE symbol = ANY(%s)
+        )
+        SELECT symbol, close FROM numbered WHERE rn <= 252 ORDER BY symbol, rn DESC
+        """,
+        (requested,),
+    )
+    closes_map = {}
+    for r in price_rows:
+        closes_map.setdefault(r["symbol"], []).append(float(r["close"]))
+
+    for sym, r in by_symbol.items():
+        closes = closes_map.get(sym, [])
+        r["current_price"] = closes[-1] if closes else None
+        r["prev_close"] = closes[-2] if len(closes) >= 2 else None
+        r["high_52w"] = round(max(closes), 4) if closes else None
+        r["low_52w"] = round(min(closes), 4) if closes else None
+        r["streak"] = _trailing_streak(closes)
+        # Last ~3 months (≈63 trading days) of closes for the watchlist sparkline.
+        r["spark"] = [round(c, 2) for c in closes[-63:]]
+
+    # 3. Risk score — reuse the screener's blended Altman-Z + volatility scorer.
+    _attach_risk_score(list(by_symbol.values()))
+
+    # 4. Recent RNS — count in the last 7 days + the single latest headline (for a tooltip).
+    rns_latest = query(
+        """
+        SELECT DISTINCT ON (symbol) symbol, headline, tier, category, published_at
+        FROM rns_announcements
+        WHERE symbol = ANY(%s) AND published_at >= NOW() - INTERVAL '7 days'
+        ORDER BY symbol, published_at DESC
+        """,
+        (requested,),
+    )
+    rns_counts = query(
+        """
+        SELECT symbol, COUNT(*) AS n
+        FROM rns_announcements
+        WHERE symbol = ANY(%s) AND published_at >= NOW() - INTERVAL '7 days'
+        GROUP BY symbol
+        """,
+        (requested,),
+    )
+    count_map = {r["symbol"]: r["n"] for r in rns_counts}
+    latest_map = {r["symbol"]: r for r in rns_latest}
+    for sym, r in by_symbol.items():
+        latest = latest_map.get(sym)
+        r["rns_count"] = count_map.get(sym, 0)
+        r["rns_latest"] = (
+            {
+                "headline": latest["headline"],
+                "tier": latest["tier"],
+                "category": latest["category"],
+                "published_at": latest["published_at"],
+            }
+            if latest
+            else None
+        )
+
+    # 5. Press coverage count (last 7 days). company_news is created lazily by the
+    #    news endpoints, so tolerate it not existing yet.
+    news_map = {}
+    try:
+        news_counts = query(
+            """
+            SELECT symbol, COUNT(*) AS n
+            FROM company_news
+            WHERE symbol = ANY(%s) AND published_at >= NOW() - INTERVAL '7 days'
+            GROUP BY symbol
+            """,
+            (requested,),
+        )
+        news_map = {r["symbol"]: r["n"] for r in news_counts}
+    except Exception:
+        news_map = {}
+    for sym, r in by_symbol.items():
+        r["news_count"] = news_map.get(sym, 0)
+
+    # Preserve the caller's order; silently skip symbols we have no metadata for.
+    return [by_symbol[s] for s in requested if s in by_symbol]
 
 
 @app.get("/api/filters")
