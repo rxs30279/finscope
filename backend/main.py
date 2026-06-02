@@ -347,11 +347,57 @@ def _blend_risk(altman_component, vol_component):
     return None
 
 
+# PEGY growth is capped so a one-off recovery bounce (e.g. +150% off a depressed
+# base) can't inflate the denominator and make junk look ultra-cheap.
+_PEGY_GROWTH_CAP = 0.30
+
+
+def _forward_pe(r, _f):
+    """Forward P/E rebased onto analyst EPS estimates, currency-safe.
+
+    Trailing statutory P/E can be badly distorted by one-off items — e.g. a
+    disposal gain or deferred-tax credit inflates reported EPS and makes the
+    trailing P/E (and PEGY) look cheap (Rolls-Royce), while a depressed statutory
+    year does the reverse (Legal & General). When an analyst estimate for the
+    current fiscal year exists we rebase onto forward earnings:
+
+        forward_PE = trailing_PE * (eps_diluted / eps_est_current_yr)
+
+    This equals price / eps_est_current_yr, but multiplying the ratio keeps it
+    unit/currency-safe: eps_diluted and the estimate are both in the company's
+    reporting currency (so their ratio is dimensionless) while trailing_PE already
+    handles the pence-price vs reporting-currency-EPS conversion. That matters for
+    USD reporters like AZN/SHEL whose price is quoted in GBp.
+
+    Falls back to the trailing P/E when no usable estimate exists. Returns None
+    when there is no positive P/E to work from.
+    """
+    trailing_pe = _f(r.get("price_to_earnings"))
+    if trailing_pe is None or trailing_pe <= 0:
+        return None
+    eps_dil = _f(r.get("eps_diluted"))
+    est_cur = _f(r.get("eps_est_current_yr"))
+    if eps_dil is not None and eps_dil > 0 and est_cur is not None and est_cur > 0:
+        return trailing_pe * eps_dil / est_cur
+    return trailing_pe
+
+
 def _attach_pegy(results):
     """Add pegy ratio to each screener result row.
 
-    PEGY = P/E / (growth% + dividend yield%). Lower = cheaper relative to growth+income.
-    Growth prefers forward analyst EPS (needs >=3 analysts), falls back to 10Y EPS CAGR.
+    PEGY = forward P/E / (growth% + dividend yield%). Lower = cheaper relative to
+    growth+income. The numerator is a forward (analyst-estimate-based) P/E rather
+    than the trailing statutory P/E so one-off earnings items can't make a stock
+    look cheap when it isn't — see _forward_pe.
+
+    Growth is a blend of forward analyst EPS growth (when >=3 analysts cover the
+    stock) and the 10Y trailing EPS CAGR, so every stock is scored on the same
+    definition rather than some on a noisy 1Y forward and others on a 10Y trailing
+    number. Each leg is capped at _PEGY_GROWTH_CAP before blending.
+
+    PEG/PEGY is only meaningful for growing earnings, so rows whose blended growth
+    is not positive are left as None (a fat yield can't mask an EPS decline).
+
     Yield derived from dividends_per_share / period_end_price (same vintage as P/E).
     Returns None when inputs are missing or the denominator is too small to be meaningful.
     """
@@ -359,16 +405,30 @@ def _attach_pegy(results):
     def _f(x):
         return float(x) if x is not None else None
 
+    def _cap(g):
+        return min(g, _PEGY_GROWTH_CAP) if g is not None else None
+
     for r in results:
         r["pegy"] = None
-        pe = _f(r.get("price_to_earnings"))
+        pe = _forward_pe(r, _f)
         if pe is None or pe <= 0:
             continue
 
-        fwd = _f(r.get("eps_growth_next_yr"))
         total = r.get("total_analysts") or 0
-        growth = fwd if (fwd is not None and total >= 3) else _f(r.get("eps_cagr_10"))
-        if growth is None:
+        fwd  = _cap(_f(r.get("eps_growth_next_yr"))) if total >= 3 else None
+        cagr = _cap(_f(r.get("eps_cagr_10")))
+        # Blend both legs when available; otherwise use whichever exists.
+        if fwd is not None and cagr is not None:
+            growth = 0.5 * fwd + 0.5 * cagr
+        elif fwd is not None:
+            growth = fwd
+        elif cagr is not None:
+            growth = cagr
+        else:
+            continue
+
+        # Skip shrinking / flat earnings — PEGY is meaningless there.
+        if growth <= 0:
             continue
 
         dps = _f(r.get("dividends_per_share")) or 0.0
@@ -568,19 +628,19 @@ def screener(
                t.gross_margin, t.operating_margin, t.net_income_margin,
                t.revenue_growth, t.eps_diluted_growth, t.fcf_growth,
                t.debt_to_equity, t.current_ratio, t.fcf, t.ebitda,
-               t.revenue_cagr_10, t.eps_cagr_10, t.period_end_date,
+               t.revenue_cagr_10, t.eps_cagr_10, t.eps_diluted, t.period_end_date,
                t.fcf_margin, t.dividends_per_share, t.period_end_price,
                t.gross_margin_median, t.operating_margin_median,
                t.net_margin_median, t.roe_median, t.roic_median,
                a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score,
-               a.eps_growth_next_yr,
+               a.eps_growth_next_yr, a.eps_est_current_yr,
                COALESCE(p.latest_close, t.period_end_price) AS current_price
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
         LEFT JOIN (
             SELECT DISTINCT ON (symbol)
                 symbol, consensus, buy_pct, upside_pct, total_analysts, revision_score,
-                eps_growth_next_yr
+                eps_growth_next_yr, eps_est_current_yr
             FROM analyst_snapshots
             ORDER BY symbol, snapshot_date DESC
         ) a ON a.symbol = m.symbol

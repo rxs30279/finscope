@@ -22,23 +22,9 @@ const MODES = {
       br: 'Avoid',            // low Y, high X
     },
   },
-  'momentum-risk': {
-    label: 'Momentum × Risk',
-    xKey: 'risk_score',     xLabel: 'Risk (1–10, lower = safer)',
-    yKey: 'momentum_score', yLabel: 'Momentum (1–10)',
-    xMin: 0, xMax: 10, xMid: 5,
-    yMin: 0, yMax: 10, yMid: 5,
-    invertX: true,
-    tooltipX: v => v ?? '—',
-    tooltipY: v => v ?? '—',
-    quadrants: {
-      tl: 'Strong + safe',
-      tr: 'Strong + risky',
-      bl: 'Weak + safe',
-      br: 'Weak + risky',
-    },
-  },
 };
+
+const DEFAULT_MODE = 'quality-pegy';
 
 function dotColor(d, mode) {
   const x = d[mode.xKey], y = d[mode.yKey];
@@ -67,9 +53,8 @@ function CustomTooltip({ active, payload, mode }) {
 export default function AnalyticsTab({ refreshKey, onSelect }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modeKey, setModeKey] = useState('quality-pegy');
   const [ftseFilter, setFtseFilter] = useState('all');
-  const [xZoom, setXZoom] = useState(MODES['quality-pegy'].xMax);
+  const [xZoom, setXZoom] = useState(MODES[DEFAULT_MODE].xMax);
 
   useEffect(() => {
     setLoading(true);
@@ -79,10 +64,10 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
       .catch(() => setLoading(false));
   }, [refreshKey]);
 
-  const mode = MODES[modeKey];
+  const mode = MODES[DEFAULT_MODE];
 
-  // Reset zoom when mode changes — each axis has different natural scale.
-  useEffect(() => { setXZoom(mode.xMax); }, [modeKey, mode.xMax]);
+  // Reset zoom to the mode's natural max on mount.
+  useEffect(() => { setXZoom(mode.xMax); }, [mode.xMax]);
 
   const filteredRows = useMemo(() => {
     let data = rows;
@@ -124,12 +109,9 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
       </h2>
 
       <div style={{ display:'flex', gap:8, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
-        {Object.entries(MODES).map(([key, m]) => (
-          <button key={key} onClick={() => setModeKey(key)} style={btn(modeKey === key)}>
-            {m.label}
-          </button>
-        ))}
-        <div style={{ width:1, height:20, background:'#2a2a2a', margin:'0 6px' }} />
+        <span style={{ color:'#cbd5e1', fontSize:11, fontFamily:'monospace', fontWeight:600, marginRight:6 }}>
+          {mode.label}
+        </span>
         {['all', 'FTSE 100', 'FTSE 250', 'FTSE 350'].map(f => (
           <button key={f} onClick={() => setFtseFilter(f)} style={btn(ftseFilter === f)}>
             {f === 'all' ? 'All' : f}
