@@ -449,7 +449,7 @@ def _sub_footer(unsub_url: str, manage_url: str) -> str:
     return (
         '<div style="margin-top:8px;color:#999;font-size:11px;'
         'font-family:monospace;text-align:center;">'
-        f'<a href="{html.escape(manage_url)}" style="color:#999;">Manage subscription</a>'
+        f'<a href="{html.escape(manage_url)}" style="color:#999;">Subscribe</a>'
         ' &middot; '
         f'<a href="{html.escape(unsub_url)}" style="color:#999;">Unsubscribe</a>'
         '</div>'
