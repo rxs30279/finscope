@@ -11,6 +11,7 @@ const MODES = {
     xKey: 'pegy',         xLabel: 'PEGY (lower = cheaper)',
     yKey: 'quality_score', yLabel: 'Quality (1–10)',
     xMin: 0,  xMax: 5,  xMid: 1,
+    xCap: 30,        // PEGY above this is treated as an outlier and not plotted
     yMin: 0,  yMax: 10, yMid: 5,
     invertX: true,   // low PEGY is "good"
     tooltipX: v => v?.toFixed?.(2) ?? '—',
@@ -54,7 +55,9 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [ftseFilter, setFtseFilter] = useState('all');
-  const [xZoom, setXZoom] = useState(MODES[DEFAULT_MODE].xMax);
+  // Visible x-window is [xLo, xHi] — both ends are draggable, bounded to [xMin, xMax].
+  const [xLo, setXLo] = useState(MODES[DEFAULT_MODE].xMin);
+  const [xHi, setXHi] = useState(MODES[DEFAULT_MODE].xMax);
 
   useEffect(() => {
     setLoading(true);
@@ -66,10 +69,11 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
 
   const mode = MODES[DEFAULT_MODE];
 
-  // Reset zoom to the mode's natural max on mount.
-  useEffect(() => { setXZoom(mode.xMax); }, [mode.xMax]);
+  // Reset the window to the mode's natural span on mount.
+  useEffect(() => { setXLo(mode.xMin); setXHi(mode.xMax); }, [mode.xMin, mode.xMax]);
 
-  const filteredRows = useMemo(() => {
+  // Universe = FTSE-filtered rows that have both axis values (before the cap).
+  const universeRows = useMemo(() => {
     let data = rows;
     if (ftseFilter !== 'all') {
       if (ftseFilter === 'FTSE 350') {
@@ -81,14 +85,16 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
     return data.filter(r => r[mode.xKey] != null && r[mode.yKey] != null);
   }, [rows, mode, ftseFilter]);
 
-  // True data max across filtered rows — caps the zoom slider so you can pull back to see outliers.
-  const dataXMax = useMemo(() => {
-    if (filteredRows.length === 0) return mode.xMax;
-    const max = Math.max(...filteredRows.map(r => r[mode.xKey] || 0));
-    return Math.max(mode.xMax, Math.ceil(max));
-  }, [filteredRows, mode]);
+  // Plotted rows drop x-axis outliers above the cap (e.g. PEGY > 30).
+  const filteredRows = useMemo(
+    () => universeRows.filter(r => mode.xCap == null || r[mode.xKey] <= mode.xCap),
+    [universeRows, mode]
+  );
 
-  const hiddenCount = filteredRows.filter(r => r[mode.xKey] > xZoom).length;
+  // Outliers excluded by the cap — surfaced as a note on the chart.
+  const cappedCount = universeRows.length - filteredRows.length;
+
+  const hiddenCount = filteredRows.filter(r => r[mode.xKey] < xLo || r[mode.xKey] > xHi).length;
 
   const card = { background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 };
 
@@ -104,8 +110,20 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
 
   return (
     <div>
+      {/* Dual-thumb range slider: transparent tracks overlap, only the thumbs are interactive */}
+      <style>{`
+        .rangeThumb { position:absolute; top:0; left:0; width:100%; height:20px; margin:0;
+          background:transparent; pointer-events:none; -webkit-appearance:none; appearance:none; }
+        .rangeThumb:focus { outline:none; }
+        .rangeThumb::-webkit-slider-runnable-track { background:transparent; border:none; }
+        .rangeThumb::-moz-range-track { background:transparent; border:none; }
+        .rangeThumb::-webkit-slider-thumb { pointer-events:auto; -webkit-appearance:none; appearance:none;
+          height:14px; width:14px; border-radius:50%; background:#f97316; border:2px solid #0a0a0a; cursor:pointer; margin-top:-6px; }
+        .rangeThumb::-moz-range-thumb { pointer-events:auto; height:14px; width:14px; border-radius:50%;
+          background:#f97316; border:2px solid #0a0a0a; cursor:pointer; }
+      `}</style>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>
-        Analytics
+        PEGY
       </h2>
 
       <div style={{ display:'flex', gap:8, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
@@ -128,7 +146,7 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
             <CartesianGrid stroke="#1e1e1e" />
             <XAxis
               type="number" dataKey={mode.xKey} name={mode.xLabel}
-              domain={[mode.xMin, xZoom]}
+              domain={[xLo, xHi]}
               allowDataOverflow
               tick={{ fill:'#cbd5e1', fontSize:11, fontFamily:'monospace' }}
               stroke="#475569"
@@ -166,29 +184,41 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
           </ScatterChart>
         </ResponsiveContainer>
 
-        {/* X-axis zoom slider — pull left to zoom into the dense region */}
+        {/* X-axis range slider — drag either end to set the visible PEGY window */}
         <div style={{ marginTop:4, padding:'8px 6px 0' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4, fontSize:10, fontFamily:'monospace', color:'#94a3b8' }}>
-            <span>X range: {mode.xMin.toFixed(1)} → {xZoom.toFixed(1)}</span>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, fontSize:10, fontFamily:'monospace', color:'#94a3b8' }}>
+            <span>{mode.xLabel.split(' ')[0]} range: {xLo.toFixed(1)} → {xHi.toFixed(1)}</span>
             <span style={{ color: hiddenCount > 0 ? '#f59e0b' : '#64748b' }}>
-              {hiddenCount > 0 ? `${hiddenCount} points beyond ${xZoom.toFixed(1)}` : 'All points in view'}
+              {hiddenCount > 0 ? `${hiddenCount} outside range` : 'All points in view'}
             </span>
             <button
-              onClick={() => setXZoom(dataXMax)}
+              onClick={() => { setXLo(mode.xMin); setXHi(mode.xMax); }}
               style={{ background:'none', border:'1px solid #2a2a2a', color:'#94a3b8', fontSize:9, fontFamily:'monospace', padding:'2px 8px', borderRadius:2, cursor:'pointer' }}
             >
-              Fit all
+              Reset
             </button>
           </div>
-          <input
-            type="range"
-            min={Math.max(mode.xMin + 0.5, 1)}
-            max={dataXMax}
-            step={dataXMax > 20 ? 0.5 : 0.1}
-            value={xZoom}
-            onChange={e => setXZoom(parseFloat(e.target.value))}
-            style={{ width:'100%', accentColor:'#f97316', cursor:'pointer' }}
-          />
+          {(() => {
+            const SMIN = mode.xMin, SMAX = mode.xMax, GAP = 0.2;
+            const pct = v => `${((v - SMIN) / (SMAX - SMIN)) * 100}%`;
+            return (
+              <div style={{ position:'relative', height:20 }}>
+                {/* track + selected range */}
+                <div style={{ position:'absolute', top:9, left:0, right:0, height:3, background:'#2a2a2a', borderRadius:2 }} />
+                <div style={{ position:'absolute', top:9, height:3, background:'#f97316', borderRadius:2, left:pct(xLo), right:`${100 - ((xHi - SMIN) / (SMAX - SMIN)) * 100}%` }} />
+                <input
+                  type="range" className="rangeThumb" min={SMIN} max={SMAX} step={0.1} value={xLo}
+                  onChange={e => setXLo(Math.min(parseFloat(e.target.value), xHi - GAP))}
+                  style={{ zIndex: xLo > SMAX - GAP * 5 ? 5 : 3 }}
+                />
+                <input
+                  type="range" className="rangeThumb" min={SMIN} max={SMAX} step={0.1} value={xHi}
+                  onChange={e => setXHi(Math.max(parseFloat(e.target.value), xLo + GAP))}
+                  style={{ zIndex: 4 }}
+                />
+              </div>
+            );
+          })()}
         </div>
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginTop:16, fontSize:11, fontFamily:'monospace', color:'#cbd5e1' }}>
@@ -199,6 +229,8 @@ export default function AnalyticsTab({ refreshKey, onSelect }) {
         </div>
         <div style={{ marginTop:10, fontSize:10, color:'#94a3b8', fontFamily:'monospace' }}>
           Dot size ∝ market cap · click a dot to open the company
+          {mode.xCap != null && cappedCount > 0 &&
+            ` · ${cappedCount} outlier${cappedCount === 1 ? '' : 's'} with ${mode.xLabel.split(' ')[0]} > ${mode.xCap} hidden`}
         </div>
       </div>
     </div>

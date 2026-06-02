@@ -3225,7 +3225,7 @@ export default function App() {
     { id: "watchlist", label: "Watchlist" },
     { id: "analyst-monitor", label: "Analysts" },
     { id: "rns", label: "RNS News" },
-    { id: "analytics", label: "Analytics" },
+    { id: "analytics", label: "PEGY" },
     { id: "subscribe", label: "Subscribe" },
     {
       id: "markets",
