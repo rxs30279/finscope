@@ -101,7 +101,15 @@ def company(symbol: str = Query(...)):
 
 @app.get("/api/snapshot")
 def snapshot(symbol: str = Query(...)):
-    rows = query("SELECT * FROM ttm_financials WHERE company_symbol = %s", (symbol,))
+    rows = query(
+        """
+        SELECT t.*, m.sector
+        FROM ttm_financials t
+        LEFT JOIN company_metadata m ON m.symbol = t.company_symbol
+        WHERE t.company_symbol = %s
+        """,
+        (symbol,),
+    )
     if not rows:
         raise HTTPException(404, "No data")
     row = rows[0]
@@ -347,6 +355,48 @@ def _blend_risk(altman_component, vol_component):
     return None
 
 
+def _is_financial(row):
+    """True for banks/insurers/financials, where the Altman Z-Score is invalid.
+
+    Altman explicitly excluded financial firms: their balance sheets are mostly
+    leverage by design (deposits, policy liabilities), so every Altman term
+    collapses toward zero and the score wrongly flags them as distressed.
+    """
+    sector = (row.get("sector") or "").lower()
+    return "financ" in sector or "bank" in sector or "insurance" in sector
+
+
+def _roe_to_risk(roe):
+    """Map return on equity to a 1-10 risk component for financials.
+
+    Higher ROE = lower risk. ROE >= 15% → 2 (strong), ROE <= 0 → 10 (weak),
+    linear between. Floored at 2 since ROE alone is a coarse proxy.
+    """
+    if roe is None:
+        return None
+    if roe >= 0.15:
+        return 2
+    if roe <= 0.0:
+        return 10
+    # Linear: roe=0.15→2, roe=0.0→10.
+    return round(2 + (0.15 - roe) * (8 / 0.15))
+
+
+def _financial_risk(roe_component, vol_component):
+    """Risk for financials: 60% volatility + 40% ROE/quality, no Altman.
+
+    Falls back to whichever component is available (volatility-only when ROE is
+    missing); returns None if neither is available.
+    """
+    if roe_component is not None and vol_component is not None:
+        return max(1, min(10, round(0.6 * vol_component + 0.4 * roe_component)))
+    if vol_component is not None:
+        return max(1, min(10, vol_component))
+    if roe_component is not None:
+        return max(1, min(10, roe_component))
+    return None
+
+
 # PEGY growth is capped so a one-off recovery bounce (e.g. +150% off a depressed
 # base) can't inflate the denominator and make junk look ultra-cheap.
 _PEGY_GROWTH_CAP = 0.30
@@ -540,15 +590,23 @@ def _attach_risk_score(results):
         sym = r["symbol"]
         ta = total_assets_map.get(sym)
 
-        z = _altman_z(r, ta)
-        altman_component = _z_to_risk(z)
-
         closes = closes_map.get(sym, [])
         vol = _annualised_vol(closes) if len(closes) >= 63 else None
         vol_component = _vol_to_score(vol)
 
-        r["risk_score"] = _blend_risk(altman_component, vol_component)
-        r["altman_z"] = z
+        if _is_financial(r):
+            # Altman is invalid for financials — use volatility + ROE quality.
+            roe = r.get("roe")
+            if roe is None:
+                roe = r.get("roe_median")
+            r["risk_score"] = _financial_risk(_roe_to_risk(roe), vol_component)
+            r["altman_z"] = None
+        else:
+            z = _altman_z(r, ta)
+            altman_component = _z_to_risk(z)
+            r["risk_score"] = _blend_risk(altman_component, vol_component)
+            r["altman_z"] = z
+
         r["volatility_annualised"] = round(vol * 100, 1) if vol is not None else None
 
     return results
@@ -744,7 +802,7 @@ def watchlist(symbols: str):
     rows = query(
         """
         SELECT m.symbol, m.name, m.sector, m.ftse_index, m.financial_currency,
-               t.market_cap, t.revenue, t.operating_margin, t.price_to_book,
+               t.market_cap, t.revenue, t.operating_margin, t.price_to_book, t.roe,
                CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END AS price_to_earnings,
                a.consensus, a.upside_pct, a.revision_score, a.total_analysts
         FROM company_metadata m

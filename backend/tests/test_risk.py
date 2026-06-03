@@ -1,6 +1,9 @@
 import sys, os, math, pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from main import _altman_z, _z_to_risk, _annualised_vol, _vol_to_score, _blend_risk
+from main import (
+    _altman_z, _z_to_risk, _annualised_vol, _vol_to_score, _blend_risk,
+    _is_financial, _roe_to_risk, _financial_risk,
+)
 
 
 # ── _altman_z ─────────────────────────────────────────────────────────────────
@@ -146,9 +149,67 @@ def test_blend_risk_clamped():
     assert _blend_risk(1, 1) == 1
 
 
+# ── financials (banks/insurers) ───────────────────────────────────────────────
+
+def test_is_financial_matches_sectors():
+    assert _is_financial({'sector': 'Financial Services'})
+    assert _is_financial({'sector': 'Banks'})
+    assert _is_financial({'sector': 'Life Insurance'})
+
+def test_is_financial_false_for_non_financials():
+    assert not _is_financial({'sector': 'Energy'})
+    assert not _is_financial({'sector': None})
+    assert not _is_financial({})
+
+def test_roe_to_risk_strong_and_weak():
+    assert _roe_to_risk(0.20) == 2   # >= 15% → strong
+    assert _roe_to_risk(0.15) == 2
+    assert _roe_to_risk(0.0) == 10   # <= 0 → weak
+    assert _roe_to_risk(-0.05) == 10
+
+def test_roe_to_risk_midpoint():
+    # roe=0.075 → 2 + (0.15-0.075)*(8/0.15) = 2 + 4 = 6
+    assert _roe_to_risk(0.075) == 6
+
+def test_roe_to_risk_none():
+    assert _roe_to_risk(None) is None
+
+def test_financial_risk_both_components():
+    # 0.6*vol + 0.4*roe = 0.6*6 + 0.4*2 = 3.6 + 0.8 = 4.4 → round → 4
+    assert _financial_risk(2, 6) == 4
+
+def test_financial_risk_falls_back_to_vol():
+    assert _financial_risk(None, 5) == 5
+
+def test_financial_risk_falls_back_to_roe():
+    assert _financial_risk(8, None) == 8
+
+def test_financial_risk_both_none():
+    assert _financial_risk(None, None) is None
+
+
 # ── _attach_risk_score ────────────────────────────────────────────────────────
 
 from unittest.mock import patch
+
+
+def test_attach_risk_score_financial_skips_altman():
+    """Financials are scored from volatility + ROE, with no Altman Z."""
+    from main import _attach_risk_score
+    results = [{
+        'symbol': 'BARC.L', 'sector': 'Banks', 'roe': 0.10,
+        'market_cap': 5e9, 'revenue': 3e9, 'operating_margin': 0.25,
+        'price_to_book': 0.5,
+    }]
+    ta_rows = [{'company_symbol': 'BARC.L', 'total_assets': 1e12}]
+    price_rows = [{'symbol': 'BARC.L', 'close': 100.0 + i * 0.05} for i in range(252)]
+
+    with patch('main.query', side_effect=[ta_rows, price_rows]):
+        _attach_risk_score(results)
+
+    r = results[0]
+    assert r['altman_z'] is None  # Altman not used for financials
+    assert r['risk_score'] is None or 1 <= r['risk_score'] <= 10
 
 
 def _make_result(symbol, **kwargs):
