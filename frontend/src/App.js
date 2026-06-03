@@ -2883,6 +2883,11 @@ function Screener({
             overflow: "auto",
             maxHeight: "calc(100vh - 245px)",
             scrollbarGutter: "stable",
+            // Snap to the nearest row when scrolling settles so rows aren't left
+            // half cut-off. "proximity" only snaps near a row, so it never fights
+            // an active scroll. scrollPaddingTop clears the sticky header.
+            scrollSnapType: "y proximity",
+            scrollPaddingTop: 29,
           }}
         >
           <table
@@ -2929,6 +2934,7 @@ function Screener({
                     style={{
                       background: baseBg,
                       cursor: "pointer",
+                      scrollSnapAlign: "start",
                       boxShadow: isHighlighted
                         ? "inset 3px 0 0 #f97316"
                         : "none",

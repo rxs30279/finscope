@@ -79,7 +79,7 @@ function RSTable({ sectors }) {
       <tbody>
         {sectors.map(s => (
           <tr key={s.sector} style={{ borderBottom:'1px solid #141414' }}>
-            <td style={{ padding:'6px 10px', color:'#555', textAlign:'right' }}>#{s.rank}</td>
+            <td style={{ padding:'6px 10px', color:'#94a3b8', textAlign:'right' }}>#{s.rank}</td>
             <td style={{ padding:'6px 10px', color:'#e5e5e5' }}>{s.sector}</td>
             <td style={{ padding:'6px 10px', color: s.rs_score>1 ? '#10b981' : '#ef4444', textAlign:'right' }}>{s.rs_score?.toFixed(2) ?? '—'}</td>
             <td style={{ padding:'6px 10px', color: s.trend==='rising' ? '#10b981' : s.trend==='falling' ? '#ef4444' : '#555' }}>
@@ -99,17 +99,17 @@ function RSTable({ sectors }) {
 function SuggestionRow({ label, phase, confirmed, current, onAccept }) {
   if (!phase) return (
     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-      <span style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
-      <span style={{ color:'#333', fontSize:9 }}>No signal</span>
+      <span style={{ color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
+      <span style={{ color:'#64748b', fontSize:9 }}>No signal</span>
     </div>
   );
   const colour = PHASE_COLOURS[phase] || '#888';
   const isMatch = phase === current;
   return (
     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-      <span style={{ color:'#555', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
+      <span style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
       <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-        {!confirmed && <span style={{ color:'#444', fontSize:8 }}>unconfirmed</span>}
+        {!confirmed && <span style={{ color:'#64748b', fontSize:8 }}>unconfirmed</span>}
         <span style={{ color: colour, fontSize:10, fontWeight:700, fontFamily:'monospace' }}>
           {phase}
         </span>
@@ -151,7 +151,7 @@ export default function RotationTab({ refreshKey }) {
   };
 
   const card = { background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 };
-  const title = { color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 };
+  const title = { color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 };
 
   if (loading) return <div style={{ color:'#444', padding:32, fontFamily:'monospace' }}>Loading rotation data…</div>;
 

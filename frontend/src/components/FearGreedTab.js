@@ -35,7 +35,7 @@ export default function FearGreedTab({ refreshKey }) {
 
       <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:20 }}>
         {/* Header label */}
-        <div style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 }}>
+        <div style={{ color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 }}>
           UK Fear &amp; Greed Index
         </div>
 
@@ -45,13 +45,13 @@ export default function FearGreedTab({ refreshKey }) {
             <span style={{ color, fontSize:48, fontWeight:700, fontFamily:'monospace', lineHeight:1 }}>{fg.score}</span>
             <span style={{ color, fontSize:16, fontWeight:700, marginLeft:12 }}>{fg.sentiment?.toUpperCase()}</span>
           </div>
-          <div style={{ color:'#555', fontSize:11, paddingBottom:6 }}>
+          <div style={{ color:'#94a3b8', fontSize:11, paddingBottom:6 }}>
             Trend: <span style={{ color: fg.trend === 'rising' ? '#10b981' : fg.trend === 'falling' ? '#ef4444' : '#666' }}>
               {fg.trend === 'rising' ? '↑ Rising' : fg.trend === 'falling' ? '↓ Falling' : '—'}
             </span>
             {fg.suggested_phase && fg.suggested_phase !== 'no_change' && (
               <> &nbsp;|&nbsp; Auto-phase: <span style={{ color }}>{fg.suggested_phase}</span>
-              &nbsp;|&nbsp; Confirmed: <span style={{ color: fg.confirmed ? '#10b981' : '#555' }}>
+              &nbsp;|&nbsp; Confirmed: <span style={{ color: fg.confirmed ? '#10b981' : '#94a3b8' }}>
                 {fg.confirmed ? '2/2 readings' : '1/2 readings'}
               </span></>
             )}
@@ -76,12 +76,12 @@ export default function FearGreedTab({ refreshKey }) {
             const cc = fgColor(c.score);
             return (
               <div key={key} style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:3, padding:'12px 10px' }}>
-                <div style={{ color:'#555', fontSize:9, marginBottom:6 }}>{c.label}</div>
+                <div style={{ color:'#94a3b8', fontSize:9, marginBottom:6 }}>{c.label}</div>
                 <div style={{ color:cc, fontSize:18, fontWeight:700, fontFamily:'monospace' }}>{c.score}</div>
                 <div style={{ background:'#1a1a1a', borderRadius:2, height:4, margin:'6px 0' }}>
                   <div style={{ background:cc, width:`${c.score}%`, height:4, borderRadius:2 }}/>
                 </div>
-                <div style={{ color:'#555', fontSize:9 }}>
+                <div style={{ color:'#94a3b8', fontSize:9 }}>
                   {c.score >= 75 ? 'Ext. Greed' : c.score >= 55 ? 'Greed' : c.score >= 45 ? 'Neutral' : c.score >= 25 ? 'Fear' : 'Ext. Fear'}
                 </div>
               </div>

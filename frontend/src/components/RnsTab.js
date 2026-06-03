@@ -574,7 +574,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               margin: 0,
             }}
           >
-            RNS News Screener
+            RNS Daily News Screener
           </h2>
           <span
             style={{

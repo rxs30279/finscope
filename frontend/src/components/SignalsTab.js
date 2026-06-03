@@ -35,17 +35,17 @@ export default function SignalsTab({ refreshKey }) {
     <div>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Signal Log</h2>
       <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 }}>
-        <div style={{ color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 }}>
+        <div style={{ color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 }}>
           {signals.length} signal{signals.length !== 1 ? 's' : ''} — newest first
         </div>
         {signals.length === 0 && (
-          <div style={{ color:'#333', fontSize:12, padding:'24px 0', textAlign:'center' }}>
+          <div style={{ color:'#64748b', fontSize:12, padding:'24px 0', textAlign:'center' }}>
             No signals triggered yet. Check back after market open.
           </div>
         )}
         {signals.map((s, i) => (
           <div key={i} style={{ display:'flex', gap:12, alignItems:'flex-start', borderBottom:'1px solid #141414', padding:'10px 0', fontFamily:'monospace' }}>
-            <span style={{ color:'#444', fontSize:9, whiteSpace:'nowrap', marginTop:2 }}>{s.timestamp}</span>
+            <span style={{ color:'#94a3b8', fontSize:9, whiteSpace:'nowrap', marginTop:2 }}>{s.timestamp}</span>
             <SignalBadge type={s.type} />
             <span style={{ color:'#e5e5e5', fontSize:11 }}>{s.message}</span>
           </div>

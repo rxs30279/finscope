@@ -49,7 +49,7 @@ export default function BreadthTab({ refreshKey }) {
   }, [refreshKey]);
 
   const card  = { background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 };
-  const title = { color:'#444', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 };
+  const title = { color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 };
 
   if (loading) return <div style={{ color:'#444', padding:32, fontFamily:'monospace' }}>Loading breadth data…</div>;
 
@@ -65,8 +65,8 @@ export default function BreadthTab({ refreshKey }) {
           <div style={title}>% Above 50-Day MA</div>
           <BreadthGauge value={data?.pct_above_50ma} />
           <div style={{ display:'flex', justifyContent:'space-around', marginTop:12, fontSize:10, fontFamily:'monospace' }}>
-            <span style={{ color:'#555' }}>Above: <span style={{ color:'#10b981' }}>{data?.above_50ma ?? '—'}</span></span>
-            <span style={{ color:'#555' }}>Below: <span style={{ color:'#ef4444' }}>{data?.below_50ma ?? '—'}</span></span>
+            <span style={{ color:'#94a3b8' }}>Above: <span style={{ color:'#10b981' }}>{data?.above_50ma ?? '—'}</span></span>
+            <span style={{ color:'#94a3b8' }}>Below: <span style={{ color:'#ef4444' }}>{data?.below_50ma ?? '—'}</span></span>
           </div>
         </div>
 
@@ -92,10 +92,10 @@ export default function BreadthTab({ refreshKey }) {
         {/* A/D placeholder card — chart is below */}
         <div style={card}>
           <div style={title}>Advance / Decline</div>
-          <div style={{ fontSize:10, color:'#555', lineHeight:1.8 }}>
+          <div style={{ fontSize:10, color:'#94a3b8', lineHeight:1.8 }}>
             <div>Today advancing: <span style={{ color:'#10b981' }}>{data?.advances ?? '—'}</span></div>
             <div>Today declining: <span style={{ color:'#ef4444' }}>{data?.declines ?? '—'}</span></div>
-            <div style={{ marginTop:8, color:'#444' }}>A/D line below ↓</div>
+            <div style={{ marginTop:8, color:'#64748b' }}>A/D line below ↓</div>
           </div>
         </div>
       </div>
@@ -107,8 +107,8 @@ export default function BreadthTab({ refreshKey }) {
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={data.ad_line} margin={{ top:5, right:10, bottom:5, left:0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-              <XAxis dataKey="date" tick={{ fontSize:9, fill:'#444', fontFamily:'monospace' }} tickFormatter={d => d.slice(5)} />
-              <YAxis tick={{ fontSize:9, fill:'#444', fontFamily:'monospace' }} />
+              <XAxis dataKey="date" tick={{ fontSize:9, fill:'#64748b', fontFamily:'monospace' }} tickFormatter={d => d.slice(5)} />
+              <YAxis tick={{ fontSize:9, fill:'#64748b', fontFamily:'monospace' }} />
               <Tooltip contentStyle={tooltipStyle} />
               <ReferenceLine y={0} stroke="#333" />
               <Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} dot={false} name="A/D Line" />
