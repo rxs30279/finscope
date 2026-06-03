@@ -41,6 +41,7 @@ import AnalyticsTab from "./components/AnalyticsTab";
 import NewsTab from "./components/NewsTab";
 import SubscribeTab from "./components/SubscribeTab";
 import WatchlistTab from "./components/WatchlistTab";
+import HeatmapTab from "./components/HeatmapTab";
 
 function MetricCard({ label, value, color }) {
   return (
@@ -3916,7 +3917,7 @@ export default function App() {
               showSidebar && !sidebarCollapsed && !isMobile ? "block" : "none",
           }}
         >
-          <Sidebar refreshKey={refreshKey} />
+          <Sidebar refreshKey={refreshKey} onNavigate={setPage} />
         </div>
         <main
           style={{
@@ -3941,6 +3942,9 @@ export default function App() {
             />
           )}
           {page === "trending" && <TrendingTab onSelect={selectCompany} />}
+          {page === "heatmap" && (
+            <HeatmapTab refreshKey={refreshKey} onSelect={selectCompany} />
+          )}
           {page === "rotation" && <RotationTab refreshKey={refreshKey} />}
           {page === "breadth" && <BreadthTab refreshKey={refreshKey} />}
           {page === "fear-greed" && <FearGreedTab refreshKey={refreshKey} />}

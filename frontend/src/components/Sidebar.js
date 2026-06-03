@@ -29,7 +29,7 @@ function PctBadge({ value }) {
   );
 }
 
-export default function Sidebar({ refreshKey }) {
+export default function Sidebar({ refreshKey, onNavigate }) {
   const [data, setData] = useState(null);
   // Click-to-reveal: which companies make up each ICB sector basket.
   const [constituents, setConstituents] = useState(null); // { sector: [{symbol,name}] }
@@ -132,7 +132,16 @@ export default function Sidebar({ refreshKey }) {
       )}
 
       {/* Sectors */}
-      <div style={{ ...labelStyle, marginTop:16 }}>ICB Sectors</div>
+      <div style={{ ...labelStyle, marginTop:16, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <span>ICB Sectors</span>
+        <span
+          onClick={() => onNavigate && onNavigate('heatmap')}
+          title="Open the market heatmap"
+          style={{ color:'#f97316', cursor:'pointer', fontSize:8, letterSpacing:0.5, display:'flex', alignItems:'center', gap:3 }}
+        >
+          ▦ Heatmap
+        </span>
+      </div>
       {data?.sectors?.map(s => {
         const isOpen = expandedSector === s.name;
         const members = constituents?.[s.name];

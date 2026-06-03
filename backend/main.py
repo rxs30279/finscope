@@ -925,6 +925,136 @@ def sector_constituents(response: Response):
     }
 
 
+_heatmap_cache: dict = {}
+_HEATMAP_TTL = 900  # 15 minutes — price history refreshes once/day
+_HEATMAP_LIVE_TTL = 60  # live mode: near-real-time, refreshed each minute
+
+
+def _live_moves(symbols):
+    """Latest daily % move per symbol via a single batched ``yf.download``.
+
+    Uses daily bars (close-to-close), the same method and source as the sidebar,
+    so the two agree exactly. During market hours yfinance's current-day bar
+    tracks the live price; once closed it settles to the official close. Returns
+    {symbol: pct or None}; units cancel in the ratio so pence-vs-pounds is moot.
+    """
+    import yfinance as yf
+
+    out = {s: None for s in symbols}
+    if not symbols:
+        return out
+
+    multi = len(symbols) > 1
+    try:
+        df = yf.download(
+            symbols, period="5d", interval="1d", group_by="ticker",
+            auto_adjust=True, threads=True, progress=False,
+        )
+        for s in symbols:
+            try:
+                # group_by="ticker" gives a (ticker, field) column index for >1
+                # symbol; a single symbol comes back with flat columns.
+                closes = (df[s]["Close"] if multi else df["Close"]).dropna()
+            except Exception:
+                continue
+            if len(closes) >= 2 and float(closes.iloc[-2]):
+                out[s] = float(closes.iloc[-1]) / float(closes.iloc[-2]) - 1
+    except Exception as e:
+        print(f"[heatmap-live] batch daily failed: {e}")
+
+    return out
+
+
+@app.get("/api/heatmap")
+def heatmap(response: Response, ftse_index: Optional[str] = None, live: bool = False):
+    """Universe heatmap data: one tile per active company, sized by market cap
+    and coloured by its latest daily % move.
+
+    Returns a flat list of {symbol, name, sector, market_cap, pct_change}; the
+    frontend groups by sector into a treemap.
+
+    pct_change is close-to-close from price_history by default. With live=true it
+    is recomputed from yfinance daily bars (the latest session's close-to-close
+    move, tracking the live price during market hours) using the same method as
+    the sidebar, cached for 60s; symbols without a quote keep their DB value.
+    """
+    import time
+
+    ttl = _HEATMAP_LIVE_TTL if live else _HEATMAP_TTL
+    s_maxage = 60 if live else 900
+    response.headers["Cache-Control"] = (
+        f"public, s-maxage={s_maxage}, stale-while-revalidate=3600"
+    )
+
+    cache_key = (ftse_index or "all", live)
+    now = time.time()
+    cached = _heatmap_cache.get(cache_key)
+    if cached and now - cached[1] < ttl:
+        return cached[0]
+
+    wheres = ["m.sector IS NOT NULL", "t.market_cap IS NOT NULL"]
+    params: list = []
+    if ftse_index:
+        if ftse_index == "FTSE 350":
+            wheres.append("m.ftse_index IN ('FTSE 100', 'FTSE 250')")
+        elif ftse_index == "FTSE All-Share":
+            wheres.append("m.ftse_index IN ('FTSE 100', 'FTSE 250', 'FTSE SmallCap')")
+        else:
+            wheres.append("m.ftse_index = %s")
+            params.append(ftse_index)
+
+    sql = f"""
+        WITH recent AS (
+            SELECT p.symbol, p.close,
+                   ROW_NUMBER() OVER (PARTITION BY p.symbol ORDER BY p.date DESC) AS rn
+            FROM price_history p
+            JOIN company_metadata m ON m.symbol = p.symbol AND m.is_active
+        )
+        SELECT m.symbol, m.name, m.sector, t.market_cap, r.close, r.rn
+        FROM recent r
+        JOIN company_metadata m ON m.symbol = r.symbol
+        JOIN ttm_financials t ON t.company_symbol = m.symbol
+        WHERE r.rn <= 2 AND {' AND '.join(wheres)}
+        ORDER BY m.symbol, r.rn
+    """
+    rows = query(sql, params)
+
+    # Group the (at most) two closes per symbol: rn=1 latest, rn=2 previous.
+    by_symbol: dict = {}
+    for r in rows:
+        by_symbol.setdefault(r["symbol"], {"meta": r, "closes": {}})
+        by_symbol[r["symbol"]]["closes"][r["rn"]] = r["close"]
+
+    out = []
+    for sym, d in by_symbol.items():
+        meta = d["meta"]
+        latest = d["closes"].get(1)
+        prev = d["closes"].get(2)
+        pct = None
+        if latest is not None and prev not in (None, 0):
+            pct = float(latest) / float(prev) - 1
+        out.append(
+            {
+                "symbol": sym,
+                "name": meta["name"] or sym.replace(".L", ""),
+                "sector": meta["sector"],
+                "market_cap": float(meta["market_cap"]),
+                "pct_change": pct,
+            }
+        )
+
+    if live:
+        moves = _live_moves([r["symbol"] for r in out])
+        for r in out:
+            live_pct = moves.get(r["symbol"])
+            if live_pct is not None:
+                r["pct_change"] = live_pct
+
+    out.sort(key=lambda r: r["market_cap"], reverse=True)
+    _heatmap_cache[cache_key] = (out, now)
+    return out
+
+
 # ── Cron-job.org digest endpoint ──────────────────────────────────────────────
 
 _DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
