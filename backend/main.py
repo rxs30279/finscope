@@ -850,6 +850,36 @@ def watchlist(symbols: str):
     return [by_symbol[s] for s in requested if s in by_symbol]
 
 
+@app.get("/api/help-doc")
+def help_doc(slug: str = "user-manual"):
+    """Stream a stored app document (default: the user manual) from Postgres.
+
+    The bytes live in app_documents (see migration 003); served inline so the
+    browser opens/downloads the .docx with its original filename. Stored in the
+    DB rather than as a static file because Vercel's Python runtime has no
+    persistent local filesystem to serve from.
+    """
+    rows = query(
+        "SELECT filename, content_type, data FROM app_documents WHERE slug = %s",
+        (slug,),
+    )
+    if not rows:
+        raise HTTPException(404, "Document not found")
+    row = rows[0]
+    data = row["data"]
+    # psycopg2 hands BYTEA back as a memoryview; FastAPI's Response wants bytes.
+    if isinstance(data, memoryview):
+        data = data.tobytes()
+    return Response(
+        content=bytes(data),
+        media_type=row["content_type"] or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{row["filename"]}"',
+            "Cache-Control": "public, max-age=3600",
+        },
+    )
+
+
 @app.get("/api/filters")
 def filters():
     sectors = query(

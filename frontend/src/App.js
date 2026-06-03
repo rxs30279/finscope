@@ -23,6 +23,9 @@ import {
   currSym,
   loadWatchlist,
   saveWatchlist,
+  dividendDataUrl,
+  loadChartPrefs,
+  saveChartPrefs,
 } from "./utils";
 import { useIsMobile } from "./useMediaQuery";
 import Sidebar from "./components/Sidebar";
@@ -115,6 +118,11 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
   const fcur = meta?.financial_currency || "GBP";
   const sym = currSym(fcur);
 
+  // Only link out to Dividend Data for actual payers — the page is a dead end for
+  // non-dividend stocks. Treat either a positive yield or a positive DPS as paying.
+  const paysDividend =
+    (snap?.dividend_yield ?? 0) > 0 || (snap?.dividends_per_share ?? 0) > 0;
+
   const annualChart = annual.map((r) => ({
     year: r.period_end_date?.slice(0, 4),
     revenue: r.revenue ? r.revenue / 1e9 : null,
@@ -176,12 +184,8 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
               marginBottom: 10,
             }}
           >
-            <a
-              href={`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="View on Yahoo Finance"
-              style={{
+            {(() => {
+              const badgeStyle = {
                 background: "#6366f1",
                 color: "#fff",
                 borderRadius: 10,
@@ -194,11 +198,23 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
                 fontSize: 13,
                 fontWeight: 700,
                 textDecoration: "none",
-                cursor: "pointer",
-              }}
-            >
-              {symbol.replace(".L", "").slice(0, 4)}
-            </a>
+                cursor: paysDividend ? "pointer" : "default",
+              };
+              const label = symbol.replace(".L", "").slice(0, 4);
+              return paysDividend ? (
+                <a
+                  href={dividendDataUrl(symbol)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="View on Dividend Data"
+                  style={badgeStyle}
+                >
+                  {label}
+                </a>
+              ) : (
+                <div style={badgeStyle}>{label}</div>
+              );
+            })()}
             <div>
               <h1
                 style={{
@@ -232,46 +248,35 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
                     </span>
                   ))}
               </div>
-              {/* External chart links — Yahoo + TradingView. */}
-              <div
-                style={{
-                  display: "flex",
-                  gap: 14,
-                  marginTop: 8,
-                  flexWrap: "wrap",
-                  fontFamily: "monospace",
-                  fontSize: 11,
-                  letterSpacing: 1,
-                  textTransform: "uppercase",
-                }}
-              >
-                <a
-                  href={`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
+              {/* External link — Dividend Data. Payers only; dead page otherwise. */}
+              {paysDividend && (
+                <div
                   style={{
-                    color: "#a78bfa",
-                    textDecoration: "none",
-                    borderBottom: "1px dashed #a78bfa55",
-                    paddingBottom: 1,
+                    display: "flex",
+                    gap: 14,
+                    marginTop: 8,
+                    flexWrap: "wrap",
+                    fontFamily: "monospace",
+                    fontSize: 11,
+                    letterSpacing: 1,
+                    textTransform: "uppercase",
                   }}
                 >
-                  Yahoo Finance ↗
-                </a>
-                <a
-                  href={`https://www.tradingview.com/symbols/LSE-${encodeURIComponent(symbol.replace(/\.L$/i, ""))}/`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    color: "#22d3ee",
-                    textDecoration: "none",
-                    borderBottom: "1px dashed #22d3ee55",
-                    paddingBottom: 1,
-                  }}
-                >
-                  TradingView ↗
-                </a>
-              </div>
+                  <a
+                    href={dividendDataUrl(symbol)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      color: "#a78bfa",
+                      textDecoration: "none",
+                      borderBottom: "1px dashed #a78bfa55",
+                      paddingBottom: 1,
+                    }}
+                  >
+                    Dividend Data ↗
+                  </a>
+                </div>
+              )}
             </div>
           </div>
           {meta?.description && (
@@ -984,13 +989,30 @@ function HybridSelect({
 function PriceChart({ symbol }) {
   const [priceData, setPriceData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [range, setRange] = useState("6M");
-  const [showMA20, setShowMA20] = useState(true);
-  const [showMA50, setShowMA50] = useState(false);
-  const [showVolume, setShowVolume] = useState(true);
-  const [showCandles, setShowCandles] = useState(true);
-  const [showMACD, setShowMACD] = useState(false);
-  const [showRSI, setShowRSI] = useState(false);
+  // Seed display prefs from the last-used values (persisted) so toggles like
+  // "no candles" stick when moving between stocks rather than resetting.
+  const [prefs] = useState(loadChartPrefs);
+  const [range, setRange] = useState(prefs.range);
+  const [showMA20, setShowMA20] = useState(prefs.showMA20);
+  const [showMA50, setShowMA50] = useState(prefs.showMA50);
+  const [showVolume, setShowVolume] = useState(prefs.showVolume);
+  const [showCandles, setShowCandles] = useState(prefs.showCandles);
+  const [showMACD, setShowMACD] = useState(prefs.showMACD);
+  const [showRSI, setShowRSI] = useState(prefs.showRSI);
+
+  // Persist whenever any preference changes so the next chart that mounts (a
+  // different stock, or after a reload) picks up the same choices.
+  useEffect(() => {
+    saveChartPrefs({
+      range,
+      showMA20,
+      showMA50,
+      showVolume,
+      showCandles,
+      showMACD,
+      showRSI,
+    });
+  }, [range, showMA20, showMA50, showVolume, showCandles, showMACD, showRSI]);
 
   useEffect(() => {
     if (!symbol) return;
@@ -1376,6 +1398,32 @@ function PriceChart({ symbol }) {
       : { color: "#64748b" }),
   });
 
+  // Headline percent-change stats (3M / YTD / 1Y), anchored to the latest close
+  // and computed off the full history so they're independent of the chart range.
+  const perfStats = (() => {
+    if (!priceData.length) return [];
+    const last = priceData[priceData.length - 1];
+    const lastClose = last.close;
+    const lastDate = new Date(last.date);
+    // Close on the most recent trading day at or before a target date.
+    const closeAtOrBefore = (target) => {
+      for (let i = priceData.length - 1; i >= 0; i--) {
+        if (new Date(priceData[i].date) <= target) return priceData[i].close;
+      }
+      return null;
+    };
+    const pct = (base) =>
+      base == null || !base ? null : ((lastClose - base) / base) * 100;
+    const d3m = new Date(lastDate.getTime() - 90 * 86400000);
+    const d1y = new Date(lastDate.getTime() - 365 * 86400000);
+    const yStart = new Date(lastDate.getFullYear(), 0, 1);
+    return [
+      ["1Y", pct(closeAtOrBefore(d1y))],
+      ["YTD", pct(closeAtOrBefore(yStart))],
+      ["3M", pct(closeAtOrBefore(d3m))],
+    ];
+  })();
+
   if (loading)
     return (
       <div
@@ -1465,6 +1513,41 @@ function PriceChart({ symbol }) {
           >
             RSI
           </button>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 18,
+            flexWrap: "wrap",
+            fontFamily: "monospace",
+            fontSize: 12,
+          }}
+        >
+          {perfStats.map(([label, v]) => (
+            <span
+              key={label}
+              style={{ display: "flex", gap: 6, alignItems: "baseline" }}
+            >
+              <span
+                style={{
+                  color: "#64748b",
+                  textTransform: "uppercase",
+                  fontSize: 11,
+                  letterSpacing: 1,
+                }}
+              >
+                {label}
+              </span>
+              <span
+                style={{
+                  color: v == null ? "#64748b" : v >= 0 ? "#22c55e" : "#ef4444",
+                  fontWeight: 600,
+                }}
+              >
+                {v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`}
+              </span>
+            </span>
+          ))}
         </div>
       </div>
       <ResponsiveContainer width="100%" height={380}>
@@ -2092,6 +2175,7 @@ const EMPTY_SCORE_FILTERS = {
   min_quality: "",
   min_piotroski: "",
   max_risk: "",
+  max_pegy: "",
 };
 
 // [label, rightAlign, sortKey]
@@ -2422,6 +2506,8 @@ function Screener({
       return false;
     if (sf.max_risk && (r.risk_score == null || r.risk_score > +sf.max_risk))
       return false;
+    if (sf.max_pegy && (r.pegy == null || r.pegy > +sf.max_pegy))
+      return false;
     return true;
   });
 
@@ -2435,7 +2521,8 @@ function Screener({
     scoreFilters.min_momentum ||
     scoreFilters.min_quality ||
     scoreFilters.min_piotroski ||
-    scoreFilters.max_risk;
+    scoreFilters.max_risk ||
+    scoreFilters.max_pegy;
 
   const handleSort = (key) => {
     if (sortCol === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
@@ -2620,6 +2707,16 @@ function Screener({
             <option value="3">Risk ≤ 3</option>
             <option value="5">Risk ≤ 5</option>
             <option value="7">Risk ≤ 7</option>
+          </select>
+          <select
+            style={S.select}
+            value={scoreFilters.max_pegy}
+            onChange={(e) => updateScore("max_pegy", e.target.value)}
+          >
+            <option value="">PEGY</option>
+            <option value="1">PEGY ≤ 1</option>
+            <option value="1.5">PEGY ≤ 1.5</option>
+            <option value="2">PEGY ≤ 2</option>
           </select>
           <HybridSelect
             selectMode={selectModes.max_pe}
@@ -3509,6 +3606,27 @@ export default function App() {
             gap: isMobile ? 6 : 12,
           }}
         >
+          {/* Tool manual — served from the DB via /api/help-doc */}
+          <a
+            href={`${API}/help-doc`}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Tool manual"
+            style={{
+              background: "#2f2f2f",
+              color: "#e5e5e5",
+              border: "1px solid #3f3f3f",
+              padding: "4px 10px",
+              borderRadius: 2,
+              fontFamily: "monospace",
+              fontSize: isMobile ? 12 : 10,
+              cursor: "pointer",
+              textDecoration: "none",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {isMobile ? "?" : "Tool Manual"}
+          </a>
           {!isMobile && lastUpdated && (
             <span
               style={{ color: "#444", fontSize: 10, fontFamily: "monospace" }}

@@ -26,6 +26,27 @@ export const gc = (v) => {
   return v >= 0 ? '#10b981' : '#ef4444';
 };
 
+// dividenddata.co.uk keys on the LSE EPIC (TIDM). For most stocks that's just the
+// Yahoo symbol with the ".L" suffix stripped (GRG.L -> GRG). Two-letter mnemonics
+// are the catch: by LSE convention they carry a trailing dot (BP., RR., NG. ...),
+// which Yahoo collapses into "XX.L" — so a naive strip yields "BP" when the EPIC
+// is "BP.". Re-add the dot for the two-letter case; DIVIDENDDATA_EPIC overrides
+// handle any ticker that doesn't follow the convention.
+const DIVIDENDDATA_EPIC = {};
+
+export const dividendDataUrl = (symbol) => {
+  const s = symbol || '';
+  let epic;
+  if (DIVIDENDDATA_EPIC[s]) {
+    epic = DIVIDENDDATA_EPIC[s];
+  } else if (/^[A-Z]{2}\.L$/i.test(s)) {
+    epic = s.replace(/\.L$/i, '.'); // BP.L -> BP., RR.L -> RR.
+  } else {
+    epic = s.replace(/\.L$/i, '');
+  }
+  return `https://www.dividenddata.co.uk/dividend-yield.py?epic=${encodeURIComponent(epic)}`;
+};
+
 export const pctColor = (v) => {
   if (v === null || v === undefined) return '#94a3b8';
   if (v > 0.005) return '#10b981';
@@ -74,4 +95,36 @@ export const loadTargets = () => {
 export const saveTargets = (targets) => {
   if (typeof window === 'undefined') return;
   try { window.localStorage.setItem(TARGETS_KEY, JSON.stringify(targets)); } catch {}
+};
+
+// Price-chart display preferences (range + indicator toggles). Persisted so a
+// user's choices — e.g. turning candles off — carry across stocks instead of
+// resetting to the presets every time a new company chart mounts.
+export const CHART_PREFS_KEY = 'stock_screener_chart_prefs';
+
+const CHART_PREF_DEFAULTS = {
+  range: '6M',
+  showMA20: true,
+  showMA50: false,
+  showVolume: true,
+  showCandles: true,
+  showMACD: false,
+  showRSI: false,
+};
+
+export const loadChartPrefs = () => {
+  if (typeof window === 'undefined') return { ...CHART_PREF_DEFAULTS };
+  try {
+    const raw = window.localStorage.getItem(CHART_PREFS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    // Merge over defaults so a newly-added toggle still has a sensible value.
+    return { ...CHART_PREF_DEFAULTS, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+  } catch {
+    return { ...CHART_PREF_DEFAULTS };
+  }
+};
+
+export const saveChartPrefs = (prefs) => {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(CHART_PREFS_KEY, JSON.stringify(prefs)); } catch {}
 };
