@@ -1,8 +1,10 @@
 # Alpha Move AI — UK Stock Screener — User Manual
 
-**Edition:** April 2026  
+**Edition:** June 2026  
 **Audience:** Investors new to financial analysis  
 **Purpose:** A plain-English guide to understanding what you are seeing and how to use these tools to find UK companies with the **greatest chance of upside** and the **smallest downside risk**.
+
+> **About the "Under the hood" boxes:** Throughout this manual, every score is explained twice — first in plain English with a worked example, then in a boxed **"Under the hood"** note giving the exact formula, weights and thresholds the app uses. If you only want to *use* the tool, read the plain-English part and skip the boxes. If you want to know precisely how a number was produced, the boxes have it.
 
 ---
 
@@ -31,6 +33,7 @@
    - 5.1 [Sector Rotation](#51-sector-rotation)
    - 5.2 [Market Breadth](#52-market-breadth)
    - 5.3 [Signal Log](#53-signal-log)
+   - 5.4 [Sector Heatmap (Treemap)](#54-sector-heatmap-treemap)
 6. [Markets](#6-markets)
    - 6.1 [Fear & Greed Index](#61-fear--greed-index)
    - 6.2 [Cross-Asset Monitor](#62-cross-asset-monitor)
@@ -41,7 +44,7 @@
    - 8.2 [The Two-Layer AI Pipeline](#82-the-two-layer-pipeline)
    - 8.3 [Reading the Feed](#83-reading-the-feed)
    - 8.4 [Action Pills — BUY / WATCH / AVOID](#84-action-pills)
-9. [Analytics — The Visual Map of the Market](#9-analytics)
+9. [PEGY — The Visual Map of the Market](#9-pegy)
 10. [The Sidebar — Your Instant Dashboard](#10-the-sidebar)
 11. [How To Find Investment Leads — Step-by-Step Workflows](#11-how-to-find-investment-leads)
     - 11.1 [The Quality + Value Filter](#111-the-quality--value-filter)
@@ -104,8 +107,8 @@ The tool focuses on **UK-listed equities** — companies whose shares trade on t
 
 When you open Alpha Move AI you see:
 
-- **Top navigation bar** — Screener, Watchlist, Analysts, RNS News, Analytics, and a Markets dropdown (Fear & Greed, Cross-Asset, Rotation, Breadth, Signal Log).
-- **Left sidebar** — a live pulse of the market: benchmark returns, market fear levels, and current cycle signals. Toggle the sidebar on or off using the icon at the top-left of the navigation bar.
+- **Top navigation bar** — Screener, Trending, Watchlist, Analysts, RNS News, PEGY, Subscribe, and a Markets dropdown (Fear & Greed, Cross-Asset, and a Sector Analysis group: Rotation, Breadth, Signal Log).
+- **Left sidebar** — a live pulse of the market: benchmark returns, market fear levels, current cycle signals, and ICB sector strength (with a **▦ Heatmap** link to the Sector Heatmap). Toggle the sidebar on or off using the icon at the top-left of the navigation bar.
 - **Main content area** — changes depending on which page you are on.
 - **Search bar** — type a company name or ticker symbol to jump straight to its detail page.
 
@@ -166,9 +169,16 @@ Momentum Return = (Price 63 days ago) ÷ (Price 252 days ago) − 1
 
 The most recent 3 months are deliberately excluded. Research shows that very recent returns tend to **reverse** (a short-term bounce is often followed by a pullback), while the 3–12 month window tends to **persist** (winners keep winning, losers keep losing). This phenomenon is called **price momentum**.
 
-All stocks are then ranked by this return and assigned a score of 1–10, where 10 = top 10% of momentum in the screened universe.
+All stocks are then **ranked against each other** by this return and assigned a score of 1–10. The score is a *percentile rank within the current screened universe*, not an absolute number — a 10 means the stock is in the top tenth of momentum among the stocks on screen, and a 1 means the bottom tenth.
+
+**Worked example:** Imagine 200 stocks pass your screen. The app computes each one's 12-1 month return, sorts them from worst to best, and splits them into ten equal bands. A stock sitting 184th out of 200 (the 92nd percentile) lands in the top band and scores **10**; a stock 5th from bottom scores **1**.
 
 **What to look for:** A score of 7 or higher suggests the stock has been among the better performers. Combined with strong fundamentals, this can confirm that the market is already recognising the quality you have identified.
+
+> **Under the hood — Momentum (1–10)**
+> - **Raw signal:** `Momentum Return = close(63 trading days ago) ÷ close(252 trading days ago) − 1`. This is the return over the window from ~12 months ago to ~3 months ago, deliberately skipping the most recent 3 months (short-term reversal).
+> - **Data requirement:** a stock needs at least 252 trading days of price history; otherwise it gets no momentum score (blank).
+> - **Scoring:** all stocks with a raw return are sorted ascending. For a stock at position `i` (0-based) out of `n`, `score = clamp(1, 10, int(i ÷ n × 10) + 1)`. Because it is a percentile rank, the score is **relative to whatever set of stocks is currently on screen** — the same company can score differently under different filters.
 
 **Academic reference:** See Appendix A — Jegadeesh & Titman (1993).
 
@@ -180,15 +190,17 @@ All stocks are then ranked by this return and assigned a score of 1–10, where 
 
 **How it is calculated:**
 
-The score awards up to 2 points for each of five criteria, checking both the absolute level and whether it beats the median of the screened universe:
+The score awards up to 2 points for each of five business-quality measures. For each measure it runs **two independent checks**, each worth 1 point: one for clearing an *absolute* threshold (a genuinely good level), and one for being *at or above the median* of the stocks currently on screen (better than the typical peer). A company can therefore score a point for being good in absolute terms, a point for being better than its peers, both, or neither.
 
-| Criterion | Points |
-|---|---|
-| ROIC > 10% or above median ROIC | 0–2 |
-| ROE > 15% or above median ROE | 0–2 |
-| Gross Margin > 30% or above median | 0–2 |
-| Operating Margin > 10% or above median | 0–2 |
-| FCF Margin > 5% or Net Margin above median | 0–2 |
+| Measure | +1 if absolute level is… | +1 if relative level is… | Max |
+|---|---|---|---|
+| **ROIC** | greater than 10% | at or above the universe median ROIC | 2 |
+| **ROE** | greater than 15% | at or above the universe median ROE | 2 |
+| **Gross Margin** | greater than 30% | at or above the universe median gross margin | 2 |
+| **Operating Margin** | greater than 10% | at or above the universe median operating margin | 2 |
+| **Cash / Net profitability** | FCF Margin greater than 5% | Net Margin at or above the universe median | 2 |
+
+> **Note on the relative checks:** "Median of the universe" means the median across the stocks currently passing your screen, so — like Momentum — the relative half of the Quality score shifts slightly depending on which filters are active. The absolute half never moves.
 
 **Key terms:**
 - **ROIC (Return on Invested Capital):** Profit generated for every £1 of capital invested in the business. It is the best single measure of business quality — a high ROIC means the company has a competitive advantage (a "moat") that lets it earn outsized returns.
@@ -196,7 +208,19 @@ The score awards up to 2 points for each of five criteria, checking both the abs
 - **Operating Margin:** Profit after all running costs but before interest and tax. Shows how efficiently the business is run day-to-day.
 - **FCF Margin (Free Cash Flow Margin):** The cash actually generated after all capital expenditure, as a percentage of revenue. Cash is harder to manipulate than reported profit — this is often considered the most reliable profitability measure.
 
+**Worked example:** A software company has ROIC 18%, ROE 22%, gross margin 78%, operating margin 24%, FCF margin 19%, and beats the universe median on ROIC, ROE, gross margin and net margin (but its operating margin is a touch below the median). It scores: ROIC 1+1, ROE 1+1, GM 1+1, OM 1+0, Cash/Net 1+1 = **9 out of 10** — a genuinely high-quality business.
+
 **What to look for:** A score of 7+ indicates a genuinely high-quality business. These companies tend to outperform over long periods because their superior returns compound capital more effectively.
+
+> **Under the hood — Quality (0–10)**
+> Additive; each of the ten checks below adds 1 point. A measure that is missing in the data simply scores 0 for its checks (it is not penalised further).
+> - ROIC `> 0.10`; and ROIC `≥` median ROIC
+> - ROE `> 0.15`; and ROE `≥` median ROE
+> - Gross margin `> 0.30`; and gross margin `≥` median gross margin
+> - Operating margin `> 0.10`; and operating margin `≥` median operating margin
+> - FCF margin `> 0.05`; and **net** margin `≥` median net margin
+>
+> All medians are taken across the result set currently on screen. ROIC is the single most important measure of business quality — it shows whether the company earns more than its cost of capital, the signature of a durable competitive "moat".
 
 ---
 
@@ -232,32 +256,71 @@ The score awards up to 2 points for each of five criteria, checking both the abs
 - **4–6:** Mixed — some positives, some concerns. Read the detail.
 - **0–3:** Weak — multiple warning signs. Approach with caution.
 
+> **Under the hood — Piotroski F-Score (0–9)**
+> Computed from the two most recent annual reports (current year "cur" vs prior year "prev"). Each test scores 1 if true, else 0; a test with missing data scores 0.
+> 1. ROA(cur) `> 0`
+> 2. Operating cash flow (CFO) `> 0`
+> 3. ROA(cur) `>` ROA(prev)
+> 4. `CFO ÷ total assets > ROA(cur)` — i.e. cash flow exceeds reported profit (accruals quality)
+> 5. Debt/Equity(cur) `<` Debt/Equity(prev)
+> 6. Current ratio(cur) `>` Current ratio(prev)
+> 7. Diluted share count(cur) `≤` share count(prev) — no dilution
+> 8. Gross margin(cur) `>` Gross margin(prev)
+> 9. Asset turnover up: `revenue(cur) ÷ assets(cur) > revenue(prev) ÷ assets(prev)`
+
 **Academic reference:** See Appendix A — Piotroski (2000).
 
 ---
 
 #### Risk Score (1–10)
 
-**What it measures:** A composite assessment of financial distress risk and price volatility.
+**What it measures:** A composite assessment of how likely you are to suffer a large, permanent loss — blending the company's **financial-distress risk** with its **share-price volatility**. Lower is safer.
 
-**How it is calculated:**
+**How it is calculated — two different paths:**
 
-The score blends two components (60% Altman Z-Score, 40% Volatility):
+The app uses **two different recipes** depending on what kind of company it is, because the standard distress model (the Altman Z-Score) does not work for banks and insurers.
 
-**Altman Z-Score component:**
-The Altman Z-Score was developed in 1968 to predict corporate bankruptcy. It combines five financial ratios into a single number. A Z-Score above 3.0 indicates a financially safe company; below 1.8 suggests significant distress risk. The tool converts this to the 1–10 scale:
-- Z ≥ 3.0 → Risk score 1 (safe)
-- Z ≤ 1.0 → Risk score 10 (distress)
+**Path 1 — Ordinary companies (60% Altman Z-Score + 40% Volatility):**
 
-**Volatility component:**
-Annualised price volatility (standard deviation of daily log returns × √252). Converted to 1–10:
-- < 10% annualised → score 1 (very low)
-- Each additional 5% adds roughly 1 point
-- > 60% → score 10 (very high)
+The **Altman Z-Score** was developed in 1968 to predict corporate bankruptcy. It combines several balance-sheet and earnings ratios into a single number; a Z above 3.0 indicates a financially safe company, below ~1.8 suggests distress risk. The app converts the Z to a 1–10 component, computes a separate volatility component, and blends them 60/40.
 
-**What to look for:** For capital preservation, filter for Risk Score ≤ 4. Scores of 7+ warrant serious investigation into the company's balance sheet before investing.
+**Path 2 — Financial companies, i.e. banks and insurers (60% Volatility + 40% ROE):**
 
-**Academic reference:** See Appendix A — Altman (1968).
+> **Why financials are scored differently:** A bank's or insurer's balance sheet is **leverage by design** — customer deposits and insurance policy liabilities are huge "debts" that are entirely normal for the business. Feed those into the Altman model and every term collapses, wrongly flagging even the safest bank as on the brink of bankruptcy (a risk score of 9 or 10). So for financials the app **drops Altman entirely** and instead scores them on **price volatility (60%)** plus a **Return-on-Equity quality component (40%)** — a profitable, stable bank scores low-risk; a loss-making, volatile one scores high-risk. If ROE is missing, the score falls back to volatility alone.
+
+The app detects a financial by its sector name (anything containing "financ", "bank", or "insurance"). On the Health tab, financials show **no Altman gauge** because it is not used for them.
+
+**Worked example (an insurer):** Aviva has annualised volatility of ~22% (volatility component 4) and ROE of ~12% (ROE component ≈ 3.6 → 4). Financial risk = round(0.6 × 4 + 0.4 × 4) = **4** — a moderate, sensible reading, instead of the false "10" the Altman model would have produced.
+
+**What to look for:** For capital preservation, filter for Risk Score ≤ 4. Scores of 7+ warrant serious investigation into the balance sheet (ordinary companies) or the earnings stability (financials) before investing.
+
+> **Under the hood — Risk Score (1–10)**
+>
+> **Volatility component** (used in both paths): annualised volatility `σ = stdev(daily log returns) × √252`, using the sample standard deviation over up to the last 252 daily closes (needs at least 63 closes, else blank). Mapped to 1–10 by absolute thresholds:
+>
+> | Ann. volatility | Component |
+> |---|---|
+> | < 10% | 1 |
+> | < 15% | 2 |
+> | < 20% | 3 |
+> | < 25% | 4 |
+> | < 30% | 5 |
+> | < 35% | 6 |
+> | < 40% | 7 |
+> | < 50% | 8 |
+> | < 60% | 9 |
+> | ≥ 60% | 10 |
+>
+> **Altman component** (ordinary companies only): the app builds the Z from stored data, treating working capital (the X1 term) as 0 because it is unavailable, using book equity (market cap ÷ price-to-book) as a retained-earnings proxy, and operating income (operating margin × revenue) as the EBIT proxy: `Z = 1.4·(equity/assets) + 3.3·(EBIT/assets) + 0.6·(mktcap/liabilities) + 1.0·(revenue/assets)`. Then Z→component: `Z ≥ 3.0 → 1`, `Z ≤ 1.0 → 10`, linear between as `round(1 + (3.0 − Z) × 4.5)`.
+>
+> **ROE component** (financials only): `ROE ≥ 15% → 2`, `ROE ≤ 0% → 10`, linear between as `round(2 + (0.15 − ROE) × (8 / 0.15))`. Floored at 2 because ROE alone is a coarse proxy.
+>
+> **Final blend (clamped to 1–10):**
+> - Ordinary: `round(0.6 × Altman_component + 0.4 × Vol_component)`
+> - Financial: `round(0.6 × Vol_component + 0.4 × ROE_component)`
+> - Either path falls back to whichever single component is available if the other is missing.
+
+**Academic reference:** See Appendix A — Altman (1968). Note: Altman himself excluded financial firms from his model, which is why this app does too.
 
 ---
 
@@ -319,10 +382,13 @@ Clicking the **Analyst** view tab on the screener changes the columns to show pr
 **The formula:**
 
 ```
-PEGY = P/E ratio ÷ (Earnings growth % + Dividend yield %)
+PEGY = Forward P/E ÷ (Earnings growth % + Dividend yield %)
 ```
 
-The growth figure used here is the **forward analyst EPS growth** (when at least three analysts are covering the stock); otherwise it falls back to the company's 10-year average earnings growth.
+Two refinements make this app's PEGY more robust than the textbook version:
+
+1. **It uses a *forward* P/E, not the trailing one.** A trailing (last-reported) P/E is easily distorted by one-off items — a disposal gain or a tax credit can inflate reported earnings and make a stock look artificially cheap (this happened with Rolls-Royce), while a depressed statutory year does the reverse (Legal & General). When at least one analyst estimate for the current year exists, the app rebases the P/E onto expected earnings, which strips out those one-offs.
+2. **Growth is a *blend* and is capped at 30%.** Rather than using a single noisy number, the growth figure blends the forward analyst EPS growth (only counted when ≥3 analysts cover the stock) with the company's 10-year EPS growth rate. Each leg is capped at 30% first, so a one-off recovery bounce (e.g. earnings rebounding +150% off a COVID-depressed base) cannot inflate the denominator and make junk look ultra-cheap.
 
 **How to read it:**
 
@@ -331,33 +397,61 @@ The growth figure used here is the **forward analyst EPS growth** (when at least
 | **Below 1** | Potentially great value — you are paying less than fair price for the growth and income | Green |
 | **1 to 2** | Fair value | Amber |
 | **Above 2** | Expensive relative to the growth and income on offer | Red |
-| **Blank (—)** | Not enough data — usually because growth is missing, negative, or the dividend is zero | Grey |
+| **Blank (—)** | Not enough data, or earnings are flat/shrinking, or the growth+yield base is below 2% (too small to give a meaningful ratio) | Grey |
+
+> **Why earnings must be growing:** PEGY only makes sense for a company whose earnings are actually growing. If the blended growth figure is zero or negative, the app leaves PEGY blank rather than letting a fat dividend yield mask a falling profit line.
+
+> **Under the hood — PEGY**
+> - **Forward P/E:** `forward_PE = trailing_PE × (eps_diluted ÷ eps_estimate_current_year)` when both EPS figures are positive, else the trailing P/E. (Multiplying the ratio this way keeps it currency-safe for USD reporters like AstraZeneca and Shell whose share price is quoted in pence.) If there is no positive P/E, PEGY is blank.
+> - **Growth (each leg capped at 30% = 0.30 before blending):** forward leg = next-year analyst EPS growth, used only when `total_analysts ≥ 3`; trailing leg = 10-year EPS CAGR. If both exist, `growth = 0.5 × forward + 0.5 × CAGR`; otherwise whichever single leg exists. If `growth ≤ 0`, PEGY is blank.
+> - **Yield:** the clean `dividend_yield` field where available, else `dividends_per_share ÷ period_end_price`.
+> - **Denominator & result:** `denom% = (growth + yield) × 100`; if `denom% < 2`, blank; else `PEGY = round(forward_PE ÷ denom%, 2)`.
 
 > **Why this matters for upside / downside:** PEGY directly answers the question "am I overpaying?". A low PEGY combined with a high Quality Score is the textbook setup for asymmetric upside — solid business, paying a fair price, and growth/income working in your favour.
 
 ---
 
-### 3.6 The Watchlist
+### 3.6 The Watchlist — Your Monitoring Dashboard
 
-The Watchlist is your personal shortlist of companies to follow.
+The Watchlist is no longer a plain screener table — it is a purpose-built **monitoring dashboard** for the companies you care about, designed to be the page you glance at each morning.
 
-**How to add a company:**
+**Multiple named lists**
 
-- Click the **★ Star** icon at the start of any row in the Screener table. The star turns gold; the company is now saved.
-- Click the star again to remove the company.
+You can keep **several separate watchlists** — for example "Core holdings", "Research ideas", and "Buy when cheaper". There is always a default list to start with, and you can:
 
-**Viewing your watchlist:**
+- **Create** a new list (give it a name).
+- **Rename** or **delete** any list.
+- **Add** a company to the active list via the **★ Star** icon in the Screener (or remove it by clicking the star again, or the ✕ on its row in the watchlist).
 
-- Click **Watchlist** in the top navigation bar. You will see a screener-style table containing only your saved companies, with all the same columns and sorting controls.
-- The header shows the count, e.g. *"12 saved"*.
+Switch between lists using the list selector at the top of the Watchlist page.
+
+**What each row shows**
+
+| Column | What it tells you |
+|---|---|
+| **Stock** | Ticker and company name — click to open the full company detail page. |
+| **Price** | Latest close, shown in pounds (the app converts from the pence the LSE quotes in). |
+| **Day** | The latest one-day percentage move, green/red. |
+| **Run** | A **streak badge** — how many consecutive days the share has risen (▲) or fallen (▼). A long run can flag momentum building or a sell-off accelerating. |
+| **Trend** | A small 3-month **sparkline** of the closing price, so you can see the recent shape at a glance. |
+| **52W Range** | A marker showing where today's price sits between the 52-week low and high — near the right means close to its yearly high. |
+| **Target buy** | An **editable target price** you can set per company; the app highlights when the price is at or below your target. Click to edit. |
+| **News** | A **7-day news cluster** combining RNS (regulatory) and press articles, with a dot coloured by the most significant recent RNS tier. Click it to open that company's News tab. |
+| **Risk** | The 1–10 Risk Score (see §3.2), colour-coded, so you can spot a deteriorating balance sheet without leaving the page. |
+
+All columns are sortable.
+
+**The per-share News panel**
+
+Alongside the table the Watchlist shows a **news panel** for one selected company (RNS + press, newest first). It defaults to the first company in the list; click any row's **News** cell to switch the panel to that company. This lets you keep an eye on headlines for your whole list without opening each company individually.
 
 **Why use it:**
 
-- Build a small focus list of 10–20 companies you want to monitor closely rather than scanning the whole universe every day.
-- Track companies you have flagged for further research after running a screen.
-- Keep a "buy when cheaper" list — companies you believe in but want to wait for a better entry price on.
+- Build a small focus list of 10–20 companies you monitor closely rather than scanning the whole universe every day.
+- Spot at a glance which of your names have moved, are on a run, are near their highs, or have just had news.
+- Keep a "buy when cheaper" list with target-buy prices set, so you are alerted when one reaches your entry level.
 
-> **Tip:** The watchlist is stored in your browser. Clearing your browser data will reset it. If you use the app on multiple devices, the watchlists are independent.
+> **Tip:** Watchlists are stored in your browser. Clearing your browser data will reset them, and lists are independent across devices.
 
 ---
 
@@ -388,12 +482,22 @@ Click on any company name or ticker to open the Company Detail panel. This gives
 
 ### 4.1 Chart Tab
 
-Shows a **5-year price chart** with optional moving average overlays:
+The default tab when you open a company. It shows an interactive price chart with selectable time ranges and a set of technical overlays you can switch on and off.
 
-- **MA20 (20-day moving average):** The average closing price over the last 20 trading days. Used to gauge short-term trend direction. When the price is above the MA20, the stock is in a short-term uptrend.
-- **MA50 (50-day moving average):** A medium-term trend indicator. A stock trading above its MA50 is broadly considered to be in an uptrend; crossing below is a warning sign.
+**Time-range buttons:** **1M · 3M · 6M · 1Y · 3Y · 5Y**. The app loads the full 5-year history behind the scenes, so switching ranges is instant. Above the chart, headline percentage moves are shown for **3M / YTD / 1Y**.
 
-**How to read it:** Look for a pattern of higher highs and higher lows (uptrend) or lower highs and lower lows (downtrend). The price being comfortably above both moving averages is a technically positive picture.
+**Overlays and sub-panels (toggle each on/off):**
+
+- **MA20 (20-day moving average):** The average closing price over the last 20 trading days — short-term trend. Price above the MA20 = short-term uptrend.
+- **MA50 (50-day moving average):** A medium-term trend indicator. Trading above the MA50 is broadly an uptrend; crossing below is a warning sign.
+- **Candles:** Switches the line to a Japanese candlestick view, showing each period's open, high, low and close — useful for reading intraday strength and reversals.
+- **Volume:** Adds volume bars beneath the price, so you can see whether a move happened on heavy or light trading.
+- **MACD (12, 26, 9):** *Moving Average Convergence Divergence* — a momentum indicator in its own sub-panel. The MACD line is the difference between the 12-day and 26-day exponential moving averages; the signal line is its 9-day average; the histogram is the gap between them. The MACD crossing above its signal line is a bullish momentum signal; crossing below is bearish.
+- **RSI (14):** The *Relative Strength Index* over 14 days (Wilder's smoothing), in its own sub-panel on a 0–100 scale. Above 70 is traditionally "overbought" (the rally may be stretched); below 30 is "oversold" (the sell-off may be stretched).
+
+> **Your display choices are remembered.** The range and which overlays are on are **persisted**, so if you turn off candles and turn on RSI, the next company you open keeps those same settings rather than resetting.
+
+**How to read it:** Look for a pattern of higher highs and higher lows (uptrend) or lower highs and lower lows (downtrend). Price comfortably above both moving averages, with MACD positive and RSI in the 40–70 band, is a technically healthy picture.
 
 ---
 
@@ -451,8 +555,9 @@ Focuses on balance sheet and financial risk:
 
 - **Current Ratio trend** — Is the ability to meet short-term obligations improving or worsening?
 - **Net Debt** — Total debt minus cash. Negative net debt (more cash than debt) is an extremely healthy position.
-- **Altman Z-Score** — See the Risk Score section (3.2). The visual risk gauge shows at a glance whether the company is in the safe, grey, or distress zone.
+- **Altman Z-Score** — See the Risk Score section (3.2). The visual risk gauge shows at a glance whether the company is in the safe, grey, or distress zone. **Note:** this gauge appears only for ordinary companies. **Banks and insurers do not show an Altman gauge** because the model is invalid for leveraged balance sheets — their risk is scored from volatility + ROE instead (see §3.2).
 - **Debt/Equity trend** — Is leverage increasing (risk rising) or falling (risk reducing)?
+- **Dividend Data link** — For dividend payers where a clean stored yield is not available, a **"Dividend Data" link** is shown so you can check the company's dividend history directly.
 
 ---
 
@@ -572,6 +677,27 @@ Use the signal log to track when sector rotation signals were generated and eval
 
 ---
 
+### 5.4 Sector Heatmap (Treemap)
+
+The **Sector Heatmap** is a single-screen "weather map" of the whole market. Open it from the **▦ Heatmap** link next to *ICB Sectors* in the left sidebar.
+
+**What it shows:** every active company is drawn as a **tile**, grouped into blocks by sector. The layout is a **treemap**:
+
+- **Tile size** = the company's **market capitalisation** — the biggest companies are the biggest tiles, so your eye is drawn to what actually matters for the index.
+- **Tile colour** = the company's **latest daily % move** — green for up, grey for flat, red for down, with deeper colour for bigger moves.
+
+At a glance you can see whether a sell-off or rally is **broad** (a whole sector block glowing one colour) or **narrow** (one big tile moving while the rest are flat), and which sectors are leading or lagging today.
+
+**Controls:**
+
+- **Index selector** — restrict the map to FTSE 100, FTSE 250, FTSE 350, or the All-Share.
+- **Live vs Snapshot toggle** — *Live* refreshes the moves roughly every minute during market hours (tracking the current-day price); *Snapshot* uses the stored end-of-day data and is lighter. A market-open indicator tells you whether live prices are actually moving.
+- **Click a tile** to open that company's detail page.
+
+> **How to use it:** Use the heatmap as a fast daily orientation — *where is the money moving today?* A green-glowing sector block can point you toward a rotation worth investigating in the Rotation page; a single red mega-cap tile dragging an otherwise-green sector often flags a stock-specific event (check its News tab).
+
+---
+
 ## 6. Markets
 
 ### 6.1 Fear & Greed Index
@@ -640,16 +766,23 @@ The tool shows:
 
 The Analyst Monitor page provides a dedicated view of professional analyst sentiment across all covered stocks.
 
-**Latest Consensus table:** All stocks with analyst coverage, sortable by consensus rating, upside %, buy %, or revision score.
+**Latest Consensus table:** All stocks with analyst coverage, sortable by consensus rating, **coverage-adjusted Buy% (see below)**, upside %, or revision score. The Buy% column shows the *adjusted* figure; hover any cell to see the raw value and the number of analysts behind it.
 
-**Changes:** Flags stocks where the consensus or upside estimate has shifted materially since the last data refresh — these are often the most actionable signals, as a change in analyst view can precede a significant price move.
+**Biggest Movers (30-day leaderboard):** Replacing the old "change feed", this board ranks the stocks whose analyst view has shifted most over the past 30 days — separating the **upgraded** (rating and/or price target rising) from the **downgraded**. Because a change in professional view often precedes a price move, this is usually the most actionable part of the page. A mover's score combines two "points-like" legs: the change in coverage-adjusted Buy% (rating) and the percentage change in mean price target (valuation); tiny wobbles below a small threshold are ignored so only genuine moves appear.
 
-**Composite Score:** A single ranking that combines:
-- Buy percentage (full weight)
-- Expected upside (half weight, capped at 50%)
-- Revision score × 10 (revision momentum is given extra weight as it is forward-looking)
+**Composite (bullish) Score** — used to rank Top Bullish / Top Bearish — combines:
+- Coverage-adjusted Buy% (full weight)
+- Expected upside, halved (and clamped to the −50%…+100% range so one wild target can't dominate)
+- Revision score × 10 (forward-looking earnings-revision momentum, given extra weight)
 
-> **Why the Buy% looks lower than you might expect:** When only one or two analysts cover a stock, a "100% bullish" rating is usually noise rather than signal. The composite score therefore applies **shrinkage** — it pulls thinly-covered stocks back toward a neutral 50% baseline. For example, a single analyst at 100% Buy counts as roughly 58%, while a 20-analyst stock at 80% Buy stays close to its raw value. This deliberately rewards stocks where many independent analysts agree.
+> **Why the Buy% looks lower than you might expect — coverage shrinkage:** When only one or two analysts cover a stock, a "100% bullish" rating is usually noise rather than signal. The app therefore applies **shrinkage** — it pulls thinly-covered stocks back toward a neutral 50% baseline, with a prior weight of `k = 5` analysts. A single analyst at 100% Buy is reported as ~58%, while a 20-analyst stock at 80% Buy barely moves. This deliberately rewards stocks where many independent analysts agree.
+
+> **Under the hood — coverage-adjusted Buy% and composite**
+> - **Shrunk Buy%:** `adjusted = (raw_buy% × n + 50 × k) ÷ (n + k)`, with `k = 5` and `n` = number of analysts. (A stock with no analysts defaults to 50.)
+>   - *Worked example:* 1 analyst at 100% → `(100×1 + 50×5) ÷ (1+5) = 350 ÷ 6 ≈ 58.3%`.
+> - **Composite score:** `adjustedBuy% + clamp(upside%, −50, 100) × 0.5 + revision_score × 10`.
+> - **Mover score (30-day):** `Δ(adjustedBuy%) + Δ(mean price target %)`, shown only when it clears a small minimum so trivial changes are hidden.
+> - **Revision score** itself = (upward EPS revisions − downward revisions) over the last 30 days.
 
 **Top Bullish / Top Bearish:** The five stocks with the strongest positive and negative composite scores — your instant shortlist of where professional money is most positive and most negative.
 
@@ -758,16 +891,14 @@ The clearest opportunities tend to come from:
 
 ---
 
-## 9. Analytics — The Visual Map of the Market
+## 9. PEGY — The Visual Map of the Market
 
-The **Analytics** page (top nav → "Analytics") shows the entire UK universe as a scatter plot, so you can spot opportunities visually.
+The **PEGY** page (top nav → "PEGY") plots the entire UK universe on a single scatter chart, so you can spot value-and-quality opportunities visually.
 
-**Two visual modes:**
-
-### Mode 1 — Quality × PEGY
+### Quality × PEGY
 
 - **X axis:** PEGY (lower = cheaper for the growth and income on offer)
-- **Y axis:** Quality Score (higher = better business)
+- **Y axis:** Quality Score (1–10; higher = better business)
 - **Each dot = one company.** Dot size scales with market capitalisation — large companies are bigger dots.
 
 **The four quadrants:**
@@ -781,27 +912,15 @@ The **Analytics** page (top nav → "Analytics") shows the entire UK universe as
 
 > **Most asymmetric upside lives in the green top-left quadrant** — high-quality businesses trading at fair-or-below prices for the growth they are delivering. This is the "Buffett quadrant".
 
-### Mode 2 — Momentum × Risk
-
-- **X axis:** Risk Score (lower = safer, displayed left-to-right with the safer side on the left)
-- **Y axis:** Momentum Score (higher = stronger price trend)
-
-| Quadrant | Meaning | Colour |
-|---|---|---|
-| **Top-left** | Strong momentum + safe | Green dots |
-| **Top-right** | Strong momentum + risky | Amber dots |
-| **Bottom-left** | Weak momentum + safe | Amber dots |
-| **Bottom-right** | Weak momentum + risky | Red dots |
-
-> **Top-left is the goal:** a stock trending up *and* with a low risk score has the best risk-adjusted profile in the universe. Top-right (high momentum but risky) is the speculative quadrant — can pay off but blow-ups are sudden.
+> **Note:** The earlier *Momentum × Risk* view has been removed; the page now focuses on the single most useful map, Quality versus PEGY. To assess momentum and risk, use those columns in the Screener or the company Chart and Health tabs.
 
 ### Controls
 
 - **Index pills** — limit the plot to FTSE 100, FTSE 250, FTSE 350, or All.
-- **X-axis zoom slider** — pull leftwards to zoom into the dense central area; the grey indicator at the right tells you how many points are off-chart.
+- **Dual-handle range slider (X axis):** Drag the **two handles** to set both a lower and an upper PEGY bound, zooming into whatever slice of the value spectrum you want (e.g. PEGY 0–2). A counter shows how many companies fall outside the current window. Very extreme PEGY values (above 30) are treated as outliers and are not plotted at all, so a handful of distorted ratios can't squash the useful part of the chart.
 - **Click a dot** to open that company's detail page directly.
 
-> **Why the visual matters:** A scatter plot of 1,000 stocks shows patterns the screener table cannot — clusters of similar companies, sector concentrations, and isolated outliers (often the most interesting opportunities). Use it to find ideas you would not have thought to filter for.
+> **Why the visual matters:** A scatter plot of the whole universe shows patterns the screener table cannot — clusters of similar companies, sector concentrations, and isolated outliers (often the most interesting opportunities). Use it to find ideas you would not have thought to filter for.
 
 ---
 
@@ -956,19 +1075,18 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 
 **Steps:**
 
-1. Go to **Analytics**.
-2. Select mode **Quality × PEGY**.
-3. Filter to **FTSE 350** (the largest 350 companies — best liquidity).
-4. Use the X-zoom slider to zoom into the dense region (PEGY 0–3).
-5. Look for **green dots in the top-left** quadrant — high Quality, low PEGY.
-6. Click each green dot to open the company; on the detail page, run the standard checks:
+1. Go to **PEGY**.
+2. Filter to **FTSE 350** (the largest 350 companies — best liquidity).
+3. Use the dual-handle range slider to zoom into the dense region (PEGY 0–3).
+4. Look for **green dots in the top-left** quadrant — high Quality, low PEGY.
+5. Click each green dot to open the company; on the detail page, run the standard checks:
    - Health tab: Is the balance sheet healthy?
    - Growth tab: Are revenue, profit, and FCF all growing?
    - Analysts tab: Does professional consensus agree it is undervalued?
    - Company News tab: Have there been any recent negative catalysts that explain why it is cheap?
-7. Now switch the visualisation to **Momentum × Risk** and find where the same company sits. A company in the top-left of *both* charts (cheap quality AND positive momentum + low risk) is a rare and powerful setup.
+6. Cross-check momentum and risk **in the Screener** (Momentum and Risk columns) or on the company's **Chart** and **Health** tabs. A cheap-quality name that is *also* trending up with a low Risk Score is a rare and powerful setup.
 
-**What you are looking for:** Companies that appear in the green quadrant of both visualisations — the rare intersection of "good business, fairly priced, currently trending up, low risk".
+**What you are looking for:** Companies in the green top-left PEGY quadrant that *also* clear a momentum and risk check — the rare intersection of "good business, fairly priced, currently trending up, low risk".
 
 ---
 
@@ -1002,9 +1120,9 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
      - Consensus = Buy
    - Sort by **Quality Score** descending. You should now have 5–25 names.
 
-4. **Visual cross-check** *(Analytics)*
-   - Open **Analytics**, mode Quality × PEGY. Cross-reference your shortlist against the green top-left quadrant. Drop any names that fall outside it.
-   - Switch to Momentum × Risk. Confirm survivors are top-left here too.
+4. **Visual cross-check** *(PEGY)*
+   - Open the **PEGY** page. Cross-reference your shortlist against the green top-left quadrant. Drop any names that fall outside it.
+   - Confirm survivors also clear momentum and risk using the Screener's Momentum and Risk columns.
 
 5. **Catalyst check** *(RNS News + Company News tab)*
    - For each survivor, open the company page → **News tab**.
@@ -1036,7 +1154,7 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 | Safety | Screener / Health tab | Risk ≤ 5, Net Debt manageable |
 | Professional view | Analyst Monitor | Buy consensus, Upside ≥ 10%, Rev Score > 0 |
 | Catalysts | RNS News, Company News | No negative Tier A in 30 days; ideally a recent positive one |
-| Visual confirmation | Analytics | Green quadrant in both Quality × PEGY and Momentum × Risk |
+| Visual confirmation | PEGY | Green top-left quadrant on the Quality × PEGY map |
 
 When eight or nine of these are green for a single name, you have a high-conviction, asymmetric-risk setup. When fewer than five are green, walk away — there will be better opportunities.
 
@@ -1071,7 +1189,8 @@ When eight or nine of these are green for a single name, you have a high-convict
 | **Operating Leverage** | How much a company's profits amplify when revenue grows. High leverage = profit rises faster than sales |
 | **P/B Ratio** | Price to Book — share price divided by net assets per share |
 | **P/E Ratio** | Price to Earnings — share price divided by earnings per share |
-| **PEGY** | Price/Earnings divided by (Growth + Yield). A value-for-money check that combines the P/E with both growth and dividend yield in one figure |
+| **MACD** | Moving Average Convergence Divergence — a momentum indicator built from the difference between a 12-day and 26-day exponential moving average, with a 9-day signal line. A chart overlay (see §4.1) |
+| **PEGY** | (Forward) Price/Earnings divided by (Growth + Yield). A value-for-money check that combines the P/E with both growth and dividend yield in one figure. In this app the P/E is forward-looking and growth is a capped blend of analyst and historical EPS growth (see §3.5) |
 | **P/S Ratio** | Price to Sales — market cap divided by annual revenue |
 | **Relative Strength** | A stock's or sector's performance relative to a benchmark |
 | **RNS** | Regulatory News Service — the official Stock Exchange channel that all UK listed companies must use to release price-sensitive information |
@@ -1079,8 +1198,11 @@ When eight or nine of these are green for a single name, you have a high-convict
 | **ROCE** | Return on Capital Employed — operating profit ÷ capital employed |
 | **ROE** | Return on Equity — net income ÷ shareholders' equity |
 | **ROIC** | Return on Invested Capital — net operating profit after tax ÷ invested capital |
+| **RSI** | Relative Strength Index — a 0–100 momentum oscillator (14-day, Wilder's smoothing). Above 70 = overbought, below 30 = oversold. A chart overlay (see §4.1) |
 | **Sector Rotation** | The movement of investment capital between industry sectors as the economic cycle evolves |
+| **Shrinkage (coverage)** | A statistical adjustment that pulls a thinly-covered stock's Buy% toward a neutral 50% baseline (prior weight k=5 analysts), so a "100% bullish" rating from a single analyst is not treated as strong as the same rating from twenty (see §7) |
 | **Ticker** | A short code identifying a listed stock (e.g. `AZN.L` for AstraZeneca London) |
+| **Treemap** | A chart that fills space with nested rectangles; here, one tile per company sized by market cap and coloured by daily move (the Sector Heatmap, see §5.4) |
 | **Volatility** | The degree of price fluctuation. Higher volatility = higher uncertainty = higher risk |
 | **Yield Curve** | A graph of government bond yields across different maturities. Its shape signals economic expectations |
 | **Z-Score (Altman)** | A statistical measure predicting probability of corporate bankruptcy |
@@ -1136,6 +1258,8 @@ Altman used multiple discriminant analysis on 66 manufacturing firms to identify
 Working Paper, Stern School of Business, NYU.
 
 Updated validation confirming continued predictive power and discussing adaptations for service industries and international markets.
+
+> **Application note:** Altman explicitly excluded financial firms (banks, insurers) from his sample, because their balance sheets are dominated by leverage that is normal for the business. This app follows that guidance: financials are **not** scored with the Z-Score — their Risk Score uses price volatility plus a Return-on-Equity quality component instead (see §3.2).
 
 ---
 
@@ -1225,17 +1349,15 @@ Aerospace and defence, engineering, construction, and business services.
 | RR.L | Rolls-Royce |
 | BA.L | BAE Systems |
 | AHT.L | Ashtead Group |
-| IAG.L | International Airlines Group (British Airways/Iberia) |
 | IMI.L | IMI |
 | WEIR.L | Weir Group |
 | RTO.L | Rentokil Initial |
 | ITRK.L | Intertek Group |
 | MRO.L | Melrose Industries |
 | EXPN.L | Experian |
-| WPP.L | WPP |
-| PSON.L | Pearson |
+| HLMA.L | Halma |
 
-> **Sector characteristics:** Highly diverse. Defence names like BAE are increasingly seen as defensive given rising government spending. Cyclical industrials like Ashtead (equipment rental) are closely tied to construction activity.
+> **Sector characteristics:** Highly diverse. Defence names like BAE are increasingly seen as defensive given rising government spending. Cyclical industrials like Ashtead (equipment rental) are closely tied to construction activity. Halma is a quality compounder of safety and environmental technology.
 
 ---
 
@@ -1250,7 +1372,6 @@ Mining companies producing metals, minerals, and chemicals.
 | ANTO.L | Antofagasta |
 | FRES.L | Fresnillo |
 | MNDI.L | Mondi |
-| SKG.L | Smurfit WestRock |
 | CRDA.L | Croda International |
 
 > **Sector characteristics:** Highly cyclical. Profits driven by commodity prices (iron ore, copper, gold, silver). Rio Tinto and Glencore are among the world's largest mining groups. CRDA and MNDI are specialty chemicals/packaging — less cyclical.
@@ -1273,12 +1394,13 @@ Non-essential consumer goods and services — what people buy when they have mon
 | EZJ.L | easyJet |
 | ENT.L | Entain |
 | FLTR.L | Flutter Entertainment |
-| ABF.L | Associated British Foods (Primark) |
-| SBRY.L | J Sainsbury |
 | PSN.L | Persimmon |
 | TW.L | Taylor Wimpey |
+| WPP.L | WPP |
+| PSON.L | Pearson |
+| IAG.L | International Airlines Group (British Airways/Iberia) |
 
-> **Sector characteristics:** Sensitive to consumer confidence and disposable income. Performs well in economic expansions; suffers in downturns. Housebuilders (Persimmon, Taylor Wimpey) also highly sensitive to mortgage rates.
+> **Sector characteristics:** Sensitive to consumer confidence and disposable income. Performs well in economic expansions; suffers in downturns. Housebuilders (Persimmon, Taylor Wimpey) are highly sensitive to mortgage rates, airlines (easyJet, IAG) to fuel costs and travel demand, and media/advertising names (WPP, Pearson) to corporate and education spending.
 
 ---
 
@@ -1293,6 +1415,7 @@ Essential everyday goods — food, beverages, household products, tobacco.
 | TSCO.L | Tesco |
 | DGE.L | Diageo |
 | IMB.L | Imperial Brands |
+| SBRY.L | J Sainsbury |
 | ABF.L | Associated British Foods |
 
 > **Sector characteristics:** Defensive — demand is stable regardless of the economic cycle. These companies often have strong brands and pricing power, leading to high and durable gross margins. A key safe-haven sector during downturns.
@@ -1320,7 +1443,6 @@ Software, data analytics, online marketplaces, and IT services.
 | Ticker | Company |
 |---|---|
 | REL.L | RELX |
-| HLMA.L | Halma |
 | SGE.L | Sage Group |
 | AUTO.L | Auto Trader Group |
 | RMV.L | Rightmove |
@@ -1373,5 +1495,5 @@ Real Estate Investment Trusts (REITs) and property companies.
 
 ---
 
-*Alpha Move AI — UK Stock Screener — User Manual — April 2026*  
+*Alpha Move AI — UK Stock Screener — User Manual — June 2026*  
 *For support or feedback, refer to the project repository.*
