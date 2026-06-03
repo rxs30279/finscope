@@ -69,6 +69,68 @@ export const saveWatchlist = (symbols) => {
   try { window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(symbols)); } catch {}
 };
 
+// ── Multiple watchlists ───────────────────────────────────────────────────────
+// Data model: { lists: [{id, name}], members: { [listId]: [symbol, ...] } }.
+// The "default" list is special — the Screener ★ always toggles membership of it,
+// and it can never be deleted. Other lists are managed from the Watchlist page.
+export const WATCHLISTS_KEY = 'stock_screener_watchlists_v1';
+export const DEFAULT_LIST_ID = 'default';
+export const DEFAULT_LIST_NAME = 'My Watchlist';
+
+export const genListId = () =>
+  'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+const normalizeWatchlists = (data) => {
+  let lists = Array.isArray(data?.lists)
+    ? data.lists.filter((l) => l && typeof l.id === 'string' && typeof l.name === 'string')
+    : [];
+  const rawMembers = data && typeof data.members === 'object' && data.members ? data.members : {};
+  // The default list must exist and lead the order.
+  if (!lists.some((l) => l.id === DEFAULT_LIST_ID)) {
+    lists = [{ id: DEFAULT_LIST_ID, name: DEFAULT_LIST_NAME }, ...lists];
+  } else {
+    lists = [
+      lists.find((l) => l.id === DEFAULT_LIST_ID),
+      ...lists.filter((l) => l.id !== DEFAULT_LIST_ID),
+    ];
+  }
+  const members = {};
+  for (const l of lists) {
+    const arr = Array.isArray(rawMembers[l.id]) ? rawMembers[l.id] : [];
+    members[l.id] = [...new Set(arr.filter((s) => typeof s === 'string'))];
+  }
+  return { lists, members };
+};
+
+export const loadWatchlists = () => {
+  if (typeof window === 'undefined') return normalizeWatchlists(null);
+  try {
+    const raw = window.localStorage.getItem(WATCHLISTS_KEY);
+    if (raw) return normalizeWatchlists(JSON.parse(raw));
+    // First run on the multi-list model: fold the legacy single list into "My Watchlist".
+    const legacy = window.localStorage.getItem(WATCHLIST_KEY);
+    const arr = legacy ? JSON.parse(legacy) : [];
+    return normalizeWatchlists({
+      lists: [{ id: DEFAULT_LIST_ID, name: DEFAULT_LIST_NAME }],
+      members: { [DEFAULT_LIST_ID]: Array.isArray(arr) ? arr : [] },
+    });
+  } catch {
+    return normalizeWatchlists(null);
+  }
+};
+
+export const saveWatchlists = (data) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(WATCHLISTS_KEY, JSON.stringify(data));
+    // Keep the legacy key mirroring the default list for backward compatibility.
+    window.localStorage.setItem(
+      WATCHLIST_KEY,
+      JSON.stringify(data?.members?.[DEFAULT_LIST_ID] || []),
+    );
+  } catch {}
+};
+
 export const TARGETS_KEY = 'stock_screener_target_prices';
 const TARGETS_UNIT_V2 = 'stock_screener_targets_unit_v2_pounds';
 

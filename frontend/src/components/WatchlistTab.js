@@ -1,5 +1,25 @@
-import { useState, useEffect, useMemo } from "react";
-import { API, loadTargets, saveTargets } from "../utils";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { API, loadTargets, saveTargets, DEFAULT_LIST_ID } from "../utils";
+import { useMediaQuery } from "../useMediaQuery";
+
+// Relative time for recent items ("2h", "3d"); a real date once past a week,
+// which reads better than "5w" for older news.
+const fmtWhen = (iso) => {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const s = Math.max(0, (Date.now() - then) / 1000);
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)}d`;
+  const d = new Date(then);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "2-digit" }),
+  });
+};
 
 // Prices are stored in pence (LSE convention) — show as pounds.
 const fmtPounds = (pence) =>
@@ -240,6 +260,394 @@ function TargetCell({ symbol, target, price, onCommit }) {
   );
 }
 
+// ── List tabs + management ────────────────────────────────────────────────────
+function ListTabs({ lists, activeId, onSelect, counts }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      {lists.map((l) => {
+        const active = l.id === activeId;
+        return (
+          <button
+            key={l.id}
+            onClick={() => onSelect(l.id)}
+            style={{
+              background: active ? "#f97316" : "#1a1a1a",
+              color: active ? "#0a0a0a" : "#cbd5e1",
+              border: `1px solid ${active ? "#f97316" : "#2a2a2a"}`,
+              borderRadius: 999,
+              padding: "5px 13px",
+              fontSize: 12,
+              fontWeight: 700,
+              fontFamily: "monospace",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {l.name}
+            <span style={{ opacity: 0.6, marginLeft: 6 }}>{counts[l.id] || 0}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Type-ahead box that searches the universe (/api/search) and adds the chosen
+// stock to the active list.
+function AddStockBox({ onAdd, existing }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    if (q.trim().length < 1) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const id = setTimeout(() => {
+      fetch(`${API}/search?q=${encodeURIComponent(q.trim())}`)
+        .then((r) => r.json())
+        .then((d) => !cancelled && setResults(Array.isArray(d) ? d : []))
+        .catch(() => !cancelled && setResults([]));
+    }, 180);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [q]);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
+  const pick = (sym) => {
+    onAdd(sym);
+    setQ("");
+    setResults([]);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={boxRef} style={{ position: "relative", width: 240 }}>
+      <input
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        placeholder="+ Add stock by ticker or name…"
+        style={{
+          width: "100%",
+          background: "rgba(255,255,255,0.06)",
+          border: "1px solid rgba(148,163,184,0.25)",
+          borderRadius: 4,
+          padding: "6px 9px",
+          fontFamily: "monospace",
+          fontSize: 12,
+          color: "#e5e5e5",
+          outline: "none",
+        }}
+      />
+      {open && results.length > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            maxHeight: 260,
+            overflowY: "auto",
+            background: "#0f172a",
+            border: "1px solid #2a2a2a",
+            borderRadius: 4,
+            zIndex: 5,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+          }}
+        >
+          {results.map((r) => {
+            const already = existing.has(r.symbol);
+            return (
+              <div
+                key={r.symbol}
+                onClick={() => !already && pick(r.symbol)}
+                style={{
+                  padding: "7px 10px",
+                  borderBottom: "1px solid #1a1a1a",
+                  cursor: already ? "default" : "pointer",
+                  opacity: already ? 0.45 : 1,
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                }}
+                onMouseEnter={(e) =>
+                  !already && (e.currentTarget.style.background = "#1e293b")
+                }
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                <span style={{ color: "#f1f5f9", fontWeight: 700 }}>
+                  {r.symbol.replace(".L", "")}
+                </span>
+                <span style={{ color: "#64748b", marginLeft: 8 }}>{r.name}</span>
+                {already && (
+                  <span style={{ color: "#10b981", marginLeft: 8, fontSize: 10 }}>
+                    ✓ in list
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── News panel ────────────────────────────────────────────────────────────────
+// News for a single selected share: RNS + press, newest first. Defaults to the
+// first share in the list; clicking a row's News cell switches it to that share.
+// Reuses /api/news/{symbol}, which live-fetches press when the cache is stale
+// (or always, with refresh=true). Sits right of the table on wide screens,
+// underneath on narrow ones.
+function NewsPanel({ symbol, name, sideBySide }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const reqRef = useRef("");
+
+  const load = (sym, refresh) => {
+    if (!sym) return Promise.resolve();
+    setLoading(true);
+    return fetch(
+      `${API}/news/${encodeURIComponent(sym)}${refresh ? "?refresh=true" : ""}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (reqRef.current !== sym) return;
+        const rns = (d?.rns || []).map((r) => ({
+          kind: "rns",
+          headline: r.headline,
+          tier: r.tier,
+          category: r.category,
+          published_at: r.published_at,
+          url: r.url,
+        }));
+        const press = (d?.google || []).map((g) => ({
+          kind: "press",
+          headline: g.title,
+          source: g.source,
+          published_at: g.published_at,
+          url: g.link,
+        }));
+        const merged = [...rns, ...press].sort(
+          (a, b) =>
+            new Date(b.published_at || 0) - new Date(a.published_at || 0),
+        );
+        setItems(merged);
+      })
+      .catch(() => reqRef.current === sym && setItems([]))
+      .finally(() => reqRef.current === sym && setLoading(false));
+  };
+
+  useEffect(() => {
+    reqRef.current = symbol || "";
+    if (!symbol) {
+      setItems([]);
+      return;
+    }
+    load(symbol, false);
+    // eslint-disable-next-line
+  }, [symbol]);
+
+  const ticker = symbol ? symbol.replace(".L", "") : "";
+
+  return (
+    <div
+      style={{
+        // Grow into whatever room the table leaves (e.g. when the sidebar is
+        // closed), down to a sensible minimum. Full width when stacked.
+        flex: sideBySide ? "1 1 360px" : "0 0 auto",
+        minWidth: sideBySide ? 320 : "auto",
+        background: "#0d0d0d",
+        border: "1px solid #1e1e1e",
+        borderRadius: 3,
+        display: "flex",
+        flexDirection: "column",
+        maxHeight: sideBySide ? "calc(100vh - 245px)" : 520,
+      }}
+    >
+      <div
+        style={{
+          padding: "10px 14px",
+          borderBottom: "1px solid #1e1e1e",
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+        }}
+      >
+        <span
+          style={{
+            color: "#f97316",
+            fontSize: 10,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+          }}
+        >
+          News
+        </span>
+        <span
+          style={{
+            color: "#e2e8f0",
+            fontFamily: "monospace",
+            fontSize: 12,
+            fontWeight: 700,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={name || ticker}
+        >
+          {symbol ? `${ticker}${name ? ` · ${name}` : ""}` : "—"}
+        </span>
+        {loading && (
+          <span style={{ color: "#475569", fontSize: 10, fontFamily: "monospace" }}>
+            loading…
+          </span>
+        )}
+        <button
+          onClick={() => load(symbol, true)}
+          disabled={loading || !symbol}
+          title="Pull fresh press now"
+          style={{
+            marginLeft: "auto",
+            background: "none",
+            border: "1px solid #2a2a2a",
+            borderRadius: 4,
+            color: loading ? "#475569" : "#94a3b8",
+            cursor: loading || !symbol ? "default" : "pointer",
+            fontSize: 12,
+            lineHeight: 1,
+            padding: "3px 7px",
+          }}
+        >
+          {loading ? "…" : "↻"}
+        </button>
+      </div>
+      <div style={{ overflowY: "auto" }}>
+        {items.length === 0 ? (
+          <div
+            style={{
+              padding: "28px 16px",
+              textAlign: "center",
+              color: "#475569",
+              fontFamily: "monospace",
+              fontSize: 12,
+            }}
+          >
+            {!symbol
+              ? "Add stocks to see their news here."
+              : loading
+                ? "Loading news…"
+                : "No recent news for this share."}
+          </div>
+        ) : (
+          items.map((it, i) => {
+            const isRns = it.kind === "rns";
+            // Left accent: tier-coloured for RNS, neutral for press — separates
+            // the two kinds at a glance and conveys RNS importance by colour.
+            const accent = isRns ? TIER_COLOR[it.tier] || TIER_COLOR.C : "#3f4b5b";
+            const meta = isRns
+              ? (it.category || "").replace(/_/g, " ")
+              : it.source || "";
+            const body = (
+              <>
+                {/* Dim, secondary meta line — kind · category/source · when */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 7,
+                    marginBottom: 4,
+                    fontFamily: "monospace",
+                    fontSize: 9.5,
+                    letterSpacing: 0.3,
+                    color: "#64748b",
+                  }}
+                >
+                  <span style={{ color: isRns ? accent : "#7c8a9c", fontWeight: 700 }}>
+                    {isRns ? "RNS" : "PRESS"}
+                  </span>
+                  {meta && (
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {meta}
+                    </span>
+                  )}
+                  <span style={{ marginLeft: "auto", flexShrink: 0 }}>
+                    {fmtWhen(it.published_at)}
+                  </span>
+                </div>
+                {/* Primary line — the headline */}
+                <div
+                  style={{
+                    color: "#f1f5f9",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {it.headline}
+                </div>
+              </>
+            );
+            // Zebra striping so adjacent headlines are easy to tell apart.
+            const baseBg = i % 2 ? "rgba(255,255,255,0.035)" : "transparent";
+            const style = {
+              display: "block",
+              padding: "10px 14px",
+              borderBottom: "1px solid #161616",
+              borderLeft: `3px solid ${accent}`,
+              background: baseBg,
+              cursor: it.url ? "pointer" : "default",
+              textDecoration: "none",
+            };
+            const hover = {
+              onMouseEnter: (e) => (e.currentTarget.style.background = "#15202e"),
+              onMouseLeave: (e) => (e.currentTarget.style.background = baseBg),
+            };
+            return it.url ? (
+              <a
+                key={`${it.kind}-${it.published_at}-${i}`}
+                href={it.url}
+                target="_blank"
+                rel="noreferrer"
+                style={style}
+                {...hover}
+              >
+                {body}
+              </a>
+            ) : (
+              <div key={`${it.kind}-${it.published_at}-${i}`} style={style} {...hover}>
+                {body}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 const COLS = [
   {
@@ -266,17 +674,71 @@ const COLS = [
   { key: "risk", label: "Risk", align: "right" },
 ];
 
-export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect }) {
+export default function WatchlistTab({
+  watchlists,
+  onCreateList,
+  onRenameList,
+  onDeleteList,
+  onAddSymbol,
+  onRemoveSymbol,
+  onSelect,
+}) {
+  const lists = watchlists?.lists || [];
+  const members = watchlists?.members || {};
+  const [activeId, setActiveId] = useState(DEFAULT_LIST_ID);
+
+  // Fall back to the default list if the active one was deleted.
+  useEffect(() => {
+    if (!lists.some((l) => l.id === activeId)) setActiveId(DEFAULT_LIST_ID);
+  }, [lists, activeId]);
+
+  const activeList = lists.find((l) => l.id === activeId) || lists[0];
+  const isDefault = activeList?.id === DEFAULT_LIST_ID;
+
   const symbols = useMemo(
-    () => [...(watchlist instanceof Set ? watchlist : new Set(watchlist || []))],
-    [watchlist],
+    () => [...new Set(members[activeId] || [])],
+    [members, activeId],
   );
+  const counts = useMemo(() => {
+    const c = {};
+    for (const l of lists) c[l.id] = (members[l.id] || []).length;
+    return c;
+  }, [lists, members]);
+
+  const createList = () => {
+    const name = (window.prompt("Name for the new watchlist:") || "").trim();
+    if (name) setActiveId(onCreateList(name));
+  };
+  const renameList = () => {
+    if (!activeList || isDefault) return;
+    const name = (window.prompt("Rename watchlist:", activeList.name) || "").trim();
+    if (name) onRenameList(activeList.id, name);
+  };
+  const deleteList = () => {
+    if (!activeList || isDefault) return;
+    if (window.confirm(`Delete "${activeList.name}"? Its stocks are removed from this list only.`)) {
+      onDeleteList(activeList.id);
+      setActiveId(DEFAULT_LIST_ID);
+    }
+  };
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [liveQuotes, setLiveQuotes] = useState({});
   const [targets, setTargets] = useState(() => loadTargets());
   const [sortCol, setSortCol] = useState("day");
   const [sortDir, setSortDir] = useState("desc");
+  // Which share the news panel is showing — defaults to the first in the list,
+  // changed by clicking a row's News cell.
+  const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
+
+  // Default the news panel to the first share; keep it valid as the list changes.
+  useEffect(() => {
+    if (symbols.length === 0) {
+      setSelectedNewsSymbol(null);
+    } else if (!selectedNewsSymbol || !symbols.includes(selectedNewsSymbol)) {
+      setSelectedNewsSymbol(symbols[0]);
+    }
+  }, [symbols, selectedNewsSymbol]);
 
   // Enriched per-stock data — refetched whenever the watchlist changes.
   useEffect(() => {
@@ -406,6 +868,11 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
     }
   };
 
+  const allSymbolSet = useMemo(() => new Set(symbols), [symbols]);
+
+  // Side-by-side once there's room; the news panel stacks underneath below this.
+  const sideBySide = useMediaQuery("(min-width: 1280px)");
+
   return (
     <div>
       <div
@@ -413,7 +880,7 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
           display: "flex",
           alignItems: "baseline",
           gap: 12,
-          marginBottom: 16,
+          marginBottom: 14,
         }}
       >
         <h2
@@ -424,15 +891,114 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
             color: "#f1f5f9",
           }}
         >
-          Watchlist
+          Watchlists
         </h2>
         <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
           {symbols.length === 0
-            ? "no stocks saved"
-            : `${symbols.length} saved${loading ? " · loading…" : ""}`}
+            ? "no stocks in this list"
+            : `${symbols.length} in list${loading ? " · loading…" : ""}`}
         </span>
       </div>
 
+      {/* List tabs + management + add-stock box */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 16,
+          paddingBottom: 14,
+          borderBottom: "1px solid #1e1e1e",
+        }}
+      >
+        <ListTabs
+          lists={lists}
+          activeId={activeId}
+          onSelect={setActiveId}
+          counts={counts}
+        />
+        <button
+          onClick={createList}
+          title="Create a new watchlist"
+          style={{
+            background: "#1a1a1a",
+            color: "#f97316",
+            border: "1px dashed #f9731677",
+            borderRadius: 999,
+            padding: "5px 13px",
+            fontSize: 12,
+            fontWeight: 700,
+            fontFamily: "monospace",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          + New list
+        </button>
+        {!isDefault && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={renameList}
+              title="Rename this list"
+              style={{
+                background: "none",
+                border: "1px solid #2a2a2a",
+                borderRadius: 4,
+                color: "#94a3b8",
+                cursor: "pointer",
+                fontSize: 12,
+                padding: "4px 8px",
+              }}
+            >
+              Rename
+            </button>
+            <button
+              onClick={deleteList}
+              title="Delete this list"
+              style={{
+                background: "none",
+                border: "1px solid #2a2a2a",
+                borderRadius: 4,
+                color: "#f87171",
+                cursor: "pointer",
+                fontSize: 12,
+                padding: "4px 8px",
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        )}
+        <div style={{ marginLeft: "auto" }}>
+          <AddStockBox
+            onAdd={(sym) => onAddSymbol(activeId, sym)}
+            existing={allSymbolSet}
+          />
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: sideBySide ? "row" : "column",
+          gap: 16,
+          alignItems: "stretch",
+        }}
+      >
+        <div
+          style={{
+            // When populated, size to the table's content so the news panel can
+            // claim the rest of the row (and grow when the sidebar closes). When
+            // empty, let the placeholder fill the width instead.
+            flex: sideBySide
+              ? symbols.length
+                ? "0 1 auto"
+                : "1 1 auto"
+              : "1 1 auto",
+            minWidth: 0,
+          }}
+        >
       {symbols.length === 0 ? (
         <div
           style={{
@@ -446,8 +1012,9 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
             fontSize: 13,
           }}
         >
-          Your watchlist is empty. Tap the ☆ next to any stock in the Screener to
-          add it here.
+          {isDefault
+            ? "This list is empty. Use the search box above to add stocks, or tap the ☆ next to any stock in the Screener."
+            : "This list is empty. Use the search box above to add stocks."}
         </div>
       ) : (
         <div
@@ -509,10 +1076,10 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
                       <td style={S.td}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <button
-                            title="Remove from watchlist"
+                            title={`Remove from "${activeList?.name || "list"}"`}
                             onClick={(e) => {
                               e.stopPropagation();
-                              onToggleWatchlist && onToggleWatchlist(r.symbol);
+                              onRemoveSymbol && onRemoveSymbol(activeId, r.symbol);
                             }}
                             style={{
                               background: "none",
@@ -616,8 +1183,25 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
                         />
                       </td>
 
-                      {/* News (RNS + press combined) */}
-                      <td style={S.td}>
+                      {/* News — click to load this share's news in the panel */}
+                      <td
+                        title="Show this share's news in the panel"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedNewsSymbol(r.symbol);
+                        }}
+                        style={{
+                          ...S.td,
+                          cursor: "pointer",
+                          borderLeft: `3px solid ${
+                            r.symbol === selectedNewsSymbol ? "#f97316" : "transparent"
+                          }`,
+                          background:
+                            r.symbol === selectedNewsSymbol
+                              ? "rgba(249,115,22,0.08)"
+                              : undefined,
+                        }}
+                      >
                         <div
                           style={{
                             display: "flex",
@@ -632,11 +1216,13 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
                             pressCount={r.news_count}
                             onClick={(e) => {
                               e.stopPropagation();
-                              onSelect && onSelect(r.symbol, "news");
+                              setSelectedNewsSymbol(r.symbol);
                             }}
                           />
                           {!r.rns_count && !r.news_count && (
-                            <span style={{ color: "#3a3a3a" }}>—</span>
+                            <span style={{ color: "#64748b", fontSize: 11 }}>
+                              view ›
+                            </span>
                           )}
                         </div>
                       </td>
@@ -669,6 +1255,17 @@ export default function WatchlistTab({ watchlist, onToggleWatchlist, onSelect })
             </table>
         </div>
       )}
+        </div>
+
+        <NewsPanel
+          symbol={selectedNewsSymbol}
+          name={
+            rows.find((r) => r.symbol === selectedNewsSymbol)?.name ||
+            (selectedNewsSymbol ? selectedNewsSymbol.replace(".L", "") : "")
+          }
+          sideBySide={sideBySide}
+        />
+      </div>
     </div>
   );
 }

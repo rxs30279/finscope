@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   LineChart,
   Line,
@@ -21,8 +21,10 @@ import {
   fmt,
   gc,
   currSym,
-  loadWatchlist,
-  saveWatchlist,
+  loadWatchlists,
+  saveWatchlists,
+  genListId,
+  DEFAULT_LIST_ID,
   dividendDataUrl,
   loadChartPrefs,
   saveChartPrefs,
@@ -3198,19 +3200,69 @@ export default function App() {
   }); // screener | watchlist | rotation | breadth | cross-asset | signals | company | subscribe
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [selectedTab, setSelectedTab] = useState(null);
-  const [watchlist, setWatchlist] = useState(() => new Set(loadWatchlist()));
+  const [watchlists, setWatchlists] = useState(() => loadWatchlists());
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    saveWatchlist([...watchlist]);
-  }, [watchlist]);
+    saveWatchlists(watchlists);
+  }, [watchlists]);
 
+  // The Screener ★ always toggles membership of the default list.
+  const defaultMembers = useMemo(
+    () => new Set(watchlists.members[DEFAULT_LIST_ID] || []),
+    [watchlists],
+  );
   const toggleWatchlist = useCallback((symbol) => {
-    setWatchlist((prev) => {
-      const next = new Set(prev);
-      if (next.has(symbol)) next.delete(symbol);
-      else next.add(symbol);
-      return next;
+    setWatchlists((prev) => {
+      const cur = prev.members[DEFAULT_LIST_ID] || [];
+      const next = cur.includes(symbol)
+        ? cur.filter((s) => s !== symbol)
+        : [...cur, symbol];
+      return { ...prev, members: { ...prev.members, [DEFAULT_LIST_ID]: next } };
+    });
+  }, []);
+
+  // ── Watchlist management (used by the Watchlist page) ───────────────────────
+  const createWatchlist = useCallback((name) => {
+    const id = genListId();
+    setWatchlists((prev) => ({
+      lists: [...prev.lists, { id, name }],
+      members: { ...prev.members, [id]: [] },
+    }));
+    return id;
+  }, []);
+
+  const renameWatchlist = useCallback((id, name) => {
+    setWatchlists((prev) => ({
+      ...prev,
+      lists: prev.lists.map((l) => (l.id === id ? { ...l, name } : l)),
+    }));
+  }, []);
+
+  const deleteWatchlist = useCallback((id) => {
+    if (id === DEFAULT_LIST_ID) return; // the default list is permanent
+    setWatchlists((prev) => {
+      const members = { ...prev.members };
+      delete members[id];
+      return { lists: prev.lists.filter((l) => l.id !== id), members };
+    });
+  }, []);
+
+  const addToWatchlist = useCallback((id, symbol) => {
+    setWatchlists((prev) => {
+      const cur = prev.members[id] || [];
+      if (cur.includes(symbol)) return prev;
+      return { ...prev, members: { ...prev.members, [id]: [...cur, symbol] } };
+    });
+  }, []);
+
+  const removeFromWatchlist = useCallback((id, symbol) => {
+    setWatchlists((prev) => {
+      const cur = prev.members[id] || [];
+      return {
+        ...prev,
+        members: { ...prev.members, [id]: cur.filter((s) => s !== symbol) },
+      };
     });
   }, []);
   const [highlightSymbol, setHighlightSymbol] = useState(null);
@@ -3930,15 +3982,19 @@ export default function App() {
             <Screener
               onSelect={selectCompany}
               highlightSymbol={highlightSymbol}
-              watchlist={watchlist}
+              watchlist={defaultMembers}
               onToggleWatchlist={toggleWatchlist}
             />
           </div>
           {page === "watchlist" && (
             <WatchlistTab
               onSelect={selectCompany}
-              watchlist={watchlist}
-              onToggleWatchlist={toggleWatchlist}
+              watchlists={watchlists}
+              onCreateList={createWatchlist}
+              onRenameList={renameWatchlist}
+              onDeleteList={deleteWatchlist}
+              onAddSymbol={addToWatchlist}
+              onRemoveSymbol={removeFromWatchlist}
             />
           )}
           {page === "trending" && <TrendingTab onSelect={selectCompany} />}
