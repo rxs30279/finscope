@@ -119,9 +119,14 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
   const sym = currSym(fcur);
 
   // Only link out to Dividend Data for actual payers — the page is a dead end for
-  // non-dividend stocks. Treat either a positive yield or a positive DPS as paying.
+  // non-dividend stocks. Treat a positive yield or DPS as paying, and fall back to
+  // historical cash dividends paid (a negative cash outflow in any recent annual
+  // period). The fallback covers payers like ITH whose yfinance yield never made
+  // it into the snapshot, so they'd otherwise look like non-payers.
   const paysDividend =
-    (snap?.dividend_yield ?? 0) > 0 || (snap?.dividends_per_share ?? 0) > 0;
+    (snap?.dividend_yield ?? 0) > 0 ||
+    (snap?.dividends_per_share ?? 0) > 0 ||
+    annual.some((r) => (r.dividends_paid ?? 0) < 0);
 
   const annualChart = annual.map((r) => ({
     year: r.period_end_date?.slice(0, 4),
