@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { API } from '../utils';
+import { useIsMobile } from '../useMediaQuery';
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
@@ -80,6 +81,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const [consensusFilter, setConsensusFilter] = useState('All');
   const [sortKey, setSortKey] = useState('buy_pct');
   const [sortDir, setSortDir] = useState('desc');
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     setLoading(true);
@@ -233,7 +235,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
       </div>
 
       {/* Signals board */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 24 }}>
         {[
           { title: 'Top Bullish', stocks: topBullish, accent: '#10b981' },
           { title: 'Top Bearish', stocks: topBearish, accent: '#ef4444' },
@@ -295,7 +297,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
       </div>
 
       {/* Main layout: table + change feed */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 320px', gap: 16, alignItems: 'start' }}>
 
         {/* Full table */}
         <div style={S.card}>
@@ -329,7 +331,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
             </div>
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #2a2a2a' }}>
                   <th style={S.th}>Symbol</th>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { API } from '../utils';
+import { useIsMobile } from '../useMediaQuery';
 
 const PHASE_ANGLES  = { Recovery: 45, Expansion: 135, Slowdown: 225, Contraction: 315 };
 const PHASE_COLOURS = { Recovery:'#10b981', Expansion:'#60a5fa', Slowdown:'#f59e0b', Contraction:'#ef4444' };
@@ -37,10 +38,10 @@ function CycleWheel({ phase }) {
   );
 }
 
-function SectorHeatmap({ sectors }) {
+function SectorHeatmap({ sectors, isMobile }) {
   if (!sectors?.length) return null;
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6 }}>
+    <div style={{ display:'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(3,1fr)', gap:6 }}>
       {sectors.map(s => {
         const rank = s.rank;
         const isTop = rank <= 4;
@@ -68,7 +69,7 @@ function RSTable({ sectors }) {
     padding:'2px 7px', borderRadius:2, fontSize:9,
   });
   return (
-    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11, fontFamily:'monospace' }}>
+    <table style={{ width:'100%', minWidth:460, borderCollapse:'collapse', fontSize:11, fontFamily:'monospace' }}>
       <thead>
         <tr style={{ borderBottom:'1px solid #2a2a2a' }}>
           {['Rank','Sector','RS Score','Trend','Breadth','Signal'].map(h => (
@@ -129,6 +130,7 @@ export default function RotationTab({ refreshKey }) {
   const [rotation, setRotation] = useState([]);
   const [cycle, setCycle]       = useState(null);
   const [loading, setLoading]   = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     setLoading(true);
@@ -158,10 +160,10 @@ export default function RotationTab({ refreshKey }) {
   return (
     <div>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Sector Rotation</h2>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:16 }}>
+      <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap:16, marginBottom:16 }}>
         <div style={card}>
           <div style={title}>Sector Heatmap — RS Rank</div>
-          <SectorHeatmap sectors={rotation} />
+          <SectorHeatmap sectors={rotation} isMobile={isMobile} />
         </div>
         <div style={card}>
           <div style={title}>Business Cycle</div>
@@ -194,7 +196,9 @@ export default function RotationTab({ refreshKey }) {
       </div>
       <div style={card}>
         <div style={title}>RS Ranking Table</div>
-        <RSTable sectors={rotation} />
+        <div style={{ overflowX:'auto' }}>
+          <RSTable sectors={rotation} />
+        </div>
       </div>
     </div>
   );

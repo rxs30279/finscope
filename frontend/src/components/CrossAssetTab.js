@@ -4,6 +4,7 @@ import {
   Tooltip, ResponsiveContainer
 } from 'recharts';
 import { API } from '../utils';
+import { useIsMobile } from '../useMediaQuery';
 
 function AssetCard({ label, item, decimals = 2, prefix = '', suffix = '' }) {
   if (!item) return (
@@ -246,6 +247,7 @@ export default function CrossAssetTab({ refreshKey }) {
   const [data, setData]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [giltData, setGiltData] = useState(null);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     setLoading(true);
@@ -267,7 +269,7 @@ export default function CrossAssetTab({ refreshKey }) {
   return (
     <div>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Cross-Asset</h2>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12 }}>
+      <div style={{ display:'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(3,1fr)', gap:12 }}>
         {loading ? (
           [0,1,2,3].map(i => (
             <div key={i} style={{ ...skelStyle, padding:16, height:80 }}>
@@ -290,7 +292,7 @@ export default function CrossAssetTab({ refreshKey }) {
           UK Gilt Yield Curve
         </div>
         {giltData ? (
-          <div style={{ display:'grid', gridTemplateColumns:'2fr 3fr', gap:16 }}>
+          <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 3fr', gap:16 }}>
             <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 }}>
               <GiltSnapshotChart snapshot={giltData.snapshot} />
             </div>
@@ -299,7 +301,7 @@ export default function CrossAssetTab({ refreshKey }) {
             </div>
           </div>
         ) : (
-          <div style={{ display:'grid', gridTemplateColumns:'2fr 3fr', gap:16 }}>
+          <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 3fr', gap:16 }}>
             <div style={{ ...skelStyle, height:230 }} />
             <div style={{ ...skelStyle, height:230 }} />
           </div>

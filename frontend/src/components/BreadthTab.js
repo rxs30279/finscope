@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { API } from '../utils';
+import { useIsMobile } from '../useMediaQuery';
 
 
 function BreadthGauge({ value }) {
@@ -39,6 +40,7 @@ function BreadthGauge({ value }) {
 export default function BreadthTab({ refreshKey }) {
   const [data, setData]     = useState(null);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     setLoading(true);
@@ -58,7 +60,7 @@ export default function BreadthTab({ refreshKey }) {
   return (
     <div>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Market Breadth</h2>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:16, marginBottom:16 }}>
+      <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap:16, marginBottom:16 }}>
 
         {/* Gauge */}
         <div style={card}>

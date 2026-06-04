@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { API } from '../utils';
+import { useIsMobile } from '../useMediaQuery';
 
 function fgColor(score) {
   if (score >= 75) return '#10b981';
@@ -12,6 +13,7 @@ function fgColor(score) {
 export default function FearGreedTab({ refreshKey }) {
   const [fg, setFg]         = useState(null);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     setLoading(true);
@@ -69,7 +71,7 @@ export default function FearGreedTab({ refreshKey }) {
         </div>
 
         {/* Component cards */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(6,1fr)', gap:8 }}>
+        <div style={{ display:'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(6,1fr)', gap:8 }}>
           {COMPONENT_ORDER.map(key => {
             const c = fg.components?.[key];
             if (!c) return null;

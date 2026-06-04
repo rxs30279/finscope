@@ -4,6 +4,7 @@ import {
   Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { API, fmt } from '../utils';
+import { useIsMobile } from '../useMediaQuery';
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
@@ -131,6 +132,7 @@ function PriceTargetRange({ row }) {
 export default function AnalystTab({ symbol }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     setLoading(true);
@@ -237,7 +239,7 @@ export default function AnalystTab({ symbol }) {
       {/* Panel 4: Estimates & revisions */}
       <div style={cardStyle}>
         <p style={titleStyle}>Estimates & Revisions</p>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 20 }}>
           <div>
             <div style={{ fontSize: 10, color: '#555', marginBottom: 10, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>EPS Estimates</div>
             {[
