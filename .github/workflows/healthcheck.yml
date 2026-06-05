@@ -1,9 +1,9 @@
 name: healthcheck
 
 # Daily end-to-end health check: verifies every data pipeline is still landing
-# fresh rows AND that the Vercel API + Render worker respond. The script exits
-# non-zero on any FAIL, so this workflow goes red and GitHub's built-in
-# "scheduled workflow failed" email is the alert. See backend/healthcheck.py.
+# fresh rows AND that the Vercel API responds. The script exits non-zero on any
+# FAIL, so this workflow goes red and GitHub's built-in "scheduled workflow
+# failed" email is the alert. See backend/healthcheck.py.
 
 on:
   schedule:
@@ -30,7 +30,6 @@ jobs:
       DB_NAME:         ${{ secrets.DB_NAME }}
       DB_USER:         ${{ secrets.DB_USER }}
       DB_PASSWORD:     ${{ secrets.DB_PASSWORD }}
-      RENDER_BASE_URL: ${{ secrets.RENDER_BASE_URL }}
       # VERCEL_BASE_URL defaults in code; override here only if the deploy moves.
     steps:
       - uses: actions/checkout@v4

@@ -1,7 +1,7 @@
 """End-to-end health check for the stock screener.
 
 Verifies, in one pass, that every data pipeline is still landing fresh rows AND
-that the two live services respond. Designed to run as a scheduled GitHub
+that the live Vercel API responds. Designed to run as a scheduled GitHub
 Actions workflow (see .github/workflows/healthcheck.yml): it prints an aligned
 PASS/WARN/FAIL table and exits non-zero if ANY check FAILs, so GitHub's built-in
 "scheduled workflow failed" email is the alert — no extra alerting code.
@@ -16,7 +16,10 @@ What it checks
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
     - Vercel API       GET {VERCEL_BASE_URL}/api/filters
-    - Render worker    GET {RENDER_BASE_URL}/health (+ surfaces last-run errors)
+
+  The RNS / prices / scores pipelines run as Render cron jobs (no HTTP endpoint
+  to ping); their success is covered by the data-freshness checks above plus
+  Render's own per-run red/green status and failure emails.
 
 Known gap (not checked): the email digest leaves no DB trace — Resend is the
 source of truth — and hitting /api/digest would actually send mail, so this
@@ -24,7 +27,6 @@ script does not verify it.
 
 Env vars (same DB_* set the refresh workflows already use):
   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-  RENDER_BASE_URL  — Render worker base URL, e.g. https://xxx.onrender.com
   VERCEL_BASE_URL  — optional, defaults to https://finscope-roan.vercel.app
 
 Usage:
@@ -55,7 +57,6 @@ DB_CONFIG = {
 }
 
 VERCEL_BASE_URL = os.environ.get("VERCEL_BASE_URL", "https://finscope-roan.vercel.app").rstrip("/")
-RENDER_BASE_URL = os.environ.get("RENDER_BASE_URL", "").rstrip("/")
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
@@ -215,40 +216,6 @@ def run_http_checks() -> None:
         if not isinstance(body, dict):
             return WARN, f"200 but unexpected body type {type(body).__name__}"
         return PASS, f"200 OK, {len(body)} filter keys"
-
-    if not RENDER_BASE_URL:
-        record("render.worker", WARN, "RENDER_BASE_URL not set - skipped")
-        return
-
-    @check("render.worker")
-    def _render_health():
-        code, body = _http_get(f"{RENDER_BASE_URL}/health", timeout=60)
-        if code != 200:
-            return FAIL, f"HTTP {code} from /health"
-        status = body.get("status") if isinstance(body, dict) else None
-        if status != "ok":
-            return FAIL, f"200 but status={status!r}"
-        return PASS, "200 OK, status=ok"
-
-    # Bonus: surface the last in-memory error from each background job, if any.
-    @check("render.last_runs")
-    def _render_runs():
-        notes = []
-        worst = PASS
-        for path in ("/api/prices/status", "/api/rns/status"):
-            try:
-                code, body = _http_get(f"{RENDER_BASE_URL}{path}", timeout=60)
-            except Exception as e:
-                notes.append(f"{path}: {type(e).__name__}")
-                worst = max(worst, WARN, key=[PASS, WARN, FAIL].index)
-                continue
-            err = body.get("error") if isinstance(body, dict) else None
-            if err:
-                notes.append(f"{path}: error={err}")
-                worst = max(worst, WARN, key=[PASS, WARN, FAIL].index)
-            else:
-                notes.append(f"{path}: clean")
-        return worst, "; ".join(notes)
 
 
 # ── Reporting ─────────────────────────────────────────────────────────────────
