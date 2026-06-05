@@ -1,20 +1,21 @@
-services:
-  # ── RNS Pipeline Worker ──────────────────────────────────────────────────────
-  # Runs the full RNS pipeline (ingest → summaries → LLM rank) when triggered
-  # by cron-job.org. Deployed as a lightweight FastAPI web service on Render's
-  # free tier. Stays warm because cron-job.org pings it every 15 min during the
-  # RNS drop window.
-  - type: web
-    name: finscope-rns-worker
-    runtime: python
-    repo: https://github.com/rxs30279/finscope
-    branch: main
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.render_app:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+# Render Blueprint — FinScope scheduled pipelines.
+#
+# These are `type: cron` jobs, not a web service. Each one boots a fresh
+# instance on schedule, runs ONE command to completion, then exits — billed only
+# for the minutes it runs. This replaces the old always-on web service (Starter,
+# ~$6.65/mo whether busy or idle) + the external cron-job.org triggers.
+#
+# Why cron instead of a free web service: a free web service spins down on
+# inactivity, which (a) 503s the trigger during cold start and (b) can kill a
+# background pipeline thread mid-run. A cron job has no inbound traffic and no
+# "idle" concept, so neither failure mode exists. See backend/run_*.py.
+#
+# All schedules are UTC. Secrets (sync: false) are set once in the dashboard via
+# the shared env group below.
+
+envVarGroups:
+  - name: finscope-shared
     envVars:
-      - key: CRON_AUTH_TOKEN
-        sync: false # set in Render dashboard
       - key: DB_HOST
         sync: false
       - key: DB_NAME
@@ -29,5 +30,66 @@ services:
         sync: false
       - key: DEEPSEEK_MODEL
         value: deepseek-chat
-      - key: ALLOWED_ORIGINS
-        value: "*"
+
+services:
+  # ── RNS pipeline — drop window ───────────────────────────────────────────────
+  # Every 15 min through the morning RNS release window. Empty runs are cheap:
+  # ingest stops early on known rows and the LLM only fires on pending rows.
+  # (The 15-min cadence used to double as a keep-warm ping; that's no longer
+  # needed for cron, so this can be relaxed to */30 if you want fewer boots.)
+  - type: cron
+    name: finscope-rns-window
+    runtime: python
+    repo: https://github.com/rxs30279/finscope
+    branch: main
+    plan: starter # resources while running; billed per run-minute only
+    schedule: "*/15 6-9 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python backend/run_rns.py
+    envVars:
+      - fromGroup: finscope-shared
+
+  # ── RNS pipeline — catch-up slots ────────────────────────────────────────────
+  # Final morning slot + afternoon catch-ups (was `0 10` and `0 16,17`).
+  - type: cron
+    name: finscope-rns-catchup
+    runtime: python
+    repo: https://github.com/rxs30279/finscope
+    branch: main
+    plan: starter
+    schedule: "0 10,16,17 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python backend/run_rns.py
+    envVars:
+      - fromGroup: finscope-shared
+
+  # ── Daily price refresh + score rebuild ──────────────────────────────────────
+  # 17:00 UTC, after London close. Fetches the universe then rebuilds
+  # screener_scores. This is the job whose 503 cold-start failure on Free proved
+  # the web service couldn't go free; as a cron it runs to completion every time.
+  - type: cron
+    name: finscope-prices
+    runtime: python
+    repo: https://github.com/rxs30279/finscope
+    branch: main
+    plan: starter
+    schedule: "0 17 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python backend/run_prices.py
+    envVars:
+      - fromGroup: finscope-shared
+
+  # ── Weekly score rebuild (safety net) ────────────────────────────────────────
+  # Scores are normally rebuilt nightly by finscope-prices; this is a weekly
+  # backstop and a hook you can trigger manually after a financials update.
+  - type: cron
+    name: finscope-scores
+    runtime: python
+    repo: https://github.com/rxs30279/finscope
+    branch: main
+    plan: starter
+    schedule: "30 18 * * 0" # Sundays 18:30 UTC
+    buildCommand: pip install -r requirements.txt
+    startCommand: python backend/run_scores.py
+    envVars:
+      - fromGroup: finscope-shared
