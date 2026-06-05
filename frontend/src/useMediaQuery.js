@@ -17,6 +17,13 @@ export function useIsMobile() {
   return useMediaQuery("(max-width: 767px)");
 }
 
+// Desktop, but not wide enough to comfortably fit the full top nav (logo +
+// 8 menu groups + utility buttons + search). Used to tighten nav spacing and
+// drop non-essential items so nothing overruns the right edge on laptops.
+export function useIsNarrowDesktop() {
+  return useMediaQuery("(min-width: 768px) and (max-width: 1500px)");
+}
+
 export function useIsTablet() {
   return useMediaQuery("(min-width: 768px) and (max-width: 1023px)");
 }

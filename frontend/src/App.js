@@ -29,7 +29,7 @@ import {
   loadChartPrefs,
   saveChartPrefs,
 } from "./utils";
-import { useIsMobile } from "./useMediaQuery";
+import { useIsMobile, useIsNarrowDesktop } from "./useMediaQuery";
 import Sidebar from "./components/Sidebar";
 import RotationTab from "./components/RotationTab";
 import BreadthTab from "./components/BreadthTab";
@@ -3202,6 +3202,7 @@ function Screener({
 // ── App Shell ─────────────────────────────────────────────────────────────────
 export default function App() {
   const isMobile = useIsMobile();
+  const isNarrow = useIsNarrowDesktop();
   const [page, setPage] = useState(() => {
     // Deep-link support: emails point at /?tab=subscribe.
     if (typeof window === "undefined") return "screener";
@@ -3550,7 +3551,7 @@ export default function App() {
             color: "#f97316",
             letterSpacing: 2,
             textTransform: "uppercase",
-            marginRight: isMobile ? 8 : 32,
+            marginRight: isMobile ? 8 : isNarrow ? 12 : 32,
             cursor: "pointer",
             padding: "4px 10px",
             borderRadius: 4,
@@ -3572,6 +3573,7 @@ export default function App() {
                     key={g.id}
                     style={{
                       ...S.navBtn,
+                      ...(isNarrow ? { padding: "6px 8px" } : {}),
                       ...(page === g.id ? S.navBtnActive : {}),
                     }}
                     onClick={() => setPage(g.id)}
@@ -3591,6 +3593,7 @@ export default function App() {
                   <button
                     style={{
                       ...S.navBtn,
+                      ...(isNarrow ? { padding: "6px 8px" } : {}),
                       ...(groupActive ? S.navBtnActive : {}),
                       display: "flex",
                       alignItems: "center",
@@ -3671,7 +3674,8 @@ export default function App() {
             marginLeft: "auto",
             display: "flex",
             alignItems: "center",
-            gap: isMobile ? 6 : 12,
+            gap: isMobile ? 6 : isNarrow ? 8 : 12,
+            minWidth: 0,
           }}
         >
           {/* Tool manual — served from the DB via /api/help-doc */}
@@ -3695,7 +3699,7 @@ export default function App() {
           >
             {isMobile ? "?" : "Tool Manual"}
           </a>
-          {!isMobile && lastUpdated && (
+          {!isMobile && !isNarrow && lastUpdated && (
             <span
               style={{ color: "#444", fontSize: 10, fontFamily: "monospace" }}
             >
@@ -3750,9 +3754,11 @@ export default function App() {
               {priceToast.msg}
             </span>
           )}
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative", minWidth: 0 }}>
             <input
-              placeholder={isMobile ? "Search…" : "Search ticker or company…"}
+              placeholder={
+                isMobile || isNarrow ? "Search…" : "Search ticker or company…"
+              }
               value={searchQ}
               onChange={(e) => {
                 doSearch(e.target.value);
@@ -3762,7 +3768,8 @@ export default function App() {
               onBlur={() => setTimeout(() => setShowSearch(false), 200)}
               style={{
                 ...S.searchInput,
-                width: isMobile ? 120 : 260,
+                width: isMobile ? 120 : isNarrow ? 160 : 260,
+                maxWidth: "100%",
                 fontSize: isMobile ? 11 : 13,
               }}
             />

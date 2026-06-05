@@ -67,6 +67,25 @@ function fmtTime(iso) {
   });
 }
 
+// Same data as fmtTime but split into date/time parts so the table's Time
+// column can stack them on two lines (narrower column). Same-day rows have no
+// date part — just the time.
+function fmtTimeParts(iso) {
+  if (!iso) return { date: null, time: "—" };
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = d.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (sameDay) return { date: null, time };
+  const date = d.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+  });
+  return { date, time };
+}
+
 function fmtCurrency(v) {
   if (v == null) return "—";
   const abs = Math.abs(v);
@@ -405,7 +424,15 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const renderRow = (r) => (
     <tr key={r.id} style={{ borderBottom: "1px solid #141414" }}>
       <td style={{ ...S.td, color: "#666", whiteSpace: "nowrap" }}>
-        {fmtTime(r.published_at)}
+        {(() => {
+          const { date, time } = fmtTimeParts(r.published_at);
+          return (
+            <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.35 }}>
+              {date && <span style={{ color: "#555" }}>{date}</span>}
+              <span>{time}</span>
+            </div>
+          );
+        })()}
       </td>
       <td style={S.td}>
         <TierBadge tier={r.tier} />
