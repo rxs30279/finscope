@@ -45,13 +45,13 @@ import SubscribeTab from "./components/SubscribeTab";
 import WatchlistTab from "./components/WatchlistTab";
 import HeatmapTab from "./components/HeatmapTab";
 
-function MetricCard({ label, value, color }) {
+function MetricCard({ label, value, color, compact }) {
   return (
     <div
       style={{
         background: "#141414",
         borderRadius: 2,
-        padding: "14px 18px",
+        padding: compact ? "7px 10px" : "14px 18px",
         border: "1px solid #2a2a2a",
       }}
     >
@@ -59,7 +59,7 @@ function MetricCard({ label, value, color }) {
         style={{
           fontSize: 10,
           color: "#666",
-          marginBottom: 6,
+          marginBottom: compact ? 2 : 6,
           textTransform: "uppercase",
           letterSpacing: 1,
           fontFamily: "monospace",
@@ -69,7 +69,7 @@ function MetricCard({ label, value, color }) {
       </div>
       <div
         style={{
-          fontSize: 18,
+          fontSize: compact ? 15 : 18,
           fontFamily: "monospace",
           fontWeight: 700,
           color: color || "#e5e5e5",
@@ -2001,28 +2001,32 @@ function TrendingProfile({ symbol, onOpenFull }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fill,minmax(120px,1fr))",
-          gap: 8,
+          gridTemplateColumns: "repeat(auto-fill,minmax(92px,1fr))",
+          gap: 6,
         }}
       >
-        <MetricCard label="P/E" value={fmt(snap.price_to_earnings, "ratio")} />
-        <MetricCard label="P/B" value={fmt(snap.price_to_book, "ratio")} />
+        <MetricCard compact label="P/E" value={fmt(snap.price_to_earnings, "ratio")} />
+        <MetricCard compact label="P/B" value={fmt(snap.price_to_book, "ratio")} />
         <MetricCard
+          compact
           label="ROE"
           value={fmt(snap.roe, "pct")}
           color={gc(snap.roe)}
         />
         <MetricCard
+          compact
           label="Rev Growth"
           value={fmt(snap.revenue_growth, "pct")}
           color={gc(snap.revenue_growth)}
         />
         <MetricCard
+          compact
           label="Net Margin"
           value={fmt(snap.net_income_margin, "pct")}
           color={gc(snap.net_income_margin)}
         />
         <MetricCard
+          compact
           label="Risk"
           value={snap.risk_score == null ? "—" : snap.risk_score}
           color={
