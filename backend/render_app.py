@@ -297,6 +297,18 @@ def _run_price_refresh():
     try:
         result = refresh_prices()
         print(f"[render] price refresh done — {result}")
+        # Rebuild the precomputed screener scores now that fresh prices have landed
+        # (momentum/risk read price_history). Imported lazily so the render service
+        # doesn't pull in the full API at startup.
+        try:
+            from main import compute_and_store_scores
+
+            scores = compute_and_store_scores()
+            print(f"[render] screener scores rebuilt — {scores}")
+            result["scores"] = scores
+        except Exception as se:
+            print(f"[render] screener score rebuild FAILED — {type(se).__name__}: {se}")
+            traceback.print_exc()
         _mem("price_refresh", "end", rows_added=result.get("rows_added"))
         with _state_lock:
             _price_state["result"] = result
@@ -350,6 +362,31 @@ def run_price_refresh(token: str = Query(...)):
         "status": "started",
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/api/scores/run")
+def run_scores(token: str = Query(...)):
+    """Rebuild the precomputed screener_scores table on demand.
+
+    Normally runs automatically at the end of the daily price refresh; this
+    endpoint lets you trigger it manually (e.g. after a financials update).
+    Requires ?token=<CRON_AUTH_TOKEN>. Runs synchronously — it's a single pass
+    over the universe and well within cron-job.org's timeout.
+    """
+    if _CRON_TOKEN and token != _CRON_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    from main import compute_and_store_scores
+
+    try:
+        result = compute_and_store_scores()
+        print(f"[render] screener scores rebuilt (manual) — {result}")
+        return {"status": "ok", **result}
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        print(f"[render] manual score rebuild FAILED — {error_msg}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.get("/api/prices/status")

@@ -612,6 +612,80 @@ def _attach_risk_score(results):
     return results
 
 
+def compute_and_store_scores():
+    """Recompute the heavy per-symbol scores for the whole universe and upsert
+    them into screener_scores.
+
+    Run once daily (after the price refresh). It carries the four expensive
+    queries that /api/screener used to fire on every cache miss — momentum,
+    Piotroski and risk (annual_financials + price_history scans) — off the
+    request path. The endpoint then serves these via a single LEFT JOIN.
+
+    Momentum is percentile-ranked across this full universe, so a stock's score
+    no longer shifts with the active filter (it used to rank within the filtered
+    result set). Returns a summary dict.
+    """
+    universe = query(
+        """
+        SELECT m.symbol, m.sector,
+               t.market_cap, t.revenue, t.operating_margin, t.price_to_book,
+               t.roe, t.roe_median
+        FROM ttm_financials t
+        JOIN company_metadata m ON m.symbol = t.company_symbol
+        ORDER BY t.market_cap DESC NULLS LAST
+        """
+    )
+    if not universe:
+        return {"symbols": 0, "stored": 0}
+
+    # Each scorer runs one bulk query over the full universe — once, here.
+    _attach_momentum(universe)
+    _attach_piotroski(universe)
+    _attach_risk_score(universe)
+
+    rows = [
+        (
+            r["symbol"],
+            r.get("momentum_score"),
+            r.get("piotroski_score"),
+            r.get("risk_score"),
+            r.get("altman_z"),
+            r.get("volatility_annualised"),
+        )
+        for r in universe
+    ]
+
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO screener_scores"
+            " (symbol, momentum_score, piotroski_score, risk_score, altman_z,"
+            "  volatility_annualised, computed_at)"
+            " VALUES %s"
+            " ON CONFLICT (symbol) DO UPDATE SET"
+            "   momentum_score        = EXCLUDED.momentum_score,"
+            "   piotroski_score       = EXCLUDED.piotroski_score,"
+            "   risk_score            = EXCLUDED.risk_score,"
+            "   altman_z              = EXCLUDED.altman_z,"
+            "   volatility_annualised = EXCLUDED.volatility_annualised,"
+            "   computed_at           = now()",
+            rows,
+            template="(%s, %s, %s, %s, %s, %s, now())",
+            page_size=1000,
+        )
+        conn.commit()
+        return {"symbols": len(universe), "stored": len(rows)}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
 _screener_cache: dict = {}
 _SCREENER_TTL = 900  # 15 minutes — underlying data only refreshes once/day
 
@@ -699,6 +773,8 @@ def screener(
                t.net_margin_median, t.roe_median, t.roic_median,
                a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score,
                a.eps_growth_next_yr, a.eps_est_current_yr,
+               s.momentum_score, s.piotroski_score, s.risk_score,
+               s.altman_z, s.volatility_annualised,
                COALESCE(p.latest_close, t.period_end_price) AS current_price
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
@@ -714,19 +790,20 @@ def screener(
             FROM price_history
             ORDER BY symbol, date DESC
         ) p ON p.symbol = m.symbol
+        LEFT JOIN screener_scores s ON s.symbol = m.symbol
         WHERE {' AND '.join(wheres)}
         ORDER BY t.market_cap DESC NULLS LAST
         LIMIT %s
     """
     results = query(sql, params)
+    # momentum / piotroski / risk / altman_z / volatility now come precomputed via
+    # the screener_scores JOIN (see compute_and_store_scores). quality_score and
+    # pegy stay inline — they read only columns already in this query, no extra DB hit.
     for r in results:
         r["quality_score"] = _quality_score(r)
     _attach_pegy(results)
-    _attach_momentum(results)
-    _attach_piotroski(results)
-    final = _attach_risk_score(results)
-    _screener_cache[cache_key] = (final, now)
-    return final
+    _screener_cache[cache_key] = (results, now)
+    return results
 
 
 _quote_cache: dict = {}
