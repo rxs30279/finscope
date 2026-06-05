@@ -1,0 +1,49 @@
+name: healthcheck
+
+# Daily end-to-end health check: verifies every data pipeline is still landing
+# fresh rows AND that the Vercel API + Render worker respond. The script exits
+# non-zero on any FAIL, so this workflow goes red and GitHub's built-in
+# "scheduled workflow failed" email is the alert. See backend/healthcheck.py.
+
+on:
+  schedule:
+    # 11:00 UTC on weekdays — after the overnight price refresh, analysts
+    # (02:17), financials (03:30) and the morning RNS window (06:00–10:00) have
+    # all had time to land.
+    - cron: '0 11 * * 1-5'
+  workflow_dispatch:
+
+concurrency:
+  group: healthcheck
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DB_HOST:         ${{ secrets.DB_HOST }}
+      DB_PORT:         ${{ secrets.DB_PORT }}
+      DB_NAME:         ${{ secrets.DB_NAME }}
+      DB_USER:         ${{ secrets.DB_USER }}
+      DB_PASSWORD:     ${{ secrets.DB_PASSWORD }}
+      RENDER_BASE_URL: ${{ secrets.RENDER_BASE_URL }}
+      # VERCEL_BASE_URL defaults in code; override here only if the deploy moves.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run health check
+        working-directory: backend
+        run: python healthcheck.py
