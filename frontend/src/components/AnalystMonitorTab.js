@@ -296,8 +296,10 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
         ))}
       </div>
 
-      {/* Main layout: table + change feed */}
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 320px', gap: 16, alignItems: 'start' }}>
+      {/* Main layout: table + change feed — desktop only. On mobile we show just
+          the Top Bullish / Top Bearish boxes above and drop the rest. */}
+      {!isMobile && (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
 
         {/* Full table */}
         <div style={S.card}>
@@ -508,6 +510,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
         </div>
 
       </div>
+      )}
     </div>
   );
 }

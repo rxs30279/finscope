@@ -57,6 +57,22 @@ export default function BreadthTab({ refreshKey }) {
 
   const tooltipStyle = { background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:11, color:'#e5e5e5', fontFamily:'monospace' };
 
+  // A/D line x-axis: with ~20 points Recharts crowds the date labels (and they
+  // overlap badly on mobile). Pick a fixed number of evenly-spaced ticks pulled
+  // from the actual data — fewer on mobile — so labels stay legible at any width.
+  const adLine = data?.ad_line || [];
+  const TICK_COUNT = isMobile ? 4 : 7;
+  const adTicks =
+    adLine.length <= TICK_COUNT
+      ? adLine.map(d => d.date)
+      : Array.from({ length: TICK_COUNT }, (_, i) =>
+          adLine[Math.round((i * (adLine.length - 1)) / (TICK_COUNT - 1))].date
+        );
+  const fmtAdTick = (d) => {
+    const dt = new Date(d);
+    return isNaN(dt) ? d : dt.toLocaleDateString('en-GB', { day:'numeric', month:'short' });
+  };
+
   return (
     <div>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Market Breadth</h2>
@@ -109,7 +125,7 @@ export default function BreadthTab({ refreshKey }) {
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={data.ad_line} margin={{ top:5, right:10, bottom:5, left:0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-              <XAxis dataKey="date" tick={{ fontSize:9, fill:'#64748b', fontFamily:'monospace' }} tickFormatter={d => d.slice(5)} />
+              <XAxis dataKey="date" ticks={adTicks} interval={0} tickFormatter={fmtAdTick} tick={{ fontSize:9, fill:'#64748b', fontFamily:'monospace' }} />
               <YAxis tick={{ fontSize:9, fill:'#64748b', fontFamily:'monospace' }} />
               <Tooltip contentStyle={tooltipStyle} />
               <ReferenceLine y={0} stroke="#333" />

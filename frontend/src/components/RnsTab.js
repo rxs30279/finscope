@@ -421,7 +421,93 @@ export default function RnsTab({ refreshKey, onSelect }) {
       </div>
     );
 
-  const renderRow = (r) => (
+  // On mobile the full multi-column row is wider than the screen and the
+  // headline spills off the right. Stack it instead: a compact meta line
+  // (time · tier · ticker · company) with the headline and AI thesis beneath.
+  const renderMobileRow = (r) => {
+    const { date, time } = fmtTimeParts(r.published_at);
+    return (
+      <tr key={r.id} style={{ borderBottom: "1px solid #1a1a1a" }}>
+        <td style={{ ...S.td, padding: "10px 8px" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 6,
+            }}
+          >
+            <span style={{ color: "#666", fontSize: 11 }}>
+              {date ? `${date} ` : ""}
+              {time}
+            </span>
+            <TierBadge tier={r.tier} />
+            {r.ticker &&
+              (r.symbol ? (
+                <span
+                  onClick={() => onSelect?.(r.symbol)}
+                  title={`View ${r.symbol}`}
+                  style={{ color: "#e5e5e5", fontWeight: 700, cursor: "pointer" }}
+                >
+                  {r.ticker}
+                  <span
+                    style={{
+                      color: "#6366f1",
+                      marginLeft: 4,
+                      fontWeight: 400,
+                      fontSize: 10,
+                    }}
+                  >
+                    ↗
+                  </span>
+                </span>
+              ) : (
+                <span style={{ color: "#e5e5e5", fontWeight: 700 }}>
+                  {r.ticker}
+                </span>
+              ))}
+            {r.company_name && (
+              <span style={{ color: "#94a3b8", fontSize: 11, overflowWrap: "anywhere" }}>
+                {r.company_name}
+              </span>
+            )}
+          </div>
+          <a
+            href={r.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: "#e5e5e5",
+              textDecoration: "none",
+              borderBottom: "1px dotted #3a3a3a",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {r.headline}
+          </a>
+          <KeywordTags hits={r.keyword_hits} />
+          {r.llm_thesis && (
+            <div
+              style={{ marginTop: 6, color: "#888", fontSize: 11, lineHeight: 1.4 }}
+            >
+              {r.llm_thesis}
+              {r.llm_risks && (
+                <div style={{ marginTop: 3, color: "#5a5a5a", fontSize: 10 }}>
+                  <span style={{ color: "#ef4444" }}>risk:</span> {r.llm_risks}
+                </div>
+              )}
+            </div>
+          )}
+        </td>
+      </tr>
+    );
+  };
+
+  const renderRow = (r) =>
+    isMobile ? (
+      renderMobileRow(r)
+    ) : (
     <tr key={r.id} style={{ borderBottom: "1px solid #141414" }}>
       <td style={{ ...S.td, color: "#666", whiteSpace: "nowrap" }}>
         {(() => {
@@ -568,7 +654,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
         <ActionPill action={r.llm_action} />
       </td>
     </tr>
-  );
+    );
 
   return (
     <div>
@@ -879,6 +965,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               <table
                 style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
               >
+                {!isMobile && (
                 <thead>
                   <tr style={{ borderBottom: "1px solid #2a2a2a" }}>
                     <th style={S.th}>Time</th>
@@ -927,6 +1014,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
                     </th>
                   </tr>
                 </thead>
+                )}
                 <tbody>{items.map(renderRow)}</tbody>
               </table>
             </div>
