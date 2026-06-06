@@ -43,6 +43,7 @@ import AnalyticsTab from "./components/AnalyticsTab";
 import NewsTab from "./components/NewsTab";
 import SubscribeTab from "./components/SubscribeTab";
 import DonateTab from "./components/DonateTab";
+import FeedbackTab from "./components/FeedbackTab";
 import WatchlistTab from "./components/WatchlistTab";
 import HeatmapTab from "./components/HeatmapTab";
 
@@ -4064,6 +4065,7 @@ export default function App() {
           )}
           {page === "subscribe" && <SubscribeTab />}
           {page === "donate" && <DonateTab />}
+          {page === "feedback" && <FeedbackTab />}
           {page === "company" && selectedSymbol && (
             <CompanyDetail
               symbol={selectedSymbol}

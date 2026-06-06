@@ -16,6 +16,7 @@ from rns import router as rns_router
 from rns_llm import router as rns_llm_router
 from news import router as news_router
 from subscribers import router as subscribers_router
+from feedback import router as feedback_router
 from email_rns_digest import main as run_digest
 
 load_dotenv()
@@ -36,6 +37,7 @@ app.include_router(rns_router)
 app.include_router(rns_llm_router)
 app.include_router(news_router)
 app.include_router(subscribers_router)
+app.include_router(feedback_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
