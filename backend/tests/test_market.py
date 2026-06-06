@@ -131,7 +131,7 @@ def test_cross_asset_returns_expected_keys(client):
         r = client.get("/api/market/cross-asset")
     assert r.status_code == 200
     data = r.json()
-    for key in ["gbpusd", "gilt_10y", "brent", "gold", "vftse", "gilt_vs_utilities"]:
+    for key in ["gbpusd", "brent", "gold", "gilt_vs_utilities"]:
         assert key in data, f"Missing key: {key}"
 
 def test_cross_asset_items_have_value_and_change(client):

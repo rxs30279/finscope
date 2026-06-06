@@ -236,6 +236,27 @@ def _get_prices():
     return _cached("prices", fetch)
 
 
+def _get_ftse_long():
+    """2-year ^FTSE close history, cached separately. Used only for the momentum
+    component so its scaling window covers a full year of gap readings (the 125-day MA
+    eats the first ~6 months, leaving too few points in the shared 1y fetch)."""
+    def fetch():
+        try:
+            hist = yf.Ticker(BENCHMARK_TICKERS["FTSE 100"]).history(
+                period="2y", auto_adjust=True
+            )
+            if hist.empty:
+                return None
+            col = hist["Close"]
+            if col.index.tz is not None:
+                col.index = col.index.tz_localize(None)
+            return col
+        except Exception:
+            return None
+
+    return _cached("ftse_long", fetch)
+
+
 # ── Cycle phase state (in-memory, manually set) ───────────────────────────────
 _cycle = {
     "phase": "Recovery",
@@ -279,6 +300,21 @@ def _zscore_to_score(series, current_val, clip=2.0):
     return round((z + clip) / (2 * clip) * 100)
 
 
+def _deviation_to_score(series, current_val, clip=2.0):
+    """Map current_val to 0-100 centred on ZERO (not the trailing mean), scaled by the
+    series' own volatility. Use for directional signals where the sign of current_val is
+    itself meaningful — e.g. price above its MA should read as greed (>50), below as fear
+    (<50), regardless of how extended it has been recently. Returns 50 on insufficient data."""
+    if len(series) < 20:
+        return 50
+    std = float(series.std())
+    if std == 0:
+        return 50
+    z = current_val / std
+    z = max(-clip, min(clip, z))
+    return round((z + clip) / (2 * clip) * 100)
+
+
 def _suggest_phase(score, trend):
     """Map F&G score + trend to a suggested cycle phase string."""
     if trend == "unknown":
@@ -305,24 +341,36 @@ def _compute_fear_greed():
     prices = _get_prices()
     components = {}
 
-    # 1. FTSE Momentum — FTSE 100 vs rolling 125-day MA
+    # 1. FTSE Momentum — FTSE 100 vs rolling 125-day MA.
+    # Scored on the SIGN of the gap (above MA = greed, below = fear), centred on a zero gap
+    # and scaled by the gap's own volatility — a directional trend read, not mean-reversion.
+    # Use 2y of ^FTSE so the volatility scale spans a full year of gap readings (the shared
+    # 1y fetch leaves only ~6 months after the 125-day MA); fall back to it if unavailable.
     ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
-    if ftse_ticker in prices.columns:
-        ftse = prices[ftse_ticker].dropna()
-        if len(ftse) >= 126:
-            roll_ma125 = ftse.rolling(125).mean()
-            momentum_series = ((ftse - roll_ma125) / roll_ma125).dropna()
-            if len(momentum_series) >= 20:
-                current_momentum = float(momentum_series.iloc[-1])
-                components["momentum"] = {
-                    "score": _zscore_to_score(momentum_series, current_momentum),
-                    "label": "FTSE Momentum",
-                    "value": round(current_momentum * 100, 2),
-                }
+    ftse_long = _get_ftse_long()
+    ftse = (
+        ftse_long.dropna()
+        if ftse_long is not None
+        else (prices[ftse_ticker].dropna() if ftse_ticker in prices.columns else None)
+    )
+    if ftse is not None and len(ftse) >= 126:
+        roll_ma125 = ftse.rolling(125).mean()
+        momentum_series = ((ftse - roll_ma125) / roll_ma125).dropna()
+        if len(momentum_series) >= 20:
+            current_momentum = float(momentum_series.iloc[-1])
+            scale_window = momentum_series.iloc[-252:]  # ~1 year of gap readings
+            components["momentum"] = {
+                "score": _deviation_to_score(scale_window, current_momentum),
+                "label": "FTSE Momentum",
+                "value": round(current_momentum * 100, 2),
+            }
     if "momentum" not in components:
         components["momentum"] = {"score": 50, "label": "FTSE Momentum", "value": None}
 
-    # 2. Market Breadth — % basket stocks above 50-day MA, z-score normalised
+    # 2. Market Breadth — % of basket stocks above their 50-day MA, scored directly.
+    # 50% participation (half the market above trend) is the natural neutral → score 50;
+    # broad participation reads as greed, narrow as fear. No trailing-mean normalisation,
+    # so the score reflects breadth in absolute terms rather than relative to recent norms.
     breadth_data = _compute_breadth()
     above_flags = {}
     for t in BREADTH_TICKERS:
@@ -336,27 +384,33 @@ def _compute_fear_greed():
         if len(breadth_series) >= 20:
             current_breadth = float(breadth_series.iloc[-1])
             components["breadth"] = {
-                "score": _zscore_to_score(breadth_series, current_breadth),
+                "score": max(0, min(100, round(current_breadth * 100))),
                 "label": "Market Breadth",
                 "value": round(current_breadth * 100, 1),
             }
     if "breadth" not in components:
         components["breadth"] = {"score": 50, "label": "Market Breadth", "value": None}
 
-    # 3. VIX — inverted (high VIX = fear = low score)
+    # 3. Implied volatility — VIX, inverted (high VIX = fear = low score).
+    # ^VIX is US-derived (S&P 500 options); used here as a global risk-appetite proxy as no
+    # free UK implied-vol index (VFTSE) exists. UK-specific vol is the Realised Vol component.
     if VIX_TICKER in prices.columns:
         vix = prices[VIX_TICKER].dropna()
         if len(vix) >= 20:
             current_vix = float(vix.iloc[-1])
             components["vix"] = {
                 "score": _zscore_to_score(-vix, -current_vix),
-                "label": "VIX",
+                "label": "Implied Vol (VIX)",
                 "value": round(current_vix, 2),
             }
     if "vix" not in components:
-        components["vix"] = {"score": 50, "label": "VIX", "value": None}
+        components["vix"] = {"score": 50, "label": "Implied Vol (VIX)", "value": None}
 
-    # 4. Safe Haven Demand — 20-day return spread: FTSE 100 vs UK gilt ETF
+    # 4. Safe Haven Demand — 20-day total-return spread: FTSE 100 vs UK gilt ETF (IGLT.L,
+    # all-maturity gilts). Centred on a ZERO spread (stocks and bonds neck-and-neck), scaled
+    # by the spread's volatility: stocks beating bonds = risk-on (greed), gilts winning =
+    # flight to safety (fear). Note a small structural greed lean from the equity risk premium
+    # is accepted, far smaller than the regime bias of a trailing-mean baseline.
     gilt_ticker = GILT_ETF_TICKER
     if ftse_ticker in prices.columns and gilt_ticker in prices.columns:
         ftse = prices[ftse_ticker].dropna()
@@ -366,7 +420,7 @@ def _compute_fear_greed():
             if len(spread) >= 20:
                 current_spread = float(spread.iloc[-1])
                 components["safe_haven"] = {
-                    "score": _zscore_to_score(spread, current_spread),
+                    "score": _deviation_to_score(spread, current_spread),
                     "label": "Safe Haven Demand",
                     "value": round(current_spread * 100, 2),
                 }
@@ -397,12 +451,15 @@ def _compute_fear_greed():
             "value": None,
         }
 
-    # 6. New Highs / Lows — % of stocks at 52w high minus % at 52w low, centred at 50
+    # 6. New Highs / Lows — % of stocks at 52w high minus % at 52w low, centred at 50.
+    # Multiplier of 100 (not 50): net ±25% of the universe reaches the extreme greed/fear
+    # bands. A ×50 scale left the gauge compressed in ~43–65 year-round (FTSE 100 rarely has
+    # more than ~30% net at new highs), so it never signalled real fear or greed.
     new_highs = breadth_data.get("new_highs", 0)
     new_lows = breadth_data.get("new_lows", 0)
     hl_universe = breadth_data.get("hl_universe", 0)
     if hl_universe > 0:
-        hl_score = round(50 + ((new_highs - new_lows) / hl_universe) * 50)
+        hl_score = round(50 + ((new_highs - new_lows) / hl_universe) * 100)
         hl_score = max(0, min(100, hl_score))
     else:
         hl_score = 50

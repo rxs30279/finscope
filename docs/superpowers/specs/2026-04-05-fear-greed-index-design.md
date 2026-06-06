@@ -11,19 +11,28 @@ Build a UK-focused Fear & Greed index using market data already available via yf
 
 ---
 
-## Components (5)
+## Components (6)
 
 Each component produces a score 0–100. The overall F&G score is the simple average.
 
+> **Revised 2026-06 (methodology review).** Four components were corrected so each is
+> anchored to a *meaningful neutral* rather than a trailing-mean baseline that drifts with the
+> regime (the old approach made e.g. a +1% gap above the MA read as Extreme Fear, and 50%
+> breadth read as Greed). VIX was relabelled honestly as a US-derived global proxy. See the
+> per-row notes below.
+
 | # | Component | Source | Scoring method |
 |---|---|---|---|
-| 1 | FTSE Momentum | FTSE 100 (`^FTSE`) vs 125-day MA | Z-score of rolling (price − MA125) / MA125 over 252 days, mapped to 0–100 |
-| 2 | Market Breadth | % basket stocks above 50-day MA | Direct: `breadth_pct × 100` |
-| 3 | VIX | `^VIX` level | Inverted z-score over 252 days (high VIX = low score) |
-| 4 | Safe Haven Demand | 20-day return: FTSE 100 vs UK 10Y gilt (`^TNGBP`) | Z-score of rolling spread over 252 days |
-| 5 | New Highs / Lows | new_highs / (new_highs + new_lows) from basket | Direct: `new_highs / total × 100`; 50 if no data |
+| 1 | FTSE Momentum | FTSE 100 (`^FTSE`, 2y) vs 125-day MA | **Deviation from zero gap**: `(price − MA125) / MA125`, scaled by ~1yr of the gap's volatility. Zero gap = 50, above MA = greed, below = fear. (Was a mean-relative z-score.) |
+| 2 | Market Breadth | % of FTSE 100 basket above 50-day MA | Direct: `breadth_pct × 100`. 50% participation = 50 (neutral). (Was a mean-relative z-score.) |
+| 3 | Implied Vol (VIX) | `^VIX` level | Inverted z-score vs trailing 1yr range (high VIX = low score). **US-derived (S&P 500 options)** — used as a global risk-appetite proxy; no free UK VFTSE exists. UK-specific vol is component 5. |
+| 4 | Safe Haven Demand | 20-day total-return spread: FTSE 100 vs UK gilt ETF (`IGLT.L`, all-maturity) | **Deviation from zero spread**, scaled by the spread's volatility. Stocks beating bonds = greed, gilts winning = fear. A small structural greed lean (equity risk premium) is accepted. (`^TNGBP` from the original spec does not exist on Yahoo; IGLT.L total return is the correct input for a return spread.) |
+| 5 | Realised Vol | 20-day annualised realised vol of FTSE 100 | Inverted z-score vs trailing 1yr range, `clip=3.0` (wider tail headroom). Genuinely UK; mean-relative framing is correct for a volatility measure (no absolute neutral). |
+| 6 | New Highs / Lows | net (52w highs − lows) / universe from basket | `50 + (net / universe) × 100`, clamped 0–100. Centred at 50; net ±25% of the universe reaches the extreme bands. (Multiplier was ×50, which left it compressed in ~43–65 year-round.) |
 
-**Z-score to 0–100 mapping:** `score = clip((z + 2) / 4 × 100, 0, 100)` — z of +2 or above = 100, z of −2 or below = 0.
+**Z-score to 0–100 mapping** (components 3, 5): `score = clip((z + 2) / 4 × 100, 0, 100)` — z of +2 or above = 100, z of −2 or below = 0. Component 5 uses `clip=3` (z of ±3 → 0/100).
+
+**Deviation-to-score mapping** (components 1, 4): identical to the z-score mapping but centred on **zero** (`z = value / std`) rather than the series mean — so the *sign* of the value is meaningful (above/below the neutral point), not just its rank vs recent history.
 
 ### Sentiment labels
 
