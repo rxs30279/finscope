@@ -2573,7 +2573,7 @@ function Screener({
           marginBottom: 4,
         }}
       >
-        Stock Screener
+        UK Stock Screener
       </h2>
       <div
         style={{
@@ -3357,6 +3357,23 @@ export default function App() {
     setSearchResults([]);
   };
 
+  // Top-level tab navigation that also records a browser history entry, so the
+  // Back/Forward buttons move between the tabs you actually visited rather than
+  // always snapping back to the screener. (Company detail manages its own
+  // history via selectCompany/goBack.)
+  const navigate = (p) => {
+    setMobileMenuOpen(false);
+    if (p === page) return;
+    setPage(p);
+    if (typeof window !== "undefined") {
+      const url =
+        p === "screener"
+          ? window.location.pathname + window.location.search
+          : `#${p}`;
+      window.history.pushState({ page: p }, "", url);
+    }
+  };
+
   const handleRefresh = () => {
     setRefreshKey((k) => k + 1);
     setLastUpdated(
@@ -3541,10 +3558,7 @@ export default function App() {
           </button>
         )}
         <div
-          onClick={() => {
-            setPage("screener");
-            setMobileMenuOpen(false);
-          }}
+          onClick={() => navigate("screener")}
           style={{
             fontFamily: '"DM Sans", sans-serif',
             fontSize: isMobile ? 10 : 12,
@@ -3577,7 +3591,7 @@ export default function App() {
                       ...(isNarrow ? { padding: "6px 8px" } : {}),
                       ...(page === g.id ? S.navBtnActive : {}),
                     }}
-                    onClick={() => setPage(g.id)}
+                    onClick={() => navigate(g.id)}
                   >
                     {g.label}
                   </button>
@@ -3644,7 +3658,7 @@ export default function App() {
                           <button
                             key={c.id}
                             onClick={() => {
-                              setPage(c.id);
+                              navigate(c.id);
                               setOpenMenu(null);
                             }}
                             style={{
@@ -3849,10 +3863,7 @@ export default function App() {
                 return (
                   <button
                     key={g.id}
-                    onClick={() => {
-                      setPage(g.id);
-                      setMobileMenuOpen(false);
-                    }}
+                    onClick={() => navigate(g.id)}
                     style={{
                       display: "block",
                       width: "100%",
@@ -3906,10 +3917,7 @@ export default function App() {
                     return (
                       <button
                         key={c.id}
-                        onClick={() => {
-                          setPage(c.id);
-                          setMobileMenuOpen(false);
-                        }}
+                        onClick={() => navigate(c.id)}
                         style={{
                           display: "block",
                           width: "100%",
@@ -3939,10 +3947,7 @@ export default function App() {
               }}
             >
               <button
-                onClick={() => {
-                  setPage("donate");
-                  setMobileMenuOpen(false);
-                }}
+                onClick={() => navigate("donate")}
                 style={{
                   display: "block",
                   width: "100%",
@@ -4008,7 +4013,7 @@ export default function App() {
               showSidebar && !sidebarCollapsed && !isMobile ? "block" : "none",
           }}
         >
-          <Sidebar refreshKey={refreshKey} onNavigate={setPage} />
+          <Sidebar refreshKey={refreshKey} onNavigate={navigate} />
         </div>
         <main
           style={{
