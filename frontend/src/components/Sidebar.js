@@ -195,6 +195,23 @@ export default function Sidebar({ refreshKey, onNavigate }) {
           </div>
         </div>
       )}
+      {/* Support — subtle full-width link to the in-app donate page */}
+      <div style={{ marginTop:16, paddingTop:12, borderTop:'1px solid #1e1e1e' }}>
+        <button
+          onClick={() => onNavigate && onNavigate('donate')}
+          title="Support Alpha Move AI"
+          style={{
+            display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+            width:'100%', boxSizing:'border-box', background:'none', cursor:'pointer',
+            color:'#cbd5e1', fontSize:12, fontFamily:'monospace',
+            letterSpacing:0.5, textDecoration:'none',
+            border:'1px solid #2a2a2a', borderRadius:4, padding:'7px 10px',
+          }}
+        >
+          <img src="https://storage.ko-fi.com/cdn/cup-border.png" alt="Ko-fi" style={{ height:12, width:18 }} />
+          Support
+        </button>
+      </div>
       <div style={{ height:24 }} />
     </aside>
   );

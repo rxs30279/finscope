@@ -42,6 +42,7 @@ import RnsTab from "./components/RnsTab";
 import AnalyticsTab from "./components/AnalyticsTab";
 import NewsTab from "./components/NewsTab";
 import SubscribeTab from "./components/SubscribeTab";
+import DonateTab from "./components/DonateTab";
 import WatchlistTab from "./components/WatchlistTab";
 import HeatmapTab from "./components/HeatmapTab";
 
@@ -3938,6 +3939,27 @@ export default function App() {
               }}
             >
               <button
+                onClick={() => {
+                  setPage("donate");
+                  setMobileMenuOpen(false);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: page === "donate" ? "#1f1200" : "none",
+                  border: "none",
+                  padding: "10px 20px",
+                  color: page === "donate" ? "#f97316" : "#999",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontFamily: "monospace",
+                  fontWeight: page === "donate" ? 700 : 400,
+                }}
+              >
+                ♥ Support
+              </button>
+              <button
                 onClick={handleRefresh}
                 style={{
                   display: "block",
@@ -4036,6 +4058,7 @@ export default function App() {
             <AnalyticsTab refreshKey={refreshKey} onSelect={selectCompany} />
           )}
           {page === "subscribe" && <SubscribeTab />}
+          {page === "donate" && <DonateTab />}
           {page === "company" && selectedSymbol && (
             <CompanyDetail
               symbol={selectedSymbol}
