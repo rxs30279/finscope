@@ -54,9 +54,9 @@ const BTN = {
 // Suggested amounts, framed against the real cost of running the tool so the
 // number means something ("£3 = a day of data") rather than an arbitrary tip.
 const TIERS = [
-  ["£2", "a day of data flowing"],
-  ["£1", "a month of one reader's emails"],
-  ["£5", "a good chunk of a month's hosting"],
+  // ["£2", "a day of data flowing"],
+  // ["£1", "a month of one reader's emails"],
+  // ["£5", "a good chunk of a month's hosting"],
 ];
 
 export default function DonateTab() {
