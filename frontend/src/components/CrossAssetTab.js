@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer
@@ -34,17 +34,115 @@ function AssetCard({ label, item, decimals = 2, prefix = '', suffix = '' }) {
   );
 }
 
-function ZScoreCard({ label, item }) {
-  if (!item) return <div style={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:2, padding:16 }}><div style={{ color:'#94a3b8', fontSize:9 }}>{label}</div><div style={{ color:'#555' }}>—</div></div>;
-  const { zscore, bias } = item;
-  const color = zscore === null ? '#555' : zscore < -1 ? '#ef4444' : zscore > 1 ? '#10b981' : '#f59e0b';
-  return (
-    <div style={{ background: zscore !== null && zscore < -1 ? '#1a0a0a' : '#141414', border:`1px solid ${zscore !== null && zscore < -1 ? '#3a1a1a' : '#2a2a2a'}`, borderRadius:2, padding:16 }}>
+// "2026 APR" -> "Apr 2026"; "2025 Q4" -> "Q4 2025"
+function fmtPeriod(p) {
+  if (!p) return '';
+  const mon = p.match(/^(\d{4})\s+([A-Z]{3})$/);
+  if (mon) return `${mon[2][0]}${mon[2].slice(1).toLowerCase()} ${mon[1]}`;
+  const qtr = p.match(/^(\d{4})\s+(Q\d)$/);
+  if (qtr) return `${qtr[2]} ${qtr[1]}`;
+  return p;
+}
+
+// ONS macro reading: latest value (%) for the given period, with prior for context.
+// `signed` shows +/- and colours the headline (used for GDP growth, which can go negative).
+function MacroCard({ label, item, signed = false }) {
+  const cardStyle = { background:'#141414', border:'1px solid #2a2a2a', borderRadius:2, padding:16 };
+  if (!item || typeof item.value !== 'number') return (
+    <div style={cardStyle}>
       <div style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
-      <div style={{ color, fontSize:20, fontWeight:700, fontFamily:'monospace' }}>
-        {zscore !== null && zscore !== undefined ? `${zscore > 0 ? '+' : ''}${zscore.toFixed(2)}σ` : '—'}
+      <div style={{ color:'#333', fontSize:20, fontWeight:700, fontFamily:'monospace' }}>—</div>
+    </div>
+  );
+
+  const { value, period, prev } = item;
+  const valColor = signed ? (value > 0 ? '#10b981' : value < 0 ? '#ef4444' : '#f59e0b') : '#e5e5e5';
+  const valText = `${signed && value > 0 ? '+' : ''}${value.toFixed(1)}%`;
+  const arrow = typeof prev !== 'number' ? '' : value > prev ? ' ↑' : value < prev ? ' ↓' : ' →';
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1, marginBottom:6 }}>{label}</div>
+      <div style={{ color: valColor, fontSize:20, fontWeight:700, fontFamily:'monospace' }}>{valText}</div>
+      <div style={{ color:'#94a3b8', fontSize:9, marginTop:4 }}>{fmtPeriod(period)}</div>
+      {typeof prev === 'number' && (
+        <div style={{ color:'#666', fontSize:9, marginTop:2 }}>prev {prev.toFixed(1)}%{arrow}</div>
+      )}
+    </div>
+  );
+}
+
+// 1-year z-score of the gilt-vs-utilities spread (spread = gilt ETF price −
+// utilities basket price), shown as a gauge across a −2.5σ … +2.5σ track.
+// High z = gilts expensive vs utilities; low z = gilts cheap.
+function GiltUtilitiesGauge({ item }) {
+  const [showInfo, setShowInfo] = useState(false);
+  const z = item && typeof item.zscore === 'number' ? item.zscore : null;
+
+  // Track spans −2.5σ … +2.5σ. Normal band (−1σ … +1σ) maps to the middle 30–70%.
+  const pct = z === null ? 50 : ((Math.max(-2.5, Math.min(2.5, z)) + 2.5) / 5) * 100;
+
+  const zone = z === null ? 'normal' : z <= -1 ? 'cheap' : z >= 1 ? 'expensive' : 'normal';
+  const ZONE = {
+    cheap:     { color: '#60a5fa', caption: 'Gilts cheap vs utilities' },
+    normal:    { color: '#94a3b8', caption: 'Within normal range' },
+    expensive: { color: '#f59e0b', caption: 'Gilts expensive vs utilities' },
+  };
+  const { color, caption } = ZONE[zone];
+
+  return (
+    <div style={{ position:'relative', background:'#141414', border:'1px solid #2a2a2a', borderRadius:2, padding:16 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:14 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+          <span style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>Gilt vs Utilities</span>
+          <span
+            onMouseEnter={() => setShowInfo(true)}
+            onMouseLeave={() => setShowInfo(false)}
+            onClick={() => setShowInfo(v => !v)}
+            role="button" tabIndex={0} aria-label="How this is calculated"
+            style={{ color:'#667', fontSize:10, cursor:'help', userSelect:'none', lineHeight:1 }}
+          >ⓘ</span>
+        </div>
+        <div style={{ color, fontSize:14, fontWeight:700, fontFamily:'monospace' }}>
+          {z === null ? '—' : `${z > 0 ? '+' : ''}${z.toFixed(2)}σ`}
+        </div>
       </div>
-      {bias && <div style={{ color:'#94a3b8', fontSize:9, marginTop:4 }}>{bias}</div>}
+      {showInfo && (
+        <div style={{
+          position:'absolute', top:34, left:16, right:16, zIndex:20,
+          background:'#0a0a0a', border:'1px solid #2a2a2a', borderRadius:4,
+          padding:'10px 12px', fontSize:9, lineHeight:1.65, color:'#cbd5e1',
+          boxShadow:'0 6px 20px rgba(0,0,0,0.6)',
+        }}>
+          Utilities are rate-sensitive “bond proxies”, so gilts and utilities normally move together — this flags when they diverge.
+          <div style={{ marginTop:6 }}>
+            <span style={{ color:'#94a3b8' }}>How it's calculated: </span>
+            over the last ~252 trading days we take the daily spread between the gilt ETF (IGLT.L) price and the average price of a UK utilities basket, then express today's spread as a z-score against that year's mean.
+          </div>
+          <div style={{ marginTop:6 }}>
+            Within ±1σ is normal; beyond ±2σ is unusual. High = gilts expensive vs utilities; low = gilts cheap.
+          </div>
+        </div>
+      )}
+
+      <div style={{ display:'flex', justifyContent:'space-between', color:'#555', fontSize:9, fontFamily:'monospace', marginBottom:4 }}>
+        <span>cheap</span><span>expensive</span>
+      </div>
+
+      <div style={{ position:'relative', height:6 }}>
+        <div style={{ position:'absolute', inset:0, display:'flex', borderRadius:3, overflow:'hidden' }}>
+          <div style={{ flex:'0 0 30%', background:'#1e3a5f' }} />
+          <div style={{ flex:'0 0 40%', background:'#2a2a2a' }} />
+          <div style={{ flex:'0 0 30%', background:'#4a3a1a' }} />
+        </div>
+        <div style={{ position:'absolute', top:-3, left:`${pct}%`, transform:'translateX(-50%)', width:2, height:12, borderRadius:1, background: z === null ? '#555' : color }} />
+      </div>
+
+      <div style={{ display:'flex', justifyContent:'space-between', color:'#555', fontSize:8, fontFamily:'monospace', marginTop:4 }}>
+        <span>−2σ</span><span>0σ</span><span>+2σ</span>
+      </div>
+
+      <div style={{ color, fontSize:9, marginTop:10 }}>{caption}</div>
     </div>
   );
 }
@@ -57,15 +155,9 @@ const MATURITIES = [
   { key: 'y30', label: '30Y' },
 ];
 
-const MATURITY_COLORS = {
-  y2:  '#f97316',
-  y5:  '#f59e0b',
-  y10: '#10b981',
-  y20: '#60a5fa',
-  y30: '#a78bfa',
-};
-
-function GiltSnapshotChart({ snapshot }) {
+// `fill` makes the chart grow to its parent's height (used when it sits beside
+// the box grid on desktop); otherwise it falls back to a fixed 180px height.
+function GiltSnapshotChart({ snapshot, fill = false }) {
   if (!snapshot || Object.keys(snapshot).length === 0) {
     return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No gilt data available</div>;
   }
@@ -80,164 +172,28 @@ function GiltSnapshotChart({ snapshot }) {
   const curveLabel = isInverted ? 'Inverted' : data[0]?.yield === data[data.length - 1]?.yield ? 'Flat' : 'Normal';
 
   return (
-    <div>
+    <div style={fill ? { height:'100%', display:'flex', flexDirection:'column' } : undefined}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
         <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>Current Curve</div>
         <div style={{ color: curveColor, fontSize:9, fontWeight:700 }}>{curveLabel}</div>
       </div>
-      <ResponsiveContainer width="100%" height={180}>
-        <LineChart data={data} margin={{ top:5, right:10, bottom:5, left:0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-          <XAxis dataKey="label" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
-          <YAxis
-            tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
-            tickFormatter={v => `${v.toFixed(1)}%`}
-            domain={['auto', 'auto']}
-          />
-          <Tooltip
-            contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:11, fontFamily:'monospace' }}
-            formatter={v => [`${v.toFixed(2)}%`, 'Yield']}
-          />
-          <Line type="monotone" dataKey="yield" stroke={curveColor} strokeWidth={2} dot={{ r:4, fill:curveColor }} />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-const RANGE_DAYS = { '1Y': 365, '2Y': 730, '3Y': 1095, '5Y': 1825 };
-const DETAIL_DAYS = 30;
-
-// Keep daily points for the last 30 days, collapse older to one per ISO week.
-// Cuts 5Y × 5 maturities from ~6,500 SVG nodes to ~1,400 — major perf win for recharts.
-function downsample(history) {
-  if (!history || history.length === 0) return [];
-  const recentCutoff = Date.now() - DETAIL_DAYS * 86400000;
-  const out = [];
-  const seenWeeks = new Set();
-  for (const d of history) {
-    const ts = new Date(d.date).getTime();
-    if (Number.isNaN(ts)) continue;
-    if (ts >= recentCutoff) {
-      out.push(d);
-      continue;
-    }
-    // ISO week key: Monday of the week containing this date (UTC).
-    const date = new Date(ts);
-    const day  = date.getUTCDay();               // 0 = Sunday … 6 = Saturday
-    const monOffset = day === 0 ? -6 : 1 - day;  // shift to Monday
-    const monday = new Date(date.getTime() + monOffset * 86400000);
-    const weekKey = monday.toISOString().slice(0, 10);
-    if (!seenWeeks.has(weekKey)) {
-      seenWeeks.add(weekKey);
-      out.push(d);
-    }
-  }
-  return out;
-}
-
-function GiltHistoryChart({ history }) {
-  const [hidden, setHidden] = useState({});
-  const [range, setRange]   = useState('5Y');
-
-  const filtered = useMemo(() => {
-    if (!history || history.length === 0) return [];
-    const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
-    const inRange = history.filter(d => new Date(d.date).getTime() >= cutoff);
-    return downsample(inRange);
-  }, [history, range]);
-
-  // Find the most recent date where each maturity has a non-null value.
-  // Used to surface the 2Y/30Y publication lag in the UI footnote.
-  const lastDates = useMemo(() => {
-    const out = {};
-    if (!history || history.length === 0) return out;
-    for (const { key } of MATURITIES) out[key] = null;
-    for (let i = history.length - 1; i >= 0; i--) {
-      const row = history[i];
-      for (const { key } of MATURITIES) {
-        if (out[key] == null && row[key] != null) out[key] = row.date;
-      }
-      if (MATURITIES.every(m => out[m.key] != null)) break;
-    }
-    return out;
-  }, [history]);
-
-  const monthEndMaturities = ['y2', 'y30'].filter(k => lastDates[k]);
-  const monthEndAsOf = monthEndMaturities.length
-    ? lastDates[monthEndMaturities[0]]
-    : null;
-  const dailyAsOf = lastDates.y10 || lastDates.y5 || lastDates.y20;
-
-  if (!history || history.length === 0) {
-    return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No history available</div>;
-  }
-
-  const toggleLine = (key) => setHidden(h => ({ ...h, [key]: !h[key] }));
-
-  const pillBase = { border:'1px solid #2a2a2a', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', background:'none' };
-  const pillActive = { ...pillBase, background:'#3730a3', color:'#e0e7ff', borderColor:'#4338ca' };
-  const pillInactive = { ...pillBase, color:'#555' };
-
-  const tickFormatter = (d) => {
-    const date = new Date(d);
-    const mon = date.toLocaleString('default', { month: 'short' });
-    return range === '1Y' ? mon : `${mon}${String(date.getFullYear()).slice(2)}`;
-  };
-
-  return (
-    <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-        <div style={{ display:'flex', gap:4 }}>
-          {Object.keys(RANGE_DAYS).map(r => (
-            <button key={r} onClick={() => setRange(r)} style={r === range ? pillActive : pillInactive}>{r}</button>
-          ))}
-        </div>
-        <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-          {MATURITIES.map(({ key, label }) => {
-            const isMonthEnd = key === 'y2' || key === 'y30';
-            return (
-              <button key={key} onClick={() => toggleLine(key)}
-                title={isMonthEnd ? 'Month-end data from BoE zip, publishes ~3-4 weeks in arrears' : ''}
-                style={{
-                cursor:'pointer', fontSize:9, fontFamily:'monospace', padding:'2px 7px', borderRadius:3,
-                border: `1px solid ${hidden[key] ? '#2a2a2a' : MATURITY_COLORS[key]}`,
-                background: hidden[key] ? 'transparent' : `${MATURITY_COLORS[key]}22`,
-                color: hidden[key] ? '#444' : MATURITY_COLORS[key],
-                userSelect:'none', display:'flex', alignItems:'center', gap:4,
-              }}>
-                <span style={{ width:6, height:6, borderRadius:'50%', background: hidden[key] ? '#333' : MATURITY_COLORS[key], display:'inline-block', flexShrink:0 }}/>
-                {label}{isMonthEnd ? '*' : ''}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={filtered} margin={{ top:5, right:10, bottom:5, left:0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
-          <XAxis dataKey="date" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} interval="preserveStartEnd" tickFormatter={tickFormatter} />
-          <YAxis tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} tickFormatter={v => `${v.toFixed(1)}%`} domain={['auto','auto']} />
-          <Tooltip
-            contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:10, fontFamily:'monospace' }}
-            formatter={(v, name) => [v !== null ? `${v.toFixed(2)}%` : '—', name.toUpperCase()]}
-            labelFormatter={l => l}
-          />
-          {MATURITIES.map(({ key }) => (
-            <Line key={key} type="monotone" dataKey={key}
-              stroke={hidden[key] ? 'transparent' : MATURITY_COLORS[key]}
-              strokeWidth={1.5} dot={false} connectNulls={false} hide={hidden[key]}
-              isAnimationActive={false} />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
-      <div style={{ color:'#555', fontSize:9, fontFamily:'monospace', marginTop:6, lineHeight:1.6 }}>
-        {dailyAsOf && (
-          <div>5Y / 10Y / 20Y: daily from BoE IADB (1-2 day settlement lag). Latest: {dailyAsOf}.</div>
-        )}
-        {monthEndAsOf && (
-          <div>* 2Y and 30Y: BoE month-end daily data (published ~3-4 weeks in arrears). Latest: {monthEndAsOf}.</div>
-        )}
+      <div style={fill ? { flex:1, minHeight:0 } : undefined}>
+        <ResponsiveContainer width="100%" height={fill ? '100%' : 180}>
+          <LineChart data={data} margin={{ top:5, right:10, bottom:5, left:0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
+            <XAxis dataKey="label" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
+            <YAxis
+              tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }}
+              tickFormatter={v => `${v.toFixed(1)}%`}
+              domain={['auto', 'auto']}
+            />
+            <Tooltip
+              contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:11, fontFamily:'monospace' }}
+              formatter={v => [`${v.toFixed(2)}%`, 'Yield']}
+            />
+            <Line type="monotone" dataKey="yield" stroke={curveColor} strokeWidth={2} dot={{ r:4, fill:curveColor }} />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );
@@ -247,6 +203,7 @@ export default function CrossAssetTab({ refreshKey }) {
   const [data, setData]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [giltData, setGiltData] = useState(null);
+  const [macro, setMacro] = useState(null);
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -264,48 +221,59 @@ export default function CrossAssetTab({ refreshKey }) {
       .catch(() => {});
   }, [refreshKey]);
 
+  useEffect(() => {
+    fetch(`${API}/market/uk-macro`)
+      .then(r => r.json())
+      .then(setMacro)
+      .catch(() => {});
+  }, [refreshKey]);
+
   const skelStyle = { background:'#1a1a1a', border:'1px solid #2a2a2a', borderRadius:3 };
 
   return (
     <div>
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Cross-Asset</h2>
-      <div style={{ display:'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(3,1fr)', gap:12 }}>
-        {loading ? (
-          [0,1,2,3].map(i => (
-            <div key={i} style={{ ...skelStyle, padding:16, height:80 }}>
-              <div style={{ background:'#252525', borderRadius:2, height:8, width:'40%', marginBottom:10 }} />
-              <div style={{ background:'#252525', borderRadius:2, height:20, width:'60%', marginBottom:8 }} />
-              <div style={{ background:'#252525', borderRadius:2, height:8, width:'30%' }} />
-            </div>
-          ))
-        ) : (
-          <>
-            <AssetCard label="GBP / USD"        item={data?.gbpusd}   decimals={4} />
-            <AssetCard label="Brent Crude"     item={data?.brent}    decimals={2} prefix="$" />
-            <AssetCard label="Gold"            item={data?.gold}     decimals={0} prefix="$" />
-            <ZScoreCard label="Gilt vs Utilities (z-score)" item={data?.gilt_vs_utilities} />
-          </>
-        )}
-      </div>
-      <div style={{ marginTop:24 }}>
-        <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
-          UK Gilt Yield Curve
+      {/* Six measures as a 2-column block, with the yield-curve chart beside it
+          on desktop. The right column (title + chart card) stretches to the box
+          block's height, so the chart card bottom lines up with the boxes. */}
+      <div style={{
+        display: isMobile ? 'block' : 'grid',
+        gridTemplateColumns: isMobile ? undefined : 'minmax(0, 500px) 1fr',
+        gap: 12,
+        alignItems: 'stretch',
+      }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:12 }}>
+          {loading
+            ? <div style={{ ...skelStyle, height:96 }} />
+            : <AssetCard label="GBP / USD" item={data?.gbpusd} decimals={4} />}
+          {loading
+            ? <div style={{ ...skelStyle, height:96 }} />
+            : <AssetCard label="Brent Crude" item={data?.brent} decimals={2} prefix="$" />}
+          {loading
+            ? <div style={{ ...skelStyle, height:96 }} />
+            : <AssetCard label="Gold" item={data?.gold} decimals={0} prefix="$" />}
+          {loading
+            ? <div style={{ ...skelStyle, height:96 }} />
+            : <GiltUtilitiesGauge item={data?.gilt_vs_utilities} />}
+          {macro === null
+            ? <div style={{ ...skelStyle, height:96 }} />
+            : <MacroCard label="GDP (QoQ)" item={macro.gdp_qoq} signed />}
+          {macro === null
+            ? <div style={{ ...skelStyle, height:96 }} />
+            : <MacroCard label="CPI (YoY)" item={macro.cpi} />}
         </div>
-        {giltData ? (
-          <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 3fr', gap:16 }}>
-            <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 }}>
-              <GiltSnapshotChart snapshot={giltData.snapshot} />
-            </div>
-            <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 }}>
-              <GiltHistoryChart history={giltData.history} />
-            </div>
+        <div style={{ display:'flex', flexDirection:'column', marginTop: isMobile ? 24 : 0 }}>
+          <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
+            UK Gilt Yield Curve
           </div>
-        ) : (
-          <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 3fr', gap:16 }}>
-            <div style={{ ...skelStyle, height:230 }} />
-            <div style={{ ...skelStyle, height:230 }} />
-          </div>
-        )}
+          {giltData ? (
+            <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16, flex:1, minHeight: isMobile ? 230 : 0 }}>
+              <GiltSnapshotChart snapshot={giltData.snapshot} fill={!isMobile} />
+            </div>
+          ) : (
+            <div style={{ ...skelStyle, flex:1, minHeight: isMobile ? 230 : 0 }} />
+          )}
+        </div>
       </div>
     </div>
   );

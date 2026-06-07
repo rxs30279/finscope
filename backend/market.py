@@ -4,8 +4,13 @@ import time
 import numpy as np
 import pandas as pd
 import requests
+import psycopg2.extras
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Reuse prices.py's connection pool + read helper rather than opening a second
+# pool — market.py only touches the DB for the Fear & Greed history table.
+from prices import query as _db_query, _get_pool as _db_pool
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 
@@ -193,6 +198,11 @@ CROSS_ASSET_TICKERS = {
 
 VIX_TICKER = "^VIX"
 GILT_ETF_TICKER = "IGLT.L"  # iShares UK Gilt ETF — used for safe haven spread & z-score
+
+# ONS timeseries JSON (no API key). d7g7/mm23 = CPI 12-month inflation rate;
+# ihyq/qna = GDP quarter-on-quarter growth (chained volume, seasonally adjusted).
+ONS_CPI_URL = "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/d7g7/mm23/data"
+ONS_GDP_QOQ_URL = "https://www.ons.gov.uk/economy/grossdomesticproductgdp/timeseries/ihyq/qna/data"
 
 ALL_PROXY_TICKERS = list(
     dict.fromkeys(
@@ -638,7 +648,7 @@ def _fetch_boe_gilt_yields():
     """Fetch UK nominal zero coupon gilt yields from Bank of England.
     - 5Y/10Y/20Y: BoE IADB API (single request, series IUDSNZC/IUDMNZC/IUDLNZC)
     - 2Y/30Y: BoE zip file (glcnominalddata.zip, sheet '4. spot curve')
-    Returns {"snapshot": {2: float, 5: float, ...}, "history": [{date, y2, y5, y10, y20, y30}, ...]}
+    Returns {"snapshot": {2: float, 5: float, ...}}
     """
     import io, zipfile
 
@@ -786,7 +796,7 @@ def _fetch_boe_gilt_yields():
     }
 
     if not any(all_series.values()):
-        return {"snapshot": {}, "history": []}
+        return {"snapshot": {}}
 
     # Snapshot: latest value per maturity
     snapshot = {}
@@ -794,17 +804,7 @@ def _fetch_boe_gilt_yields():
         if rows_dict:
             snapshot[maturity] = rows_dict[max(rows_dict.keys())]
 
-    # History: list of {date, y2, y5, y10, y20, y30}
-    all_dates = sorted(set(d for rows_dict in all_series.values() for d in rows_dict))
-    history = []
-    for date in all_dates:
-        row = {"date": date}
-        for m in [2, 5, 10, 20, 30]:
-            row[f"y{m}"] = all_series[m].get(date)
-        if any(v is not None for k, v in row.items() if k != "date"):
-            history.append(row)
-
-    return {"snapshot": snapshot, "history": history}
+    return {"snapshot": snapshot}
 
 
 def _fetch_cnn_fg():
@@ -823,6 +823,264 @@ def _fetch_cnn_fg():
     except Exception as e:
         print(f"[market] CNN fear-greed fetch failed: {e}")
         return {"value": None, "description": None, "last_update": None}
+
+
+# ── Fear & Greed daily history (UK reconstruction + US CNN backfill) ───────────
+# The live UK index is computed from the *latest* reading of each component. To
+# draw a rolling-year chart we reconstruct the same six components as daily
+# series and score each day against its own trailing window — the historical
+# analogue of the live calc. The US side is backfilled from CNN's graphdata
+# endpoint (the same source the fear_and_greed package uses), which ships ~1.5y
+# of daily values. Both are upserted into fear_greed_history (idempotent).
+
+# F&G needs only the breadth basket + the FTSE / VIX / gilt proxies — not the
+# sector or cross-asset tickers — so the 2-year reconstruction fetch is lighter
+# than the full proxy universe.
+FG_HISTORY_TICKERS = list(
+    dict.fromkeys(BREADTH_TICKERS + [BENCHMARK_TICKERS["FTSE 100"], VIX_TICKER, GILT_ETF_TICKER])
+)
+
+CNN_FG_HISTORY_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+
+
+def _get_fg_prices_2y():
+    """2-year close history for the F&G tickers, cached. A 252-day output series
+    needs ~2y of input once the 52-week-high/low and 125-day-MA lookbacks are
+    consumed, so this is fetched separately from the shared 1-year _get_prices()."""
+    def fetch():
+        def _fetch_one(ticker):
+            try:
+                hist = yf.Ticker(ticker).history(period="2y", auto_adjust=True)
+                if hist.empty:
+                    return ticker, None
+                col = hist["Close"]
+                if col.index.tz is not None:
+                    col.index = col.index.tz_localize(None)
+                return ticker, col
+            except Exception:
+                return ticker, None
+
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            futures = {executor.submit(_fetch_one, t): t for t in FG_HISTORY_TICKERS}
+            frames = {}
+            for future in as_completed(futures):
+                ticker, col = future.result()
+                if col is not None:
+                    frames[ticker] = col
+        if not frames:
+            return pd.DataFrame()
+        return pd.DataFrame(frames)
+
+    return _cached("fg_prices_2y", fetch)
+
+
+def _score_series_trailing(values, fn, window=252, min_obs=20):
+    """Score each point of `values` with `fn(trailing_window, current_value)`,
+    using only data up to and including that point (no lookahead). Mirrors the
+    live calc, which scores the latest value against the trailing ~1-year window.
+    Returns {Timestamp: score}."""
+    out = {}
+    v = values.dropna()
+    n = len(v)
+    for i in range(n):
+        if i + 1 < min_obs:
+            continue
+        w = v.iloc[max(0, i + 1 - window) : i + 1]
+        out[v.index[i]] = fn(w, float(v.iloc[i]))
+    return out
+
+
+def _compute_fear_greed_series(days=370):
+    """Reconstruct the daily UK Fear & Greed score over the trailing `days`.
+    Returns {date_str: score}. Only dates where all six components are available
+    are emitted, so the series is directly comparable to the live headline."""
+    prices = _get_fg_prices_2y()
+    if prices.empty:
+        return {}
+
+    ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
+    if ftse_ticker not in prices.columns:
+        return {}
+    ftse = prices[ftse_ticker].dropna()
+
+    comp = {}
+
+    # 1. Momentum — gap to 125-day MA, scored on its sign (directional).
+    if len(ftse) >= 126:
+        ma125 = ftse.rolling(125).mean()
+        mom = ((ftse - ma125) / ma125).dropna()
+        comp["momentum"] = pd.Series(_score_series_trailing(mom, _deviation_to_score))
+
+    # 2. Breadth — % of basket above 50-day MA, scored directly (50% = neutral).
+    flags = {}
+    for t in BREADTH_TICKERS:
+        if t in prices.columns:
+            col = prices[t].dropna()
+            if len(col) >= 51:
+                flags[t] = (col > col.rolling(50).mean()).astype(float)
+    if flags:
+        breadth_series = pd.DataFrame(flags).mean(axis=1).dropna()
+        comp["breadth"] = (breadth_series * 100).round().clip(0, 100)
+
+    # 3. Implied vol — VIX, inverted via trailing z-score.
+    if VIX_TICKER in prices.columns:
+        vix = prices[VIX_TICKER].dropna()
+        comp["vix"] = pd.Series(_score_series_trailing(-vix, _zscore_to_score))
+
+    # 4. Safe haven — 20-day total-return spread FTSE vs gilt ETF, centred on zero.
+    if GILT_ETF_TICKER in prices.columns:
+        gilt = prices[GILT_ETF_TICKER].dropna()
+        spread = (ftse.pct_change(20) - gilt.pct_change(20)).dropna()
+        comp["safe_haven"] = pd.Series(_score_series_trailing(spread, _deviation_to_score))
+
+    # 5. Realised vol — 20-day annualised vol of FTSE, inverted (clip 3.0).
+    if len(ftse) >= 22:
+        lr = np.log(ftse / ftse.shift(1)).dropna()
+        rv = (lr.rolling(20).std() * np.sqrt(252)).dropna()
+        comp["realised_vol"] = pd.Series(
+            _score_series_trailing(-rv, lambda w, c: _zscore_to_score(w, c, clip=3.0))
+        )
+
+    # 6. New highs / lows — net 52-week highs minus lows as a share of the universe.
+    # Computed per ticker on its own NaN-dropped series (each ticker trades a
+    # slightly different set of days; rolling over the unioned index would leave
+    # every 252-window NaN). Flags are masked to where the 252-day window is full,
+    # then summed across tickers — sum/notna skip NaN, so the per-date universe is
+    # exactly the tickers with ≥252 history on that date.
+    high_flags = {}
+    low_flags = {}
+    for t in BREADTH_TICKERS:
+        if t not in prices.columns:
+            continue
+        col = prices[t].dropna()
+        if len(col) < 252:
+            continue
+        rmax = col.rolling(252).max()
+        rmin = col.rolling(252).min()
+        valid = rmax.notna()
+        high_flags[t] = (col >= rmax * 0.99).astype(float).where(valid)
+        low_flags[t] = (col <= rmin * 1.01).astype(float).where(valid)
+    if high_flags:
+        hf = pd.DataFrame(high_flags)
+        lf = pd.DataFrame(low_flags)
+        highs = hf.sum(axis=1)
+        lows = lf.sum(axis=1)
+        universe = hf.notna().sum(axis=1).replace(0, np.nan)
+        net = (highs - lows) / universe
+        comp["hl_ratio"] = (50 + net * 100).round().clip(0, 100)
+
+    if not comp:
+        return {}
+
+    # Average across components, keeping only fully-populated days for comparability.
+    frame = pd.DataFrame(comp).dropna()
+    if frame.empty:
+        return {}
+    overall = frame.mean(axis=1).round()
+    cutoff = overall.index.max() - pd.Timedelta(days=days)
+    overall = overall[overall.index >= cutoff]
+    return {ts.strftime("%Y-%m-%d"): int(v) for ts, v in overall.items()}
+
+
+def _fetch_cnn_fg_history():
+    """Daily US CNN Fear & Greed history from CNN's graphdata endpoint.
+    Returns {date_str: value}."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+    r = requests.get(CNN_FG_HISTORY_URL, headers=headers, timeout=20)
+    r.raise_for_status()
+    data = r.json().get("fear_and_greed_historical", {}).get("data", [])
+    out = {}
+    for pt in data:
+        try:
+            ts = float(pt["x"]) / 1000.0
+            d = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            out[d] = round(float(pt["y"]), 1)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _upsert_fg_history(rows):
+    """Upsert (date_str, uk_score, us_score) tuples into fear_greed_history.
+    COALESCE keeps an existing value when the new one is NULL (e.g. a transient
+    CNN fetch failure won't blank out previously-stored US values)."""
+    if not rows:
+        return 0
+    pool = _db_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO fear_greed_history (date, uk_score, us_score) VALUES %s"
+            " ON CONFLICT (date) DO UPDATE SET"
+            "   uk_score = COALESCE(EXCLUDED.uk_score, fear_greed_history.uk_score),"
+            "   us_score = COALESCE(EXCLUDED.us_score, fear_greed_history.us_score),"
+            "   computed_at = now()",
+            rows,
+            page_size=500,
+        )
+        conn.commit()
+        return len(rows)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
+def _rebuild_fear_greed_history():
+    """Recompute the trailing-year UK series + pull CNN's US history and upsert
+    both. Idempotent and self-healing — safe to run daily. Returns a summary."""
+    uk = _compute_fear_greed_series()
+    us = {}
+    try:
+        us = _fetch_cnn_fg_history()
+    except Exception as e:
+        print(f"[market] CNN F&G history fetch failed: {e}")
+
+    all_dates = sorted(set(uk) | set(us))
+    rows = [(d, uk.get(d), us.get(d)) for d in all_dates]
+    n = _upsert_fg_history(rows)
+    _cache.pop("fg_history", None)
+    return {"rows": n, "uk_points": len(uk), "us_points": len(us)}
+
+
+@router.get("/fear-greed/history")
+def fear_greed_history():
+    """Rolling-year daily UK vs US Fear & Greed. Reads the persisted table; if it
+    is empty (first run before the cron has populated it), lazily rebuilds once."""
+    def read():
+        rows = _db_query(
+            "SELECT date, uk_score, us_score FROM fear_greed_history"
+            " WHERE date >= CURRENT_DATE - INTERVAL '370 days' ORDER BY date"
+        )
+        out = []
+        for r in rows:
+            d = r["date"]
+            out.append(
+                {
+                    "date": d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d),
+                    "uk": r["uk_score"],
+                    "us": r["us_score"],
+                }
+            )
+        return out
+
+    def compute():
+        data = read()
+        if not data:
+            try:
+                _rebuild_fear_greed_history()
+                data = read()
+            except Exception as e:
+                print(f"[market] F&G history lazy rebuild failed: {e}")
+        return data
+
+    return _cached("fg_history", compute)
 
 
 @router.get("/sidebar")
@@ -1036,6 +1294,43 @@ def _compute_cross_asset():
 @router.get("/cross-asset")
 def cross_asset():
     return _cached("cross_asset", _compute_cross_asset)
+
+
+def _ons_latest(url, period_key):
+    """Fetch an ONS timeseries and return the latest + prior observation.
+    ONS returns observations in ascending chronological order, so [-1] is latest.
+    Returns {"value": float, "period": str, "prev": float | None} or None."""
+    try:
+        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        obs = r.json().get(period_key, [])
+        obs = [o for o in obs if o.get("value") not in (None, "")]
+        if not obs:
+            return None
+        latest = obs[-1]
+        prev = obs[-2] if len(obs) >= 2 else None
+        return {
+            "value": float(latest["value"]),
+            "period": latest["date"],
+            "prev": float(prev["value"]) if prev else None,
+        }
+    except Exception as e:
+        print(f"[market] ONS fetch failed ({url}): {e}")
+        return None
+
+
+def _fetch_uk_macro():
+    """Latest UK CPI (12-month inflation, monthly) and GDP quarter-on-quarter
+    growth from the ONS timeseries API."""
+    return {
+        "cpi": _ons_latest(ONS_CPI_URL, "months"),
+        "gdp_qoq": _ons_latest(ONS_GDP_QOQ_URL, "quarters"),
+    }
+
+
+@router.get("/uk-macro")
+def uk_macro():
+    return _cached("uk_macro", _fetch_uk_macro)
 
 
 @router.get("/gilt-yields")

@@ -23,6 +23,7 @@ load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 from prices import refresh_prices
 from main import compute_and_store_scores
+from market import _rebuild_fear_greed_history
 
 
 def main() -> int:
@@ -45,6 +46,16 @@ def main() -> int:
         print(f"[prices] screener score rebuild FAILED — {type(e).__name__}: {e}")
         traceback.print_exc()
         return 1
+
+    # Rebuild the Fear & Greed daily history (UK reconstruction + US CNN backfill).
+    # Auxiliary display data, so a failure here is logged but does not fail the run
+    # — the table self-heals on the next rebuild and old rows are never dropped.
+    try:
+        fg = _rebuild_fear_greed_history()
+        print(f"[prices] fear-greed history rebuilt — {fg}")
+    except Exception as e:
+        print(f"[prices] fear-greed history rebuild FAILED (non-fatal) — {type(e).__name__}: {e}")
+        traceback.print_exc()
 
     print("[prices] completed successfully")
     return 0
