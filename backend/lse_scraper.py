@@ -88,13 +88,26 @@ def fetch_fundamentals(symbol: str) -> dict:
 
     Returns {fiscal_year: {field: value, period_end_date: 'YYYY-MM-DD'}}.
     Empty dict on any failure (Cloudflare miss, 404, parse error, etc).
+
+    A few UK tickers (e.g. RR., UU., JD.) carry a trailing dot in their LSE
+    share code that Yahoo's ".L" suffix masks ("RR.L" → "RR" loses the dot).
+    When the plain code yields nothing, retry once with the dot appended.
     """
-    sym = symbol.replace(".L", "").upper()
+    base = symbol.replace(".L", "").upper()
+    for sym in (base, base + "."):
+        data = _fetch_for_code(sym)
+        if data:
+            return data
+    return {}
+
+
+def _fetch_for_code(sym: str) -> dict:
+    """Fetch and parse fundamentals for an exact LSE share code. {} on failure."""
     sp = _fetch(f"{BASE}/SharePrice.asp?shareprice={sym}")
     if not sp:
         return {}
     slug_m = re.search(
-        rf'href="[^"]*ShareFundamentals\.html\?shareprice={sym}&(?:amp;)?share=([^"&]+)"',
+        rf'href="[^"]*ShareFundamentals\.html\?shareprice={re.escape(sym)}&(?:amp;)?share=([^"&]+)"',
         sp,
     )
     slug = slug_m.group(1) if slug_m else sym
@@ -105,7 +118,9 @@ def fetch_fundamentals(symbol: str) -> dict:
     try:
         tables = pd.read_html(StringIO(fu))
     except Exception as e:
-        log.warning(f"LSE read_html failed {sym}: {e}")
+        # Expected on the first candidate for trailing-dot codes; the caller
+        # retries with the dot variant, so this is debug not warning.
+        log.debug(f"LSE read_html failed {sym}: {e}")
         return {}
     if not tables:
         return {}
