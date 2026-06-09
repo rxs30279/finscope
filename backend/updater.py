@@ -575,6 +575,32 @@ def process_stock(symbol: str):
             log.warning(f"  No data from yfinance or LSE for {symbol}")
             return 0
 
+        # Re-pin current-snapshot valuation fields to the newest row.
+        # market_cap / PE / PB / PS / EV (and dividend_yield) were attached above
+        # to yfinance's most-recent income year. But LSE frequently leads yfinance
+        # by a fiscal year and synthesises a *newer* row — which then becomes the
+        # latest row that ttm_financials reads, surfacing NULL market_cap despite
+        # the value being available from yfinance. These are point-in-time snapshots,
+        # so they belong on whatever the newest row is after the merge. Fill only
+        # when absent, so a genuine yfinance figure on the newest row wins.
+        newest = annual_rows[-1]
+        if yahoo_market_cap and newest.get("market_cap") is None:
+            newest["market_cap"] = si(yahoo_market_cap)
+        if info.get("enterpriseValue") and newest.get("enterprise_value") is None:
+            newest["enterprise_value"] = si(info.get("enterpriseValue"))
+        if yahoo_trailing_pe and newest.get("price_to_earnings") is None:
+            newest["price_to_earnings"] = sf(yahoo_trailing_pe)
+        if yahoo_price_to_book and newest.get("price_to_book") is None:
+            newest["price_to_book"] = sf(yahoo_price_to_book)
+        if yahoo_price_to_sales and newest.get("price_to_sales") is None:
+            newest["price_to_sales"] = sf(yahoo_price_to_sales)
+        if info.get("enterpriseToEbitda") and newest.get("ev_to_ebitda") is None:
+            newest["ev_to_ebitda"] = sf(info.get("enterpriseToEbitda"))
+        if info.get("enterpriseToRevenue") and newest.get("ev_to_sales") is None:
+            newest["ev_to_sales"] = sf(info.get("enterpriseToRevenue"))
+        if yahoo_dividend_yield and newest.get("dividend_yield") is None:
+            newest["dividend_yield"] = yahoo_dividend_yield
+
         for i in range(1, len(annual_rows)):
             cur_r = annual_rows[i]
             prv_r = annual_rows[i - 1]
