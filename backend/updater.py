@@ -635,7 +635,7 @@ def process_stock(symbol: str):
             placeholders = ", ".join(["%s"] * len(cols_list))
             updates = ", ".join(
                 [
-                    f"{c} = EXCLUDED.{c}"
+                    f"{c} = COALESCE(EXCLUDED.{c}, annual_financials.{c})"
                     for c in cols_list
                     if c not in ("company_symbol", "fiscal_year")
                 ]
@@ -698,11 +698,15 @@ def process_stock(symbol: str):
                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         ON CONFLICT (company_symbol, fiscal_quarter_key)
                         DO UPDATE SET
-                            revenue=EXCLUDED.revenue, gross_profit=EXCLUDED.gross_profit,
-                            operating_income=EXCLUDED.operating_income, net_income=EXCLUDED.net_income,
-                            ebitda=EXCLUDED.ebitda, eps_diluted=EXCLUDED.eps_diluted,
-                            gross_margin=EXCLUDED.gross_margin, operating_margin=EXCLUDED.operating_margin,
-                            net_income_margin=EXCLUDED.net_income_margin
+                            revenue=COALESCE(EXCLUDED.revenue, quarterly_financials.revenue),
+                            gross_profit=COALESCE(EXCLUDED.gross_profit, quarterly_financials.gross_profit),
+                            operating_income=COALESCE(EXCLUDED.operating_income, quarterly_financials.operating_income),
+                            net_income=COALESCE(EXCLUDED.net_income, quarterly_financials.net_income),
+                            ebitda=COALESCE(EXCLUDED.ebitda, quarterly_financials.ebitda),
+                            eps_diluted=COALESCE(EXCLUDED.eps_diluted, quarterly_financials.eps_diluted),
+                            gross_margin=COALESCE(EXCLUDED.gross_margin, quarterly_financials.gross_margin),
+                            operating_margin=COALESCE(EXCLUDED.operating_margin, quarterly_financials.operating_margin),
+                            net_income_margin=COALESCE(EXCLUDED.net_income_margin, quarterly_financials.net_income_margin)
                     """,
                         (
                             symbol,
