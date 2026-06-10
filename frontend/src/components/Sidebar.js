@@ -196,35 +196,7 @@ export default function Sidebar({ refreshKey, onNavigate }) {
         );
       })()}
 
-      {/* VIX */}
-      {data?.vix !== undefined && data.vix !== null && (
-        <div style={{ ...rowStyle, marginTop:12, marginBottom:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
-          <span style={nameStyle}>VIX</span>
-          <span style={{
-            fontFamily:'monospace', fontSize:10, fontWeight:700,
-            color: data.vix < 20 ? '#10b981' : data.vix < 30 ? '#f59e0b' : '#ef4444'
-          }}>
-            {data.vix.toFixed(2)}
-          </span>
-        </div>
-      )}
-
-      {/* CNN Fear & Greed */}
-      {data?.cnn_fear_greed?.value !== null && data?.cnn_fear_greed?.value !== undefined && (
-        <div style={{ marginBottom:12 }}>
-          <div style={rowStyle}>
-            <span style={nameStyle}>CNN F&amp;G</span>
-            <span style={{ fontFamily:'monospace', fontSize:10, fontWeight:700, color: fgColor(data.cnn_fear_greed.value) }}>
-              {data.cnn_fear_greed.value.toFixed(2)}
-            </span>
-          </div>
-          <div style={{ textAlign:'right', fontSize:8, fontWeight:400, color: fgColor(data.cnn_fear_greed.value), opacity:0.7, marginTop:-2 }}>
-            {data.cnn_fear_greed.description}
-          </div>
-        </div>
-      )}
-
-      {/* Fear & Greed */}
+      {/* UK Fear & Greed — sits directly under the market clock */}
       {data?.fear_greed && (
         <div style={{ marginTop:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
           <div style={labelStyle}>UK Fear &amp; Greed</div>
@@ -244,6 +216,37 @@ export default function Sidebar({ refreshKey, onNavigate }) {
           <div style={{ background:'#1a1a1a', borderRadius:2, height:4, marginBottom:6 }}>
             <div style={{ background: fgColor(data.fear_greed.score), width:`${data.fear_greed.score}%`, height:4, borderRadius:2 }}/>
           </div>
+        </div>
+      )}
+
+      {/* US indicators group — VIX and CNN Fear & Greed */}
+      {((data?.vix !== undefined && data.vix !== null) ||
+        (data?.cnn_fear_greed?.value !== null && data?.cnn_fear_greed?.value !== undefined)) && (
+        <div style={{ marginTop:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
+          {data?.vix !== undefined && data.vix !== null && (
+            <div style={{ ...rowStyle, marginBottom:12 }}>
+              <span style={nameStyle}>VIX</span>
+              <span style={{
+                fontFamily:'monospace', fontSize:10, fontWeight:700,
+                color: data.vix < 20 ? '#10b981' : data.vix < 30 ? '#f59e0b' : '#ef4444'
+              }}>
+                {data.vix.toFixed(2)}
+              </span>
+            </div>
+          )}
+          {data?.cnn_fear_greed?.value !== null && data?.cnn_fear_greed?.value !== undefined && (
+            <div>
+              <div style={rowStyle}>
+                <span style={nameStyle}>CNN F&amp;G</span>
+                <span style={{ fontFamily:'monospace', fontSize:10, fontWeight:700, color: fgColor(data.cnn_fear_greed.value) }}>
+                  {data.cnn_fear_greed.value.toFixed(2)}
+                </span>
+              </div>
+              <div style={{ textAlign:'right', fontSize:8, fontWeight:400, color: fgColor(data.cnn_fear_greed.value), opacity:0.7, marginTop:-2 }}>
+                {data.cnn_fear_greed.description}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

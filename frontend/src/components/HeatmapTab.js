@@ -163,6 +163,10 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
     (liveFlag, showSpinner) => {
       if (showSpinner) setLoading(true);
       if (liveFlag) setSyncing(true);
+      // Keep the live-sync spinner up for at least this long so a fast fetch
+      // doesn't make it flash by — it should read as a deliberate "updating".
+      const SYNC_MIN_MS = 600;
+      const startedAt = Date.now();
       const params = new URLSearchParams();
       if (index) params.set("ftse_index", index);
       if (liveFlag) params.set("live", "true");
@@ -176,7 +180,11 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
         .catch(() => setData((prev) => prev ?? []))
         .finally(() => {
           setLoading(false);
-          if (liveFlag) setSyncing(false);
+          if (liveFlag) {
+            const remaining = SYNC_MIN_MS - (Date.now() - startedAt);
+            if (remaining > 0) setTimeout(() => setSyncing(false), remaining);
+            else setSyncing(false);
+          }
         });
     },
     [index],
@@ -281,7 +289,10 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
               : "the latest session's move"}
             .
             {syncing ? (
-              <span style={{ color: "#22c55e", marginLeft: 8 }}>· syncing live…</span>
+              <span style={{ color: "#22c55e", marginLeft: 8, fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, verticalAlign: "middle" }}>
+                <span className="spinning" style={{ fontSize: 15, lineHeight: 1 }}>↻</span>
+                syncing live…
+              </span>
             ) : (
               updated && (
                 <span style={{ color: "#475569", marginLeft: 8 }}>
@@ -421,7 +432,10 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
         }}
       >
         {loading ? (
-          <div style={{ ...centered, color: "#64748b" }}>Loading…</div>
+          <div style={{ ...centered, flexDirection: "column", gap: 10, color: "#64748b" }}>
+            <span className="spinning" style={{ fontSize: 30, lineHeight: 1 }}>↻</span>
+            Loading…
+          </div>
         ) : !tiles.length ? (
           <div style={{ ...centered, color: "#64748b" }}>No data</div>
         ) : (
@@ -510,6 +524,31 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
               );
             })}
           </>
+        )}
+
+        {/* Live-sync spinner — overlays the painted grid while quotes refresh */}
+        {syncing && !loading && (
+          <div
+            title="Refreshing live prices…"
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "4px 9px",
+              background: "rgba(10,10,10,0.85)",
+              border: "1px solid #1e1e1e",
+              borderRadius: 4,
+              color: "#22c55e",
+              fontFamily: "monospace",
+              fontSize: 10,
+            }}
+          >
+            <span className="spinning" style={{ fontSize: 13, lineHeight: 1 }}>↻</span>
+            syncing
+          </div>
         )}
       </div>
     </div>
