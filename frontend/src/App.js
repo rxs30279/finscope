@@ -3208,10 +3208,11 @@ export default function App() {
     // Deep-link support: emails point at /?tab=subscribe.
     if (typeof window === "undefined") return "screener";
     const t = new URLSearchParams(window.location.search).get("tab");
-    // Fear & Greed was merged into the Cross-Asset page; keep old links working.
-    if (t === "fear-greed") return "cross-asset";
+    // The Markets sub-pages were merged into one page; keep old links working.
+    if (["fear-greed", "cross-asset", "rotation", "breadth"].includes(t))
+      return "markets";
     return t || "screener";
-  }); // screener | watchlist | rotation | breadth | cross-asset | signals | company | subscribe
+  }); // screener | watchlist | markets | signals | company | subscribe
   const [selectedSymbol, setSelectedSymbol] = useState(null);
   const [selectedTab, setSelectedTab] = useState(null);
   const [watchlists, setWatchlists] = useState(() => loadWatchlists());
@@ -3413,18 +3414,8 @@ export default function App() {
     { id: "rns", label: "RNS News" },
     { id: "analytics", label: "PEGY" },
     { id: "subscribe", label: "Subscribe" },
-    {
-      id: "markets",
-      label: "Markets",
-      children: [
-        { id: "cross-asset", label: "Cross-Asset & Fear/Greed" },
-        { heading: "Sector Analysis" },
-        { id: "rotation", label: "Rotation" },
-        { id: "breadth", label: "Breadth" },
-      ],
-    },
+    { id: "markets", label: "Markets" },
   ];
-  const [openMenu, setOpenMenu] = useState(null);
 
   const showSidebar = page !== "company";
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -3581,105 +3572,19 @@ export default function App() {
         {/* Desktop nav links */}
         {!isMobile && (
           <div style={{ display: "flex", gap: 2 }}>
-            {NAV_GROUPS.map((g) => {
-              if (!g.children) {
-                return (
-                  <button
-                    key={g.id}
-                    style={{
-                      ...S.navBtn,
-                      ...(isNarrow ? { padding: "6px 8px" } : {}),
-                      ...(page === g.id ? S.navBtnActive : {}),
-                    }}
-                    onClick={() => navigate(g.id)}
-                  >
-                    {g.label}
-                  </button>
-                );
-              }
-              const groupActive = g.children.some((c) => c.id === page);
-              return (
-                <div
-                  key={g.id}
-                  style={{ position: "relative" }}
-                  onMouseEnter={() => setOpenMenu(g.id)}
-                  onMouseLeave={() => setOpenMenu(null)}
-                >
-                  <button
-                    style={{
-                      ...S.navBtn,
-                      ...(isNarrow ? { padding: "6px 8px" } : {}),
-                      ...(groupActive ? S.navBtnActive : {}),
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                    }}
-                  >
-                    {g.label}{" "}
-                    <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
-                  </button>
-                  {openMenu === g.id && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "100%",
-                        left: 0,
-                        background: "#141414",
-                        border: "1px solid #2a2a2a",
-                        borderRadius: 4,
-                        minWidth: 160,
-                        zIndex: 200,
-                        boxShadow: "0 8px 24px rgba(0,0,0,0.8)",
-                        paddingBottom: 4,
-                      }}
-                    >
-                      {g.children.map((c, idx) => {
-                        if (c.heading) {
-                          return (
-                            <div
-                              key={"h-" + idx}
-                              style={{
-                                padding: "10px 16px 4px",
-                                color: "#555",
-                                fontSize: 9,
-                                fontFamily: "monospace",
-                                textTransform: "uppercase",
-                                letterSpacing: 1.5,
-                                borderTop:
-                                  idx === 0 ? "none" : "1px solid #1f1f1f",
-                                marginTop: idx === 0 ? 0 : 4,
-                              }}
-                            >
-                              {c.heading}
-                            </div>
-                          );
-                        }
-                        return (
-                          <button
-                            key={c.id}
-                            onClick={() => {
-                              navigate(c.id);
-                              setOpenMenu(null);
-                            }}
-                            style={{
-                              ...S.navBtn,
-                              ...(page === c.id ? S.navBtnActive : {}),
-                              display: "block",
-                              width: "100%",
-                              textAlign: "left",
-                              borderRadius: 0,
-                              padding: "10px 16px",
-                            }}
-                          >
-                            {c.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {NAV_GROUPS.map((g) => (
+              <button
+                key={g.id}
+                style={{
+                  ...S.navBtn,
+                  ...(isNarrow ? { padding: "6px 8px" } : {}),
+                  ...(page === g.id ? S.navBtnActive : {}),
+                }}
+                onClick={() => navigate(g.id)}
+              >
+                {g.label}
+              </button>
+            ))}
           </div>
         )}
 
@@ -3858,87 +3763,27 @@ export default function App() {
               padding: "8px 0",
             }}
           >
-            {NAV_GROUPS.map((g) => {
-              if (!g.children) {
-                return (
-                  <button
-                    key={g.id}
-                    onClick={() => navigate(g.id)}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      textAlign: "left",
-                      background: page === g.id ? "#1f1200" : "none",
-                      border: "none",
-                      padding: "12px 20px",
-                      color: page === g.id ? "#f97316" : "#999",
-                      cursor: "pointer",
-                      fontSize: 13,
-                      fontFamily: "monospace",
-                      fontWeight: page === g.id ? 700 : 400,
-                    }}
-                  >
-                    {g.label}
-                  </button>
-                );
-              }
-              return (
-                <div key={g.id}>
-                  <div
-                    style={{
-                      padding: "12px 20px 4px",
-                      color: "#555",
-                      fontSize: 10,
-                      fontFamily: "monospace",
-                      textTransform: "uppercase",
-                      letterSpacing: 1.5,
-                    }}
-                  >
-                    {g.label}
-                  </div>
-                  {g.children.map((c) => {
-                    if (c.heading) {
-                      return (
-                        <div
-                          key={"h-" + c.heading}
-                          style={{
-                            padding: "8px 20px 2px",
-                            color: "#444",
-                            fontSize: 9,
-                            fontFamily: "monospace",
-                            textTransform: "uppercase",
-                            letterSpacing: 1,
-                          }}
-                        >
-                          {c.heading}
-                        </div>
-                      );
-                    }
-                    return (
-                      <button
-                        key={c.id}
-                        onClick={() => navigate(c.id)}
-                        style={{
-                          display: "block",
-                          width: "100%",
-                          textAlign: "left",
-                          background: page === c.id ? "#1f1200" : "none",
-                          border: "none",
-                          padding: "10px 20px 10px 28px",
-                          color: page === c.id ? "#f97316" : "#999",
-                          cursor: "pointer",
-                          fontSize: 12,
-                          fontFamily: "monospace",
-                          fontWeight: page === c.id ? 700 : 400,
-                        }}
-                      >
-                        {c.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
+            {NAV_GROUPS.map((g) => (
+              <button
+                key={g.id}
+                onClick={() => navigate(g.id)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: page === g.id ? "#1f1200" : "none",
+                  border: "none",
+                  padding: "12px 20px",
+                  color: page === g.id ? "#f97316" : "#999",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontFamily: "monospace",
+                  fontWeight: page === g.id ? 700 : 400,
+                }}
+              >
+                {g.label}
+              </button>
+            ))}
             <div
               style={{
                 borderTop: "1px solid #1f1f1f",
@@ -4045,12 +3890,12 @@ export default function App() {
           {page === "heatmap" && (
             <HeatmapTab refreshKey={refreshKey} onSelect={selectCompany} />
           )}
-          {page === "rotation" && <RotationTab refreshKey={refreshKey} />}
-          {page === "breadth" && <BreadthTab refreshKey={refreshKey} />}
-          {page === "cross-asset" && (
+          {page === "markets" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 40 }}>
               <CrossAssetTab refreshKey={refreshKey} />
               <FearGreedTab refreshKey={refreshKey} />
+              <BreadthTab refreshKey={refreshKey} />
+              <RotationTab refreshKey={refreshKey} />
             </div>
           )}
           {page === "analyst-monitor" && (
