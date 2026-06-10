@@ -334,16 +334,38 @@ def _compute_fear_greed():
     components = {}
 
     ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
+    shared_ftse = (
+        prices[ftse_ticker].dropna() if ftse_ticker in prices.columns else None
+    )
+
     # Date of the last completed session this reading is built from (UK-anchored,
-    # so a US-market day with no UK trading doesn't advance the stamp).
+    # so a US-market day with no UK trading doesn't advance the stamp). Anchor it to
+    # the shared ^FTSE feed — the same EOD-trimmed source that drives five of the six
+    # components — so the stamp can never lag the bulk of the reading.
     _ftse_for_date = (
-        ftse_long
-        if ftse_long is not None
-        else (prices[ftse_ticker] if ftse_ticker in prices.columns else None)
+        shared_ftse
+        if shared_ftse is not None
+        else (ftse_long.dropna() if ftse_long is not None else None)
     )
     as_of = None
-    if _ftse_for_date is not None and not _ftse_for_date.dropna().empty:
-        as_of = _ftse_for_date.dropna().index.max().strftime("%Y-%m-%d")
+    if _ftse_for_date is not None and not _ftse_for_date.empty:
+        as_of = _ftse_for_date.index.max().strftime("%Y-%m-%d")
+
+    # The dedicated 2-year ^FTSE fetch (ftse_long) supplies momentum's long scaling
+    # window, but Yahoo's period="2y" pull occasionally trails the shared 1-year feed
+    # by a session — which would freeze momentum a day behind the other components and
+    # drag the headline back with it. Patch it forward with any newer shared-feed bars,
+    # then cap to as_of so momentum is scored on exactly the same session as the rest.
+    if ftse_long is not None and shared_ftse is not None:
+        fl = ftse_long.dropna()
+        if not fl.empty:
+            newer = shared_ftse[shared_ftse.index > fl.index.max()]
+            if not newer.empty:
+                fl = pd.concat([fl, newer]).sort_index()
+                fl = fl[~fl.index.duplicated(keep="last")]
+            ftse_long = fl
+    if ftse_long is not None and as_of is not None:
+        ftse_long = ftse_long[ftse_long.index <= pd.Timestamp(as_of)]
 
     # 1. FTSE Momentum — FTSE 100 vs rolling 125-day MA.
     # Scored on the SIGN of the gap (above MA = greed, below = fear), centred on a zero gap

@@ -272,3 +272,20 @@ def test_fear_greed_trend_is_valid(client):
     with _patch_prices(fake):
         r = client.get("/api/market/fear-greed")
     assert r.json()["trend"] in ("rising", "falling", "unknown")
+
+def test_fear_greed_not_held_back_by_lagging_ftse_long(client):
+    """The dedicated 2-year ^FTSE feed (_get_ftse_long) sometimes trails the shared
+    feed by a session (a Yahoo period quirk). The headline must still anchor its date
+    stamp to the shared feed, not freeze on the stale long-feed session."""
+    import market
+    from market import ALL_PROXY_TICKERS, BENCHMARK_TICKERS
+    fake = _fake_prices(ALL_PROXY_TICKERS, rows=300)
+    latest = fake.index.max().strftime("%Y-%m-%d")
+    # ftse_long stops one session short of the shared feed.
+    ftse_long_lagged = fake[BENCHMARK_TICKERS["FTSE 100"]].iloc[:-1]
+    market._cache.pop("fear_greed", None)  # endpoint memoizes; don't read a prior test's value
+    with _patch_prices(fake), \
+         patch.object(market, "_get_ftse_long", return_value=ftse_long_lagged), \
+         patch.object(market, "_eod_cutoff", return_value=None):
+        r = client.get("/api/market/fear-greed")
+    assert r.json()["as_of"] == latest, "headline stamp froze on the stale long-feed session"
