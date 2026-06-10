@@ -346,18 +346,56 @@ def _suggest_phase(score, trend):
 _fg_history: list = []  # last 4 readings: [{score, suggested_phase, timestamp}, ...]
 
 
+def _eod_cutoff():
+    """Exclusive upper bound for EOD price data, as a tz-naive Timestamp.
+
+    Today's session is still in progress until the London close has settled, so
+    bars dated today are excluded (return today's date) until 17:00 London — by
+    which point the LSE 16:30 close has filtered through to the daily bar. After
+    that the bar is a genuine EOD value and nothing is trimmed (return None)."""
+    try:
+        from zoneinfo import ZoneInfo
+        now_london = datetime.now(ZoneInfo("Europe/London"))
+    except Exception:
+        now_london = datetime.utcnow()  # London ≈ UTC; close enough for the cutoff
+    if now_london.hour >= 17:
+        return None
+    return pd.Timestamp(now_london.date())
+
+
 def _compute_fear_greed():
-    """Compute 5-component UK Fear & Greed score (0-100), update history, auto-set cycle phase."""
+    """Compute 6-component UK Fear & Greed score (0-100), update history, auto-set cycle phase.
+
+    Operates on EOD (end-of-day) data only: today's in-progress session is
+    excluded until the London close has settled, so the headline is a stable
+    last-completed-session figure rather than a wobbling intraday partial. The
+    returned `as_of` carries the date of the bar actually used."""
+    cutoff = _eod_cutoff()
     prices = _get_prices()
+    ftse_long = _get_ftse_long()
+    if cutoff is not None:
+        prices = prices[prices.index < cutoff]
+        if ftse_long is not None:
+            ftse_long = ftse_long[ftse_long.index < cutoff]
     components = {}
+
+    ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
+    # Date of the last completed session this reading is built from (UK-anchored,
+    # so a US-market day with no UK trading doesn't advance the stamp).
+    _ftse_for_date = (
+        ftse_long
+        if ftse_long is not None
+        else (prices[ftse_ticker] if ftse_ticker in prices.columns else None)
+    )
+    as_of = None
+    if _ftse_for_date is not None and not _ftse_for_date.dropna().empty:
+        as_of = _ftse_for_date.dropna().index.max().strftime("%Y-%m-%d")
 
     # 1. FTSE Momentum — FTSE 100 vs rolling 125-day MA.
     # Scored on the SIGN of the gap (above MA = greed, below = fear), centred on a zero gap
     # and scaled by the gap's own volatility — a directional trend read, not mean-reversion.
     # Use 2y of ^FTSE so the volatility scale spans a full year of gap readings (the shared
     # 1y fetch leaves only ~6 months after the 125-day MA); fall back to it if unavailable.
-    ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
-    ftse_long = _get_ftse_long()
     ftse = (
         ftse_long.dropna()
         if ftse_long is not None
@@ -381,7 +419,7 @@ def _compute_fear_greed():
     # 50% participation (half the market above trend) is the natural neutral → score 50;
     # broad participation reads as greed, narrow as fear. No trailing-mean normalisation,
     # so the score reflects breadth in absolute terms rather than relative to recent norms.
-    breadth_data = _compute_breadth()
+    breadth_data = _compute_breadth(prices)
     above_flags = {}
     for t in BREADTH_TICKERS:
         if t in prices.columns:
@@ -546,6 +584,7 @@ def _compute_fear_greed():
         "suggested_phase": suggested_phase,
         "confirmed": confirmed,
         "components": components,
+        "as_of": as_of,
     }
 
 
@@ -1136,8 +1175,11 @@ def rotation():
     return _cached("rotation", _compute_rotation)
 
 
-def _compute_breadth():
-    prices = _get_prices()
+def _compute_breadth(prices=None):
+    # `prices` lets a caller pass a pre-trimmed frame (the Fear & Greed calc
+    # passes an EOD-only frame); the live Breadth tab calls with no arg → live.
+    if prices is None:
+        prices = _get_prices()
     all_basket_tickers = BREADTH_TICKERS
 
     above_50 = 0

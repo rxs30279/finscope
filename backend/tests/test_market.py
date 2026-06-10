@@ -240,6 +240,27 @@ def test_suggest_phase_high_falling():
     assert market._suggest_phase(70, "falling") == "Slowdown"
 
 
+# ── EOD cutoff tests (Fear & Greed uses last completed session, not intraday) ──
+def test_eod_cutoff_excludes_today_during_session():
+    import market
+    from datetime import datetime as real_dt
+    fixed = real_dt(2026, 6, 10, 11, 0)  # 11:00 London, session in progress
+    with patch.object(market, "datetime") as mdt:
+        mdt.now.return_value = fixed
+        cutoff = market._eod_cutoff()
+    # Today's partial bar is excluded → cutoff is today's date (exclusive bound).
+    assert cutoff == pd.Timestamp("2026-06-10")
+
+def test_eod_cutoff_none_after_close():
+    import market
+    from datetime import datetime as real_dt
+    fixed = real_dt(2026, 6, 10, 18, 0)  # 18:00 London, EOD settled
+    with patch.object(market, "datetime") as mdt:
+        mdt.now.return_value = fixed
+        # Nothing to trim once the session has closed — today's bar is real EOD.
+        assert market._eod_cutoff() is None
+
+
 # ── fear & greed endpoint tests ───────────────────────────────────────────────
 def test_fear_greed_compute_returns_expected_keys(client):
     from market import ALL_PROXY_TICKERS
@@ -248,8 +269,10 @@ def test_fear_greed_compute_returns_expected_keys(client):
         r = client.get("/api/market/fear-greed")
     assert r.status_code == 200
     data = r.json()
-    for key in ["score", "sentiment", "trend", "suggested_phase", "confirmed", "components"]:
+    for key in ["score", "sentiment", "trend", "suggested_phase", "confirmed", "components", "as_of"]:
         assert key in data, f"Missing key: {key}"
+    # as_of is the date of the last completed session the reading was built from.
+    assert data["as_of"] is None or isinstance(data["as_of"], str)
 
 def test_fear_greed_score_in_range(client):
     from market import ALL_PROXY_TICKERS

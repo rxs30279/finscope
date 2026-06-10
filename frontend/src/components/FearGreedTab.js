@@ -211,6 +211,9 @@ export default function FearGreedTab({ refreshKey }) {
   const color = fg ? fgColor(fg.score) : '#666';
   const COMPONENT_ORDER = ['momentum', 'breadth', 'vix', 'safe_haven', 'realised_vol', 'hl_ratio'];
   const latestDate = (history && history.length) ? history[history.length - 1].date : null;
+  // The headline is an EOD figure stamped with the session it was built from;
+  // fall back to the history's latest row if the backend didn't supply one.
+  const asOfDate = (fg && fg.as_of) ? fg.as_of : latestDate;
   const fmtDate = (d) => {
     const dt = new Date(d);
     return `${dt.getDate()} ${dt.toLocaleString('default', { month: 'short' })} ${dt.getFullYear()}`;
@@ -232,10 +235,10 @@ export default function FearGreedTab({ refreshKey }) {
         {/* Header: make it unmistakable this is today's reading */}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', flexWrap:'wrap', gap:6, marginBottom:14 }}>
           <div style={{ color:'#f97316', fontSize:11, fontWeight:700, textTransform:'uppercase', letterSpacing:'1.5px' }}>
-            Today’s Score
+            Latest Close
           </div>
           <div style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:'1px' }}>
-            UK Fear &amp; Greed Index{latestDate ? ` · as of ${fmtDate(latestDate)}` : ''}
+            UK Fear &amp; Greed Index{asOfDate ? ` · as of ${fmtDate(asOfDate)}` : ''}
           </div>
         </div>
 
