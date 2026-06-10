@@ -1,6 +1,93 @@
 import { useState, useEffect } from 'react';
 import { API, pctColor } from '../utils';
 
+// ── London Stock Exchange trading clock ──────────────────────────────────────
+// Regular hours: 08:00–16:30 London, Mon–Fri, excluding England & Wales bank
+// holidays (the LSE follows the E&W calendar). Christmas Eve and New Year's Eve
+// are half-days with an early 12:30 close when they fall on a weekday.
+//
+// Holiday/half-day dates are hardcoded and must be refreshed annually from
+// gov.uk/bank-holidays (england-and-wales).
+const UK_HOLIDAYS = new Set([
+  // 2026
+  '2026-01-01', '2026-04-03', '2026-04-06', '2026-05-04', '2026-05-25',
+  '2026-08-31', '2026-12-25', '2026-12-28',
+  // 2027
+  '2027-01-01', '2027-03-26', '2027-03-29', '2027-05-03', '2027-05-31',
+  '2027-08-30', '2027-12-27', '2027-12-28',
+]);
+const UK_HALF_DAYS = new Set([
+  '2026-12-24', '2026-12-31',
+  '2027-12-24', '2027-12-31',
+]);
+
+const LSE_OPEN_SEC = 8 * 3600;             // 08:00
+const LSE_CLOSE_SEC = 16 * 3600 + 30 * 60; // 16:30
+const LSE_HALF_CLOSE_SEC = 12 * 3600 + 30 * 60; // 12:30 (half-days)
+const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Current wall-clock in Europe/London, regardless of the viewer's own timezone.
+function londonParts(date = new Date()) {
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false, weekday: 'short',
+  });
+  const p = {};
+  for (const part of fmt.formatToParts(date)) p[part.type] = part.value;
+  return p;
+}
+
+function isLseTradingDay(iso, weekday) {
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  return !UK_HOLIDAYS.has(iso);
+}
+
+// Walk forward from a London calendar date to the label of the next trading day's
+// open (e.g. "Opens Mon 08:00"). Steps on a noon-UTC Date so date-only arithmetic
+// stays clear of any DST boundary.
+function nextOpenLabel(year, month, day) {
+  const d = new Date(Date.UTC(year, month - 1, day, 12));
+  for (let i = 0; i < 14; i++) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const wd = d.getUTCDay();
+    const iso = d.toISOString().slice(0, 10);
+    if (wd !== 0 && wd !== 6 && !UK_HOLIDAYS.has(iso)) {
+      return `Opens ${WEEKDAY_NAMES[wd]} 08:00`;
+    }
+  }
+  return 'Closed';
+}
+
+function lseStatus() {
+  const p = londonParts();
+  let hour = parseInt(p.hour, 10);
+  if (hour === 24) hour = 0; // some engines emit "24" at midnight
+  const secNow = hour * 3600 + parseInt(p.minute, 10) * 60 + parseInt(p.second, 10);
+  const iso = `${p.year}-${p.month}-${p.day}`;
+  const trading = isLseTradingDay(iso, p.weekday);
+  const closeSec = UK_HALF_DAYS.has(iso) ? LSE_HALF_CLOSE_SEC : LSE_CLOSE_SEC;
+
+  if (trading && secNow >= LSE_OPEN_SEC && secNow < closeSec) {
+    return { open: true, secondsToClose: closeSec - secNow };
+  }
+  if (trading && secNow < LSE_OPEN_SEC) {
+    return { open: false, nextOpen: 'Opens today 08:00' };
+  }
+  return {
+    open: false,
+    nextOpen: nextOpenLabel(parseInt(p.year, 10), parseInt(p.month, 10), parseInt(p.day, 10)),
+  };
+}
+
+function fmtCountdown(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`;
+}
+
 function fgColor(score) {
   if (score >= 75) return '#10b981';
   if (score >= 55) return '#f59e0b';
@@ -38,9 +125,16 @@ export default function Sidebar({ refreshKey, onNavigate }) {
   // re-pulls on a 15-minute cache, so poll every 5 minutes to surface a freshly
   // computed value within ~5 min of it landing, keeping an open tab current.
   const [autoTick, setAutoTick] = useState(0);
+  // Per-second tick that drives the live LSE close countdown.
+  const [, setClockTick] = useState(0);
 
   useEffect(() => {
     const id = setInterval(() => setAutoTick(t => t + 1), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setClockTick(t => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -80,6 +174,27 @@ export default function Sidebar({ refreshKey, onNavigate }) {
           <PctBadge value={b.pct_change} />
         </div>
       )) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
+
+      {/* LSE market clock */}
+      {(() => {
+        const m = lseStatus();
+        return (
+          <div
+            style={{ marginTop:8, paddingTop:8, borderTop:'1px solid #1e1e1e', display:'flex', justifyContent:'space-between', alignItems:'center' }}
+            title="London Stock Exchange — 08:00–16:30, Mon–Fri, excl. UK bank holidays"
+          >
+            <span style={{ display:'flex', alignItems:'center', gap:5 }}>
+              <span style={{ width:6, height:6, borderRadius:'50%', flexShrink:0, background: m.open ? '#10b981' : '#64748b', boxShadow: m.open ? '0 0 5px #10b981' : 'none' }} />
+              <span style={{ color: m.open ? '#10b981' : '#64748b', fontSize:9.5, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.5px' }}>
+                {m.open ? 'Markets open' : 'Markets closed'}
+              </span>
+            </span>
+            <span style={{ color:'#64748b', fontSize:9, fontFamily:'monospace' }}>
+              {m.open ? `Closes in ${fmtCountdown(m.secondsToClose)}` : m.nextOpen}
+            </span>
+          </div>
+        );
+      })()}
 
       {/* VIX */}
       {data?.vix !== undefined && data.vix !== null && (
