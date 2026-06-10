@@ -14,12 +14,14 @@ export function useMediaQuery(query) {
 }
 
 export function useIsMobile() {
-  // Phones in portrait are <=767px wide. In landscape they get wider than that
+  // Collapse to the mobile layout (hamburger nav + drawer) at <=943px: that's
+  // where the inline desktop nav starts to overlap the right-hand Tools/search
+  // cluster on tablet-width screens. In landscape, phones get wider than that
   // but stay very short, so also treat short landscape viewports as mobile —
   // otherwise the app flips to the desktop layout (no hamburger, sidebar
   // benchmarks visible) when a phone is turned sideways.
   return useMediaQuery(
-    "(max-width: 767px), (max-height: 500px) and (orientation: landscape)",
+    "(max-width: 943px), (max-height: 500px) and (orientation: landscape)",
   );
 }
 
@@ -27,7 +29,7 @@ export function useIsMobile() {
 // 8 menu groups + utility buttons + search). Used to tighten nav spacing and
 // drop non-essential items so nothing overruns the right edge on laptops.
 export function useIsNarrowDesktop() {
-  return useMediaQuery("(min-width: 768px) and (max-width: 1500px)");
+  return useMediaQuery("(min-width: 944px) and (max-width: 1500px)");
 }
 
 export function useIsTablet() {

@@ -82,7 +82,12 @@
       .desktop-only {
         display: none !important;
       }
+    }
 
+    /* Keep the page from scrolling sideways on the mobile/tablet layout, which
+       now extends up to 943px (the width where the inline desktop nav would
+       otherwise overlap). Mirrors the useIsMobile() breakpoint. */
+    @media (max-width: 943px) {
       body {
         overflow-x: hidden;
       }
