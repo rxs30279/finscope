@@ -38,7 +38,6 @@ import CrossAssetTab from "./components/CrossAssetTab";
 import AnalystTab from "./components/AnalystTab";
 import AnalystMonitorTab from "./components/AnalystMonitorTab";
 import RnsTab from "./components/RnsTab";
-import AnalyticsTab from "./components/AnalyticsTab";
 import NewsTab from "./components/NewsTab";
 import SubscribeTab from "./components/SubscribeTab";
 import DonateTab from "./components/DonateTab";
@@ -3412,7 +3411,6 @@ export default function App() {
     { id: "watchlist", label: "Watchlist" },
     { id: "analyst-monitor", label: "Analysts" },
     { id: "rns", label: "RNS News" },
-    { id: "analytics", label: "PEGY" },
     { id: "subscribe", label: "Subscribe" },
     { id: "markets", label: "Markets" },
   ];
@@ -3906,9 +3904,6 @@ export default function App() {
           )}
           {page === "rns" && (
             <RnsTab refreshKey={refreshKey} onSelect={selectCompany} />
-          )}
-          {page === "analytics" && (
-            <AnalyticsTab refreshKey={refreshKey} onSelect={selectCompany} />
           )}
           {page === "subscribe" && <SubscribeTab />}
           {page === "donate" && <DonateTab />}
