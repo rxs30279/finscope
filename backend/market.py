@@ -659,7 +659,7 @@ def _compute_rotation():
             col = prices[t].dropna()
             if len(col) < 51:
                 continue
-            ma50 = float(col.iloc[-51:-1].mean())
+            ma50 = float(col.iloc[-50:].mean())
             total += 1
             if float(col.iloc[-1]) > ma50:
                 above += 1
@@ -1177,9 +1177,15 @@ def rotation():
 
 def _compute_breadth(prices=None):
     # `prices` lets a caller pass a pre-trimmed frame (the Fear & Greed calc
-    # passes an EOD-only frame); the live Breadth tab calls with no arg → live.
+    # passes its own EOD-only frame). When called with no arg (the Breadth tab
+    # and the sidebar), trim to the last completed session here so the figures
+    # match the EOD-anchored Fear & Greed page rather than wobbling on today's
+    # in-progress bar.
     if prices is None:
         prices = _get_prices()
+        cutoff = _eod_cutoff()
+        if cutoff is not None:
+            prices = prices[prices.index < cutoff]
     all_basket_tickers = BREADTH_TICKERS
 
     above_50 = 0
@@ -1195,7 +1201,7 @@ def _compute_breadth(prices=None):
             continue
         total += 1
         current = float(col.iloc[-1])
-        ma50 = float(col.iloc[-51:-1].mean())
+        ma50 = float(col.iloc[-50:].mean())
         if current > ma50:
             above_50 += 1
         if len(col) >= 252:

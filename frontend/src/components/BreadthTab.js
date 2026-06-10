@@ -95,7 +95,7 @@ export default function BreadthTab({ refreshKey }) {
             {[
               { label:'New Highs', value: data?.new_highs, color:'#10b981', bg:'#0d2318' },
               { label:'New Lows',  value: data?.new_lows,  color:'#ef4444', bg:'#2a0d0d' },
-              { label:'H/L Ratio', value: data?.hl_ratio?.toFixed(1) + 'x', color:'#e5e5e5', bg:'#1a1a1a' },
+              { label:'H/L Ratio', value: data?.hl_ratio != null ? data.hl_ratio.toFixed(1) + 'x' : '—', color:'#e5e5e5', bg:'#1a1a1a' },
             ].map(({ label, value, color, bg }) => (
               <div key={label} style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                 <span style={{ color:'#94a3b8', fontSize:11 }}>{label}</span>
