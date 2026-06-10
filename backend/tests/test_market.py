@@ -248,7 +248,7 @@ def test_fear_greed_compute_returns_expected_keys(client):
     data = r.json()
     for key in ["score", "sentiment", "trend", "components", "as_of"]:
         assert key in data, f"Missing key: {key}"
-    # as_of is the date of the last completed session the reading was built from.
+    # as_of is the date of the latest bar the (live) reading was built from.
     assert data["as_of"] is None or isinstance(data["as_of"], str)
 
 def test_fear_greed_score_in_range(client):
@@ -304,7 +304,6 @@ def test_fear_greed_not_held_back_by_lagging_ftse_long(client):
     ftse_long_lagged = fake[BENCHMARK_TICKERS["FTSE 100"]].iloc[:-1]
     market._cache.pop("fear_greed", None)  # endpoint memoizes; don't read a prior test's value
     with _patch_prices(fake), \
-         patch.object(market, "_get_ftse_long", return_value=ftse_long_lagged), \
-         patch.object(market, "_eod_cutoff", return_value=None):
+         patch.object(market, "_get_ftse_long", return_value=ftse_long_lagged):
         r = client.get("/api/market/fear-greed")
     assert r.json()["as_of"] == latest, "headline stamp froze on the stale long-feed session"

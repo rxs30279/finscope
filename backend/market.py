@@ -320,17 +320,13 @@ def _eod_cutoff():
 def _compute_fear_greed():
     """Compute 6-component UK Fear & Greed score (0-100), update history, auto-set cycle phase.
 
-    Operates on EOD (end-of-day) data only: today's in-progress session is
-    excluded until the London close has settled, so the headline is a stable
-    last-completed-session figure rather than a wobbling intraday partial. The
-    returned `as_of` carries the date of the bar actually used."""
-    cutoff = _eod_cutoff()
+    Operates LIVE on the current-day bar (Yahoo's daily Close tracks the live
+    price intraday) and refreshes on the 15-minute _cached() TTL, so the score
+    moves through the trading day rather than being pinned to the last completed
+    session. The returned `as_of` carries the date of the bar actually used
+    (today during an open session)."""
     prices = _get_prices()
     ftse_long = _get_ftse_long()
-    if cutoff is not None:
-        prices = prices[prices.index < cutoff]
-        if ftse_long is not None:
-            ftse_long = ftse_long[ftse_long.index < cutoff]
     components = {}
 
     ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
@@ -338,10 +334,10 @@ def _compute_fear_greed():
         prices[ftse_ticker].dropna() if ftse_ticker in prices.columns else None
     )
 
-    # Date of the last completed session this reading is built from (UK-anchored,
-    # so a US-market day with no UK trading doesn't advance the stamp). Anchor it to
-    # the shared ^FTSE feed — the same EOD-trimmed source that drives five of the six
-    # components — so the stamp can never lag the bulk of the reading.
+    # Date of the latest bar this reading is built from (UK-anchored, so a US-market
+    # day with no UK trading doesn't advance the stamp). Anchor it to the shared ^FTSE
+    # feed — the same source that drives five of the six components — so the stamp can
+    # never lag the bulk of the reading. During an open session this is today's date.
     _ftse_for_date = (
         shared_ftse
         if shared_ftse is not None
