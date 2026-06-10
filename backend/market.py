@@ -1071,6 +1071,11 @@ def fear_greed_history():
 @router.get("/sidebar")
 def sidebar():
     def compute():
+        # Benchmarks, sectors and VIX are intentionally LIVE: they read the raw
+        # current-day bar (Yahoo's daily Close tracks the live price intraday) and
+        # refresh on the 15-minute _cached() TTL. Unlike Fear & Greed / Breadth they
+        # are deliberately NOT trimmed to the last completed session, so the % change
+        # is "since the previous close" and moves through the trading day.
         prices = _get_prices()
         benchmarks = [
             {"name": name, "pct_change": _pct_change_today(prices, ticker)}
@@ -1083,10 +1088,6 @@ def sidebar():
             }
             for sector, tickers in SECTOR_TICKERS.items()
         ]
-        rotation = _compute_rotation()
-        top_rs = rotation[0]["sector"] if rotation else None
-        breadth_data = _compute_breadth()
-        avg_breadth = breadth_data.get("pct_above_50ma")
         vix_col = prices[VIX_TICKER].dropna() if VIX_TICKER in prices.columns else None
         vix_level = (
             round(float(vix_col.iloc[-1]), 2)
@@ -1104,10 +1105,6 @@ def sidebar():
                 "score": fg["score"],
                 "sentiment": fg["sentiment"],
                 "trend": fg["trend"],
-            },
-            "signal_summary": {
-                "top_rs_sector": top_rs,
-                "breadth": avg_breadth,
             },
         }
 

@@ -34,13 +34,22 @@ export default function Sidebar({ refreshKey, onNavigate }) {
   // Click-to-reveal: which companies make up each ICB sector basket.
   const [constituents, setConstituents] = useState(null); // { sector: [{symbol,name}] }
   const [expandedSector, setExpandedSector] = useState(null);
+  // Auto-refresh tick: the benchmark/sector/VIX figures are live. The backend
+  // re-pulls on a 15-minute cache, so poll every 5 minutes to surface a freshly
+  // computed value within ~5 min of it landing, keeping an open tab current.
+  const [autoTick, setAutoTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setAutoTick(t => t + 1), 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     fetch(`${API}/market/sidebar`)
       .then(r => r.json())
       .then(setData)
       .catch(() => {});
-  }, [refreshKey]);
+  }, [refreshKey, autoTick]);
 
   // Refetch constituent prices on every refresh cycle so the per-company
   // colours stay in step with the sector badges rather than the once-only,
@@ -50,13 +59,13 @@ export default function Sidebar({ refreshKey, onNavigate }) {
       .then(r => r.json())
       .then(d => setConstituents(d && typeof d === 'object' ? d : {}))
       .catch(() => setConstituents({}));
-  }, [refreshKey]);
+  }, [refreshKey, autoTick]);
 
   const toggleSector = (name) => {
     setExpandedSector(prev => (prev === name ? null : name));
   };
 
-  const labelStyle = { color:'#666', fontSize:9, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:8 };
+  const labelStyle = { color:'#94a3b8', fontSize:11, fontWeight:700, letterSpacing:'1.5px', textTransform:'uppercase', marginBottom:8 };
   const rowStyle   = { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 };
   const nameStyle  = { color:'#94a3b8', fontSize:10 };
 
@@ -124,16 +133,7 @@ export default function Sidebar({ refreshKey, onNavigate }) {
       )}
 
       {/* Sectors */}
-      <div style={{ ...labelStyle, marginTop:16, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <span>ICB Sectors</span>
-        <span
-          onClick={() => onNavigate && onNavigate('heatmap')}
-          title="Open the market heatmap"
-          style={{ color:'#f97316', cursor:'pointer', fontSize:8, letterSpacing:0.5, display:'flex', alignItems:'center', gap:3 }}
-        >
-          ▦ Heatmap
-        </span>
-      </div>
+      <div style={{ ...labelStyle, marginTop:16 }}>ICB Sectors</div>
       {data?.sectors?.map(s => {
         const isOpen = expandedSector === s.name;
         const members = constituents?.[s.name];
@@ -170,20 +170,15 @@ export default function Sidebar({ refreshKey, onNavigate }) {
         );
       }) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
 
-      {/* Signal Summary */}
-      {data?.signal_summary && (
-        <div style={{ marginTop:16, borderTop:'1px solid #1e1e1e', paddingTop:12 }}>
-          <div style={labelStyle}>Model Signal</div>
-          <div style={{ background:'#1a1400', border:'1px solid #333', borderRadius:3, padding:10 }}>
-            <div style={{ color:'#666', fontSize:9 }}>
-              Above 50MA: <span style={{ color:'#10b981' }}>{data.signal_summary.breadth !== null ? `${(data.signal_summary.breadth*100).toFixed(0)}%` : '—'}</span>
-            </div>
-            <div style={{ color:'#666', fontSize:9 }}>
-              Top RS: <span style={{ color:'#60a5fa' }}>{data.signal_summary.top_rs_sector ?? '—'}</span>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Heatmap link — sits at the foot of the sector list */}
+      <div
+        onClick={() => onNavigate && onNavigate('heatmap')}
+        title="Open the market heatmap"
+        style={{ color:'#f97316', cursor:'pointer', fontSize:12, letterSpacing:0.5, display:'flex', alignItems:'center', justifyContent:'center', gap:5, marginTop:16 }}
+      >
+        ▦ Heatmap
+      </div>
+
       {/* Support / Feedback — subtle full-width links to the in-app meta pages */}
       <div style={{ marginTop:16, paddingTop:12, borderTop:'1px solid #1e1e1e', display:'flex', flexDirection:'column', gap:8 }}>
         <button

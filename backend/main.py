@@ -1048,6 +1048,8 @@ def sector_constituents(response: Response):
         (all_syms,),
     )
     names = {r["symbol"]: r["name"] for r in rows}
+    # Live: per-company moves track the current-day bar, matching the live sector
+    # badge in the sidebar.
     prices = _get_prices()
     return {
         sector: [

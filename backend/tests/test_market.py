@@ -30,7 +30,7 @@ def test_sidebar_returns_expected_keys(client):
     data = r.json()
     assert "benchmarks" in data
     assert "sectors" in data
-    assert "signal_summary" in data
+    assert "fear_greed" in data
 
 def test_sidebar_benchmarks_have_pct_change(client):
     from market import ALL_PROXY_TICKERS
@@ -63,6 +63,25 @@ def test_sidebar_includes_fear_greed(client):
     assert "score" in fg
     assert "sentiment" in fg
     assert "trend" in fg
+def test_sidebar_benchmarks_use_live_current_bar(client):
+    """Benchmarks are LIVE: the % change reflects the current-day (last) bar
+    against the previous close, not a session-trimmed value. Plant a known move
+    on the final row and assert it comes straight through."""
+    import market
+    from market import ALL_PROXY_TICKERS, BENCHMARK_TICKERS
+
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    ftse = BENCHMARK_TICKERS["FTSE 100"]
+    last_date = fake.index[-1]
+    # A clean +2% on the live current-day bar.
+    fake.loc[last_date, ftse] = float(fake[ftse].iloc[-2]) * 1.02
+
+    market._cache.clear()
+    with _patch_prices(fake):
+        r = client.get("/api/market/sidebar")
+    market._cache.clear()
+    bm = {b["name"]: b["pct_change"] for b in r.json()["benchmarks"]}
+    assert bm["FTSE 100"] == pytest.approx(0.02, abs=1e-9)
 
 
 # ── rotation tests ────────────────────────────────────────────────────────────
