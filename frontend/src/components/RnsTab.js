@@ -1,17 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-
-// ── Mobile detection hook ─────────────────────────────────────────────────────
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined" && window.innerWidth < 768,
-  );
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return isMobile;
-}
+import { useIsMobile } from "../useMediaQuery";
 import { API } from "../utils";
 
 const TIER_COLORS = {

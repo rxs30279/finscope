@@ -3416,7 +3416,11 @@ export default function App() {
   ];
 
   const showSidebar = page !== "company";
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Default the benchmarks sidebar to collapsed on tablets / smaller laptops
+  // (<=1500px) so it doesn't crowd the main view on a Surface Pro-sized screen.
+  // Users can still toggle it back on. (Below 768px it's hidden entirely, so the
+  // narrow-desktop hook is a fine proxy for the initial default.)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(isNarrow);
 
   return (
     <div
