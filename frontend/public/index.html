@@ -49,6 +49,16 @@
       display: none;
     }
 
+    /* Utility: scrollable region with no visible scrollbar (e.g. the top nav,
+       which scrolls horizontally only as a fallback on narrow screens). */
+    .no-scrollbar {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+
     /* ── Responsive helpers ── */
     *,
     *::before,

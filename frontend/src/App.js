@@ -3287,6 +3287,7 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [priceRefreshing, setPriceRefreshing] = useState(false);
   const [priceToast, setPriceToast] = useState(null);
+  const [toolsOpen, setToolsOpen] = useState(false);
 
   const doSearch = (q) => {
     setSearchQ(q);
@@ -3571,15 +3572,28 @@ export default function App() {
           {isMobile ? "AMA" : "Alpha Move AI"}
         </div>
 
-        {/* Desktop nav links */}
+        {/* Desktop nav links. Allowed to shrink and scroll horizontally as a
+            last-resort fallback (no visible scrollbar) so the menu can never
+            push the page past the viewport on narrow screens. */}
         {!isMobile && (
-          <div style={{ display: "flex", gap: 2 }}>
+          <div
+            className="no-scrollbar"
+            style={{
+              display: "flex",
+              gap: 2,
+              flexShrink: 1,
+              minWidth: 0,
+              overflowX: "auto",
+            }}
+          >
             {NAV_GROUPS.map((g) => (
               <button
                 key={g.id}
                 style={{
                   ...S.navBtn,
-                  ...(isNarrow ? { padding: "6px 8px" } : {}),
+                  ...(isNarrow ? { padding: "6px 8px", fontSize: 11 } : {}),
+                  flexShrink: 0,
+                  whiteSpace: "nowrap",
                   ...(page === g.id ? S.navBtnActive : {}),
                 }}
                 onClick={() => navigate(g.id)}
@@ -3598,86 +3612,145 @@ export default function App() {
             alignItems: "center",
             gap: isMobile ? 6 : isNarrow ? 8 : 12,
             minWidth: 0,
+            flexShrink: 0,
           }}
         >
-          {/* Tool manual — served from the DB via /api/help-doc. On mobile it
-              lives in the hamburger menu instead of the top bar. */}
+          {/* Tools menu — bundles the Tool Manual link and the market/price
+              refresh actions into a single dropdown so the top bar stays
+              compact on narrow screens. On mobile these live in the hamburger
+              menu instead, so the whole thing is desktop-only. */}
           {!isMobile && (
-            <a
-              href={`${API}/help-doc`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Tool manual"
-              style={{
-                background: "#2f2f2f",
-                color: "#e5e5e5",
-                border: "1px solid #3f3f3f",
-                padding: "4px 10px",
-                borderRadius: 2,
-                fontFamily: "monospace",
-                fontSize: 10,
-                cursor: "pointer",
-                textDecoration: "none",
-                whiteSpace: "nowrap",
-              }}
-            >
-              Tool Manual
-            </a>
-          )}
-          {!isMobile && !isNarrow && lastUpdated && (
-            <span
-              style={{ color: "#444", fontSize: 10, fontFamily: "monospace" }}
-            >
-              Updated {lastUpdated}
-            </span>
-          )}
-          {!isMobile && (
-            <button
-              onClick={handleRefresh}
-              style={{
-                background: "#1a1a1a",
-                color: "#666",
-                border: "1px solid #2a2a2a",
-                padding: "4px 10px",
-                borderRadius: 2,
-                fontFamily: "monospace",
-                fontSize: 10,
-                cursor: "pointer",
-              }}
-            >
-              ↻ Market
-            </button>
-          )}
-          {!isMobile && (
-            <button
-              onClick={handlePriceRefresh}
-              disabled={priceRefreshing}
-              title="Refresh price history"
-              style={{
-                background: "#1a1a1a",
-                color: priceRefreshing ? "#f97316" : "#666",
-                border: "1px solid #2a2a2a",
-                padding: "4px 10px",
-                borderRadius: 2,
-                fontFamily: "monospace",
-                fontSize: 10,
-                cursor: priceRefreshing ? "not-allowed" : "pointer",
-              }}
-            >
-              <span className={priceRefreshing ? "spinning" : ""}>↻</span>
-              {priceRefreshing ? "…" : " Prices"}
-            </button>
-          )}
-          {!isMobile && priceToast && (
-            <span
-              style={{
-                fontSize: 10,
-                fontFamily: "monospace",
-                color: priceToast.ok ? "#10b981" : "#ef4444",
-              }}
-            >
-              {priceToast.msg}
-            </span>
+            <div style={{ position: "relative", flexShrink: 0 }}>
+              <button
+                onClick={() => setToolsOpen((v) => !v)}
+                title="Tools & refresh"
+                style={{
+                  background: "#1a1a1a",
+                  color: priceRefreshing ? "#f97316" : "#999",
+                  border: "1px solid #2a2a2a",
+                  padding: "4px 10px",
+                  borderRadius: 2,
+                  fontFamily: "monospace",
+                  fontSize: 10,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span className={priceRefreshing ? "spinning" : ""}>⚙</span>
+                Tools ▾
+              </button>
+              {toolsOpen && (
+                <>
+                  {/* Click-away overlay */}
+                  <div
+                    onClick={() => setToolsOpen(false)}
+                    style={{ position: "fixed", inset: 0, zIndex: 200 }}
+                  />
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "100%",
+                      right: 0,
+                      marginTop: 6,
+                      minWidth: 200,
+                      background: "#141414",
+                      border: "1px solid #2a2a2a",
+                      borderRadius: 4,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.8)",
+                      zIndex: 201,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <a
+                      href={`${API}/help-doc`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setToolsOpen(false)}
+                      style={{
+                        display: "block",
+                        padding: "10px 14px",
+                        color: "#e5e5e5",
+                        fontFamily: "monospace",
+                        fontSize: 11,
+                        textDecoration: "none",
+                        borderBottom: "1px solid #1f1f1f",
+                      }}
+                    >
+                      📖 Tool Manual
+                    </a>
+                    <button
+                      onClick={() => {
+                        handleRefresh();
+                        setToolsOpen(false);
+                      }}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        background: "none",
+                        border: "none",
+                        borderBottom: "1px solid #1f1f1f",
+                        padding: "10px 14px",
+                        color: "#999",
+                        fontFamily: "monospace",
+                        fontSize: 11,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ↻ Refresh Market
+                    </button>
+                    <button
+                      onClick={handlePriceRefresh}
+                      disabled={priceRefreshing}
+                      title="Refresh price history"
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        background: "none",
+                        border: "none",
+                        padding: "10px 14px",
+                        color: priceRefreshing ? "#f97316" : "#999",
+                        fontFamily: "monospace",
+                        fontSize: 11,
+                        cursor: priceRefreshing ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      <span className={priceRefreshing ? "spinning" : ""}>↻</span>
+                      {priceRefreshing ? " Refreshing prices…" : " Refresh Prices"}
+                    </button>
+                    {(lastUpdated || priceToast) && (
+                      <div
+                        style={{
+                          padding: "8px 14px",
+                          borderTop: "1px solid #1f1f1f",
+                          background: "#0f0f0f",
+                          fontFamily: "monospace",
+                          fontSize: 9,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {lastUpdated && (
+                          <div style={{ color: "#555" }}>Updated {lastUpdated}</div>
+                        )}
+                        {priceToast && (
+                          <div
+                            style={{
+                              color: priceToast.ok ? "#10b981" : "#ef4444",
+                            }}
+                          >
+                            {priceToast.msg}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           )}
           <div style={{ position: "relative", minWidth: 0 }}>
             <input

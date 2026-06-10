@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useIsMobile } from "../useMediaQuery";
+import { useIsMobile, useIsTablet } from "../useMediaQuery";
 import { API } from "../utils";
 
 const TIER_COLORS = {
@@ -201,7 +201,10 @@ function KeywordTags({ hits }) {
 }
 
 export default function RnsTab({ refreshKey, onSelect }) {
-  const isMobile = useIsMobile();
+  // Use the stacked single-column layout on phones AND tablet-width screens
+  // (e.g. a Surface Pro in portrait, ~912px). The full desktop table has too
+  // many columns to fit those widths and otherwise spills off the page.
+  const isMobile = useIsMobile() || useIsTablet();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -955,7 +958,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
             </div>
 
             {/* Section table */}
-            <div style={S.card}>
+            <div style={{ ...S.card, overflowX: "auto" }}>
               <table
                 style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
               >

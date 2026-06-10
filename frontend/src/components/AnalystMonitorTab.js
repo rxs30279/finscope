@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { API } from '../utils';
-import { useIsMobile } from '../useMediaQuery';
+import { useIsMobile, useIsNarrowDesktop } from '../useMediaQuery';
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
@@ -82,6 +82,10 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const [sortKey, setSortKey] = useState('buy_pct');
   const [sortDir, setSortDir] = useState('desc');
   const isMobile = useIsMobile();
+  // On Surface Pro-sized / narrow-desktop screens (<=1500px) the full table plus
+  // the side movers feed is too wide, so we drop the lower-value columns (Sector,
+  // Market, Revisions) and stack the movers feed below the table instead of beside it.
+  const isNarrowDesktop = useIsNarrowDesktop();
 
   useEffect(() => {
     setLoading(true);
@@ -299,7 +303,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
       {/* Main layout: table + change feed — desktop only. On mobile we show just
           the Top Bullish / Top Bearish boxes above and drop the rest. */}
       {!isMobile && (
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isNarrowDesktop ? '1fr' : '1fr 320px', gap: 16, alignItems: 'start' }}>
 
         {/* Full table */}
         <div style={S.card}>
@@ -333,19 +337,23 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
             </div>
           </div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', fontSize: 12 }}>
+            <table style={{ width: '100%', minWidth: isNarrowDesktop ? 560 : 820, borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #2a2a2a' }}>
                   <th style={S.th}>Symbol</th>
                   <th style={{ ...colStyle('name'), textAlign: 'left' }} onClick={() => toggleSort('name')}>
                     Name {sortKey === 'name' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
                   </th>
-                  <th style={{ ...colStyle('sector'), textAlign: 'left' }} onClick={() => toggleSort('sector')}>
-                    Sector {sortKey === 'sector' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
-                  </th>
-                  <th style={{ ...colStyle('ftse_index'), textAlign: 'left' }} onClick={() => toggleSort('ftse_index')}>
-                    Market {sortKey === 'ftse_index' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
-                  </th>
+                  {!isNarrowDesktop && (
+                    <th style={{ ...colStyle('sector'), textAlign: 'left' }} onClick={() => toggleSort('sector')}>
+                      Sector {sortKey === 'sector' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    </th>
+                  )}
+                  {!isNarrowDesktop && (
+                    <th style={{ ...colStyle('ftse_index'), textAlign: 'left' }} onClick={() => toggleSort('ftse_index')}>
+                      Market {sortKey === 'ftse_index' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    </th>
+                  )}
                   <th style={S.th}>Consensus</th>
                   <th
                     style={{ ...colStyle('signal'), textAlign: 'right' }}
@@ -379,9 +387,11 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   <th style={{ ...colStyle('price_target_mean'), textAlign: 'right' }} onClick={() => toggleSort('price_target_mean')} title="Mean analyst price target">
                     Target {sortKey === 'price_target_mean' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
                   </th>
-                  <th style={{ ...colStyle('revision_score'), textAlign: 'right' }} onClick={() => toggleSort('revision_score')}>
-                    Revisions {sortKey === 'revision_score' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
-                  </th>
+                  {!isNarrowDesktop && (
+                    <th style={{ ...colStyle('revision_score'), textAlign: 'right' }} onClick={() => toggleSort('revision_score')}>
+                      Revisions {sortKey === 'revision_score' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    </th>
+                  )}
                   <th style={{ ...colStyle('total_analysts'), textAlign: 'right' }} onClick={() => toggleSort('total_analysts')}>
                     Analysts {sortKey === 'total_analysts' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
                   </th>
@@ -389,7 +399,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
               </thead>
               <tbody>
                 {filtered.length === 0 && (
-                  <tr><td colSpan={11} style={{ ...S.td, color: '#444', textAlign: 'center', padding: 24 }}>No results</td></tr>
+                  <tr><td colSpan={isNarrowDesktop ? 8 : 11} style={{ ...S.td, color: '#444', textAlign: 'center', padding: 24 }}>No results</td></tr>
                 )}
                 {filtered.map(r => (
                   <tr key={r.symbol} style={{ borderBottom: '1px solid #141414' }}>
@@ -404,8 +414,8 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                     >
                       {r.name || '—'}
                     </td>
-                    <td style={{ ...S.td, color: '#94a3b8' }}>{r.sector || '—'}</td>
-                    <td style={{ ...S.td, color: '#64748b' }}>{r.ftse_index?.replace('FTSE ', '') || '—'}</td>
+                    {!isNarrowDesktop && <td style={{ ...S.td, color: '#94a3b8' }}>{r.sector || '—'}</td>}
+                    {!isNarrowDesktop && <td style={{ ...S.td, color: '#64748b' }}>{r.ftse_index?.replace('FTSE ', '') || '—'}</td>}
                     <td style={S.td}><ConsensusBadge value={r.consensus} /></td>
                     {(() => { const sig = compositeScore(r); return (
                       <td style={{ ...S.tdR, color: sig >= 50 ? '#10b981' : sig <= 35 ? '#ef4444' : '#94a3b8', fontWeight: 700 }}>
@@ -417,9 +427,11 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                     </td>
                     <td style={S.tdR}><UpsideCell value={r.upside_pct} /></td>
                     <td style={{ ...S.tdR, color: '#94a3b8' }}>{r.price_target_mean != null ? `${r.price_target_mean.toFixed(0)}p` : '—'}</td>
-                    <td style={{ ...S.tdR, color: r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#555' }}>
-                      {r.revision_score != null ? (r.revision_score > 0 ? `+${r.revision_score}` : r.revision_score) : '—'}
-                    </td>
+                    {!isNarrowDesktop && (
+                      <td style={{ ...S.tdR, color: r.revision_score > 0 ? '#10b981' : r.revision_score < 0 ? '#ef4444' : '#555' }}>
+                        {r.revision_score != null ? (r.revision_score > 0 ? `+${r.revision_score}` : r.revision_score) : '—'}
+                      </td>
+                    )}
                     <td style={S.tdR}>{r.total_analysts ?? '—'}</td>
                   </tr>
                 ))}
