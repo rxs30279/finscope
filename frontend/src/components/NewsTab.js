@@ -28,6 +28,20 @@ function fmtTime(iso) {
   return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'2-digit' });
 }
 
+// Honest coverage label for a feed: "since <date of oldest row present>". The
+// backend queries a 6-month window, but RNS is pruned to 14 days and press only
+// accumulates as the table ages — so the real range is whatever's actually here.
+function spanLabel(items) {
+  const dates = (items || [])
+    .map(i => i && i.published_at)
+    .filter(Boolean)
+    .map(s => new Date(s))
+    .filter(d => !isNaN(d));
+  if (!dates.length) return null;
+  const oldest = new Date(Math.min(...dates));
+  return `since ${oldest.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'2-digit' })}`;
+}
+
 function RnsRow({ r }) {
   const tier = TIER_STYLE[r.tier] || TIER_STYLE.C;
   const action = (r.llm_action || '').toLowerCase();
@@ -137,13 +151,16 @@ export default function NewsTab({ symbol, split = false }) {
   const rns = Array.isArray(data.rns) ? data.rns : [];
   const google = Array.isArray(data.google) ? data.google : [];
 
+  const rnsSpan = spanLabel(rns);
+  const googleSpan = spanLabel(google);
+
   const themes = Array.isArray(summary?.themes) ? summary.themes : [];
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
         <div style={{ color:'#64748b', fontSize:11, fontFamily:'monospace' }}>
-          Last 6 months · {rns.length} RNS · {google.length} press
+          {google.length} press{googleSpan && ` (${googleSpan})`} · {rns.length} RNS{rnsSpan && ` (${rnsSpan})`}
           {data.google_fetched_at && <> · Google updated {fmtTime(data.google_fetched_at)}</>}
         </div>
         <button
@@ -263,7 +280,7 @@ export default function NewsTab({ symbol, split = false }) {
           </div>
           {rns.length === 0 ? (
             <div style={{ padding:20, color:'#555', fontSize:12, fontFamily:'monospace', textAlign:'center' }}>
-              No RNS announcements in the last 6 months
+              No RNS announcements in the last 14 days
             </div>
           ) : rns.map(r => <RnsRow key={r.id} r={r} />)}
         </div>
