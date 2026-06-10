@@ -116,7 +116,7 @@ function PctBadge({ value }) {
   );
 }
 
-export default function Sidebar({ refreshKey, onNavigate }) {
+export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
   const [data, setData] = useState(null);
   // Click-to-reveal: which companies make up each ICB sector basket.
   const [constituents, setConstituents] = useState(null); // { sector: [{symbol,name}] }
@@ -163,8 +163,15 @@ export default function Sidebar({ refreshKey, onNavigate }) {
   const rowStyle   = { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 };
   const nameStyle  = { color:'#94a3b8', fontSize:10 };
 
+  // On mobile the sidebar is rendered inline inside the hamburger drawer, so it
+  // drops the fixed width, sticky positioning and own-scroll/borders and just
+  // flows with the menu content.
+  const asideStyle = mobile
+    ? { width:'100%', boxSizing:'border-box', background:'transparent', padding:'4px 20px 16px' }
+    : { width:185, flexShrink:0, background:'#0d0d0d', borderRight:'1px solid #1e1e1e', padding:'16px 12px', height:'calc(100vh - 52px)', position:'sticky', top:52, overflowY:'auto', scrollbarWidth:'none', msOverflowStyle:'none' };
+
   return (
-    <aside style={{ width:185, flexShrink:0, background:'#0d0d0d', borderRight:'1px solid #1e1e1e', padding:'16px 12px', height:'calc(100vh - 52px)', position:'sticky', top:52, overflowY:'auto', scrollbarWidth:'none', msOverflowStyle:'none' }}>
+    <aside style={asideStyle}>
 
       {/* Benchmarks */}
       <div style={labelStyle}>Benchmarks</div>

@@ -472,6 +472,12 @@ export default function RnsTab({ refreshKey, onSelect }) {
                 {r.company_name}
               </span>
             )}
+            {/* AI score — pinned to the top-right of the card, as in the email digest */}
+            {r.llm_score != null && (
+              <span style={{ marginLeft: "auto" }}>
+                <ScoreCell value={r.llm_score} />
+              </span>
+            )}
           </div>
           <a
             href={r.url}

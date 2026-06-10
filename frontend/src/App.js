@@ -3596,27 +3596,30 @@ export default function App() {
             minWidth: 0,
           }}
         >
-          {/* Tool manual — served from the DB via /api/help-doc */}
-          <a
-            href={`${API}/help-doc`}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Tool manual"
-            style={{
-              background: "#2f2f2f",
-              color: "#e5e5e5",
-              border: "1px solid #3f3f3f",
-              padding: "4px 10px",
-              borderRadius: 2,
-              fontFamily: "monospace",
-              fontSize: isMobile ? 12 : 10,
-              cursor: "pointer",
-              textDecoration: "none",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {isMobile ? "?" : "Tool Manual"}
-          </a>
+          {/* Tool manual — served from the DB via /api/help-doc. On mobile it
+              lives in the hamburger menu instead of the top bar. */}
+          {!isMobile && (
+            <a
+              href={`${API}/help-doc`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Tool manual"
+              style={{
+                background: "#2f2f2f",
+                color: "#e5e5e5",
+                border: "1px solid #3f3f3f",
+                padding: "4px 10px",
+                borderRadius: 2,
+                fontFamily: "monospace",
+                fontSize: 10,
+                cursor: "pointer",
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Tool Manual
+            </a>
+          )}
           {!isMobile && !isNarrow && lastUpdated && (
             <span
               style={{ color: "#444", fontSize: 10, fontFamily: "monospace" }}
@@ -3782,6 +3785,46 @@ export default function App() {
                 {g.label}
               </button>
             ))}
+            {/* Mobile-only: the desktop sidebar's benchmarks live on their own
+                page here, since there's no room for the sidebar on small screens. */}
+            <button
+              onClick={() => navigate("benchmarks")}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                background: page === "benchmarks" ? "#1f1200" : "none",
+                border: "none",
+                padding: "12px 20px",
+                color: page === "benchmarks" ? "#f97316" : "#999",
+                cursor: "pointer",
+                fontSize: 13,
+                fontFamily: "monospace",
+                fontWeight: page === "benchmarks" ? 700 : 400,
+              }}
+            >
+              Benchmarks
+            </button>
+            <a
+              href={`${API}/help-doc`}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{
+                display: "block",
+                width: "100%",
+                boxSizing: "border-box",
+                textAlign: "left",
+                padding: "12px 20px",
+                color: "#999",
+                cursor: "pointer",
+                fontSize: 13,
+                fontFamily: "monospace",
+                textDecoration: "none",
+              }}
+            >
+              Tool Manual
+            </a>
             <div
               style={{
                 borderTop: "1px solid #1f1f1f",
@@ -3904,6 +3947,9 @@ export default function App() {
           )}
           {page === "rns" && (
             <RnsTab refreshKey={refreshKey} onSelect={selectCompany} />
+          )}
+          {page === "benchmarks" && (
+            <Sidebar refreshKey={refreshKey} onNavigate={navigate} mobile />
           )}
           {page === "subscribe" && <SubscribeTab />}
           {page === "donate" && <DonateTab />}
