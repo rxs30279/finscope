@@ -3209,6 +3209,8 @@ export default function App() {
     // Deep-link support: emails point at /?tab=subscribe.
     if (typeof window === "undefined") return "screener";
     const t = new URLSearchParams(window.location.search).get("tab");
+    // Fear & Greed was merged into the Cross-Asset page; keep old links working.
+    if (t === "fear-greed") return "cross-asset";
     return t || "screener";
   }); // screener | watchlist | rotation | breadth | cross-asset | signals | company | subscribe
   const [selectedSymbol, setSelectedSymbol] = useState(null);
@@ -3416,8 +3418,7 @@ export default function App() {
       id: "markets",
       label: "Markets",
       children: [
-        { id: "fear-greed", label: "Fear & Greed" },
-        { id: "cross-asset", label: "Cross-Asset" },
+        { id: "cross-asset", label: "Cross-Asset & Fear/Greed" },
         { heading: "Sector Analysis" },
         { id: "rotation", label: "Rotation" },
         { id: "breadth", label: "Breadth" },
@@ -4048,8 +4049,12 @@ export default function App() {
           )}
           {page === "rotation" && <RotationTab refreshKey={refreshKey} />}
           {page === "breadth" && <BreadthTab refreshKey={refreshKey} />}
-          {page === "fear-greed" && <FearGreedTab refreshKey={refreshKey} />}
-          {page === "cross-asset" && <CrossAssetTab refreshKey={refreshKey} />}
+          {page === "cross-asset" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 40 }}>
+              <CrossAssetTab refreshKey={refreshKey} />
+              <FearGreedTab refreshKey={refreshKey} />
+            </div>
+          )}
           {page === "signals" && <SignalsTab refreshKey={refreshKey} />}
           {page === "analyst-monitor" && (
             <AnalystMonitorTab
