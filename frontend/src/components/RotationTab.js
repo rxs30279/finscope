@@ -2,51 +2,63 @@ import { useState, useEffect } from 'react';
 import { API } from '../utils';
 import { useIsMobile } from '../useMediaQuery';
 
-const PHASE_ANGLES  = { Recovery: 45, Expansion: 135, Slowdown: 225, Contraction: 315 };
-const PHASE_COLOURS = { Recovery:'#10b981', Expansion:'#60a5fa', Slowdown:'#f59e0b', Contraction:'#ef4444' };
+// Shared badge palette for both the Signal Log and the RS table's Signal column,
+// so the two can't drift apart. BUY/AVOID are common to both; ALERT/INFO are
+// signal-log only; NEUTRAL is the RS-table resting state.
+const SIGNAL_BADGE_STYLES = {
+  BUY:     { background:'#0d3320', color:'#10b981' },
+  AVOID:   { background:'#2a0d0d', color:'#ef4444' },
+  ALERT:   { background:'#1a1400', color:'#f59e0b' },
+  INFO:    { background:'#0d1a2a', color:'#60a5fa' },
+  NEUTRAL: { background:'#1a1a1a', color:'#555' },
+};
 
-const PHASES = ['Recovery', 'Expansion', 'Slowdown', 'Contraction'];
-
-function needleXY(phase, cx, cy, r) {
-  const deg = PHASE_ANGLES[phase] || 45;
-  const rad = ((deg - 90) * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+function SignalBadge({ type }) {
+  const style = SIGNAL_BADGE_STYLES[type] || SIGNAL_BADGE_STYLES.INFO;
+  return (
+    <span style={{ ...style, padding:'2px 7px', borderRadius:2, fontSize:9, fontFamily:'monospace', whiteSpace:'nowrap', fontWeight:700 }}>
+      {type}
+    </span>
+  );
 }
 
-function CycleWheel({ phase }) {
-  const cx = 90, cy = 90, r = 65;
-  const needle = needleXY(phase, cx, cy, 55);
-  const colour = PHASE_COLOURS[phase] || '#f59e0b';
-
+function SignalLog({ signals }) {
+  // Signals are a snapshot of current conditions (all computed on the same read),
+  // not a time-ordered history — so we label them as current and don't show a
+  // per-row timestamp (which would be identical on every row).
   return (
-    <div style={{ textAlign:'center' }}>
-      <svg width={180} height={180} viewBox="0 0 180 180">
-        <path d={`M${cx},${cy} L${cx},${cy-r} A${r},${r} 0 0,1 ${cx+r},${cy} Z`} fill="#0d2318" stroke="#1e4030" strokeWidth={1}/>
-        <path d={`M${cx},${cy} L${cx+r},${cy} A${r},${r} 0 0,1 ${cx},${cy+r} Z`} fill="#1a1400" stroke="#3a2800" strokeWidth={1}/>
-        <path d={`M${cx},${cy} L${cx},${cy+r} A${r},${r} 0 0,1 ${cx-r},${cy} Z`} fill="#2a0d0d" stroke="#4a1a1a" strokeWidth={1}/>
-        <path d={`M${cx},${cy} L${cx-r},${cy} A${r},${r} 0 0,1 ${cx},${cy-r} Z`} fill="#0d1a2a" stroke="#1a3040" strokeWidth={1}/>
-        <text x={cx+42} y={cy-38} fill="#10b981" fontSize={9} fontFamily="monospace" textAnchor="middle">RECOVERY</text>
-        <text x={cx+42} y={cy+46} fill="#60a5fa" fontSize={9} fontFamily="monospace" textAnchor="middle">EXPANSION</text>
-        <text x={cx-40} y={cy+46} fill="#f59e0b" fontSize={9} fontFamily="monospace" textAnchor="middle">SLOWDOWN</text>
-        <text x={cx-38} y={cy-38} fill="#ef4444" fontSize={9} fontFamily="monospace" textAnchor="middle">CONTRACTION</text>
-        <circle cx={cx} cy={cy} r={22} fill="#111" stroke="#333" strokeWidth={1}/>
-        <line x1={cx} y1={cy} x2={needle.x} y2={needle.y} stroke={colour} strokeWidth={2.5} strokeLinecap="round"/>
-        <circle cx={cx} cy={cy} r={4} fill={colour}/>
-      </svg>
-      <div style={{ color: colour, fontSize:13, fontWeight:700, marginTop:4 }}>{phase?.toUpperCase()}</div>
+    <div>
+      <div style={{ color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 }}>
+        {signals.length} current signal{signals.length !== 1 ? 's' : ''}
+      </div>
+      {signals.length === 0 && (
+        <div style={{ color:'#64748b', fontSize:12, padding:'24px 0', textAlign:'center' }}>
+          No signals triggered yet. Check back after market open.
+        </div>
+      )}
+      {signals.map((s, i) => (
+        <div key={`${s.type}-${s.message}-${i}`} style={{ display:'flex', gap:12, alignItems:'flex-start', borderBottom:'1px solid #141414', padding:'10px 0', fontFamily:'monospace' }}>
+          <SignalBadge type={s.type} />
+          <span style={{ color:'#e5e5e5', fontSize:11 }}>{s.message}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
 function SectorHeatmap({ sectors, isMobile }) {
   if (!sectors?.length) return null;
+  // Top 4 and bottom 4 by RS rank are highlighted; the bottom band is derived
+  // from the sector count so it stays correct if SECTOR_TICKERS gains/loses one.
+  const n = sectors.length;
+  const bottomFrom = n - 3; // rank at which the bottom-4 band begins
   return (
     <div style={{ display:'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(3,1fr)', gap:6 }}>
       {sectors.map(s => {
         const rank = s.rank;
         const isTop = rank <= 4;
-        const isBottom = rank >= 8;
-        const bg    = isTop ? `rgba(16,185,129,${0.08 + (4-rank)*0.04})` : isBottom ? `rgba(239,68,68,${0.05 + (rank-8)*0.03})` : '#101010';
+        const isBottom = rank >= bottomFrom;
+        const bg    = isTop ? `rgba(16,185,129,${0.08 + (4-rank)*0.04})` : isBottom ? `rgba(239,68,68,${0.05 + (rank-bottomFrom)*0.03})` : '#101010';
         const border= isTop ? '#10b981' : isBottom ? '#ef4444' : '#222';
         const color = isTop ? '#10b981' : isBottom ? '#ef4444' : '#555';
         return (
@@ -63,11 +75,6 @@ function SectorHeatmap({ sectors, isMobile }) {
 
 function RSTable({ sectors }) {
   if (!sectors?.length) return null;
-  const badgeStyle = (sig) => ({
-    background: sig==='BUY' ? '#0d3320' : sig==='AVOID' ? '#2a0d0d' : '#1a1a1a',
-    color:      sig==='BUY' ? '#10b981' : sig==='AVOID' ? '#ef4444' : '#555',
-    padding:'2px 7px', borderRadius:2, fontSize:9,
-  });
   return (
     <table style={{ width:'100%', minWidth:460, borderCollapse:'collapse', fontSize:11, fontFamily:'monospace' }}>
       <thead>
@@ -87,9 +94,9 @@ function RSTable({ sectors }) {
               {s.trend==='rising' ? '↑ Rising' : s.trend==='falling' ? '↓ Falling' : '—'}
             </td>
             <td style={{ padding:'6px 10px', color:'#94a3b8', textAlign:'right' }}>
-              {s.breadth !== null && s.breadth !== undefined ? `${(s.breadth*100).toFixed(0)}%` : '—'}
+              {s.breadth != null ? `${(s.breadth*100).toFixed(0)}%` : '—'}
             </td>
-            <td style={{ padding:'6px 10px' }}><span style={badgeStyle(s.signal)}>{s.signal}</span></td>
+            <td style={{ padding:'6px 10px' }}><SignalBadge type={s.signal} /></td>
           </tr>
         ))}
       </tbody>
@@ -97,65 +104,40 @@ function RSTable({ sectors }) {
   );
 }
 
-function SuggestionRow({ label, phase, confirmed, current, onAccept }) {
-  if (!phase) return (
-    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-      <span style={{ color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
-      <span style={{ color:'#64748b', fontSize:9 }}>No signal</span>
-    </div>
-  );
-  const colour = PHASE_COLOURS[phase] || '#888';
-  const isMatch = phase === current;
-  return (
-    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-      <span style={{ color:'#94a3b8', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>{label} signal</span>
-      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-        {!confirmed && <span style={{ color:'#64748b', fontSize:8 }}>unconfirmed</span>}
-        <span style={{ color: colour, fontSize:10, fontWeight:700, fontFamily:'monospace' }}>
-          {phase}
-        </span>
-        {isMatch
-          ? <span style={{ color:'#10b981', fontSize:9 }}>✓</span>
-          : <button onClick={() => onAccept(phase)} style={{
-              background:'#1a1a1a', border:`1px solid ${colour}44`, color: colour,
-              borderRadius:2, padding:'2px 7px', fontSize:9, cursor:'pointer', fontFamily:'monospace',
-            }}>Accept</button>
-        }
-      </div>
-    </div>
-  );
-}
-
 export default function RotationTab({ refreshKey }) {
   const [rotation, setRotation] = useState([]);
-  const [cycle, setCycle]       = useState(null);
+  const [signals, setSignals]   = useState([]);
   const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState(false);
   const isMobile = useIsMobile();
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
+    setError(false);
     Promise.all([
       fetch(`${API}/market/rotation`).then(r=>r.json()),
-      fetch(`${API}/market/cycle`).then(r=>r.json()),
-    ]).then(([rot, cyc]) => {
+      fetch(`${API}/market/signals`).then(r=>r.json()),
+    ]).then(([rot, sig]) => {
+      if (cancelled) return;
       setRotation(Array.isArray(rot) ? rot : []);
-      setCycle(cyc);
+      setSignals(Array.isArray(sig) ? sig : []);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {
+      if (cancelled) return;
+      setError(true);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [refreshKey]);
-
-  const handleSetPhase = (phase) => {
-    fetch(`${API}/market/cycle`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ phase }),
-    }).then(r=>r.json()).then(setCycle);
-  };
 
   const card = { background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 };
   const title = { color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 };
 
-  if (loading) return <div style={{ color:'#444', padding:32, fontFamily:'monospace' }}>Loading rotation data…</div>;
+  // Only blank the page on the very first load; later refreshes swap data in
+  // underneath the existing view rather than flashing the whole tab.
+  if (loading && !rotation.length) return <div style={{ color:'#444', padding:32, fontFamily:'monospace' }}>Loading rotation data…</div>;
+  if (error && !rotation.length) return <div style={{ color:'#ef4444', padding:32, fontFamily:'monospace' }}>Couldn’t load rotation data. Try refreshing.</div>;
 
   return (
     <div>
@@ -166,32 +148,8 @@ export default function RotationTab({ refreshKey }) {
           <SectorHeatmap sectors={rotation} isMobile={isMobile} />
         </div>
         <div style={card}>
-          <div style={title}>Business Cycle</div>
-          {cycle && <CycleWheel phase={cycle.phase} />}
-          {cycle?.guidance && (
-            <div style={{ marginTop:12, fontSize:10 }}>
-              <div style={{ color:'#10b981', marginBottom:2 }}>Favour: {cycle.guidance.favour?.join(', ')}</div>
-              <div style={{ color:'#ef4444' }}>Avoid: {cycle.guidance.avoid?.join(', ')}</div>
-            </div>
-          )}
-          {cycle && (
-            <div style={{ marginTop:16, borderTop:'1px solid #1e1e1e', paddingTop:12, display:'flex', flexDirection:'column', gap:8 }}>
-              <SuggestionRow
-                label="F&G"
-                phase={cycle.fg_suggested_phase}
-                confirmed={cycle.fg_confirmed}
-                current={cycle.phase}
-                onAccept={handleSetPhase}
-              />
-              <SuggestionRow
-                label="Rotation"
-                phase={cycle.rotation_suggested_phase}
-                confirmed={true}
-                current={cycle.phase}
-                onAccept={handleSetPhase}
-              />
-            </div>
-          )}
+          <div style={title}>Signal Log</div>
+          <SignalLog signals={signals} />
         </div>
       </div>
       <div style={card}>

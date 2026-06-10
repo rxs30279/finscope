@@ -146,7 +146,7 @@ def test_cross_asset_items_have_value_and_change(client):
         assert "pct_change" in item
 
 
-# ── signals + cycle tests ─────────────────────────────────────────────────────
+# ── signals tests ─────────────────────────────────────────────────────────────
 def test_signals_returns_list(client):
     from market import ALL_PROXY_TICKERS
     fake = _fake_prices(ALL_PROXY_TICKERS)
@@ -163,22 +163,6 @@ def test_signals_entries_have_required_fields(client):
     for entry in r.json():
         for field in ["timestamp", "type", "message"]:
             assert field in entry
-
-def test_cycle_get_returns_phase(client):
-    r = client.get("/api/market/cycle")
-    assert r.status_code == 200
-    data = r.json()
-    assert "phase" in data
-    assert data["phase"] in ("Recovery", "Expansion", "Slowdown", "Contraction")
-
-def test_cycle_post_updates_phase(client):
-    r = client.post("/api/market/cycle", json={"phase": "Expansion"})
-    assert r.status_code == 200
-    r2 = client.get("/api/market/cycle")
-    assert r2.json()["phase"] == "Expansion"
-    # reset
-    client.post("/api/market/cycle", json={"phase": "Recovery"})
-
 
 # ── fear & greed helper tests ─────────────────────────────────────────────────
 def test_zscore_to_score_midpoint():
@@ -214,32 +198,6 @@ def test_zscore_to_score_constant_series():
     constant = pd.Series([5.0] * 25)  # 25 identical values → std = 0
     assert market._zscore_to_score(constant, 5.0) == 50
 
-def test_suggest_phase_unknown_trend():
-    import market
-    assert market._suggest_phase(30, "unknown") == "no_change"
-
-def test_suggest_phase_neutral_zone():
-    import market
-    assert market._suggest_phase(50, "rising") == "no_change"
-    assert market._suggest_phase(50, "falling") == "no_change"
-
-def test_suggest_phase_low_falling():
-    import market
-    assert market._suggest_phase(20, "falling") == "Contraction"
-
-def test_suggest_phase_low_rising():
-    import market
-    assert market._suggest_phase(20, "rising") == "Recovery"
-
-def test_suggest_phase_high_rising():
-    import market
-    assert market._suggest_phase(70, "rising") == "Expansion"
-
-def test_suggest_phase_high_falling():
-    import market
-    assert market._suggest_phase(70, "falling") == "Slowdown"
-
-
 # ── EOD cutoff tests (Fear & Greed uses last completed session, not intraday) ──
 def test_eod_cutoff_excludes_today_during_session():
     import market
@@ -269,7 +227,7 @@ def test_fear_greed_compute_returns_expected_keys(client):
         r = client.get("/api/market/fear-greed")
     assert r.status_code == 200
     data = r.json()
-    for key in ["score", "sentiment", "trend", "suggested_phase", "confirmed", "components", "as_of"]:
+    for key in ["score", "sentiment", "trend", "components", "as_of"]:
         assert key in data, f"Missing key: {key}"
     # as_of is the date of the last completed session the reading was built from.
     assert data["as_of"] is None or isinstance(data["as_of"], str)

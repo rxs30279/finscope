@@ -32,8 +32,7 @@
 5. [Sector Analysis](#5-sector-analysis)
    - 5.1 [Sector Rotation](#51-sector-rotation)
    - 5.2 [Market Breadth](#52-market-breadth)
-   - 5.3 [Signal Log](#53-signal-log)
-   - 5.4 [Sector Heatmap (Treemap)](#54-sector-heatmap-treemap)
+   - 5.3 [Sector Heatmap (Treemap)](#53-sector-heatmap-treemap)
 6. [Markets](#6-markets)
    - 6.1 [Fear & Greed Index](#61-fear--greed-index)
    - 6.2 [Cross-Asset Monitor](#62-cross-asset-monitor)
@@ -107,7 +106,7 @@ The tool focuses on **UK-listed equities** — companies whose shares trade on t
 
 When you open Alpha Move AI you see:
 
-- **Top navigation bar** — Screener, Trending, Watchlist, Analysts, RNS News, PEGY, Subscribe, and a Markets dropdown (Fear & Greed, Cross-Asset, and a Sector Analysis group: Rotation, Breadth, Signal Log).
+- **Top navigation bar** — Screener, Trending, Watchlist, Analysts, RNS News, PEGY, Subscribe, and a Markets dropdown (Fear & Greed, Cross-Asset, and a Sector Analysis group: Rotation, Breadth).
 - **Left sidebar** — a live pulse of the market: benchmark returns, market fear levels, current cycle signals, and ICB sector strength (with a **▦ Heatmap** link to the Sector Heatmap). Toggle the sidebar on or off using the icon at the top-left of the navigation bar.
 - **Main content area** — changes depending on which page you are on.
 - **Search bar** — type a company name or ticker symbol to jump straight to its detail page.
@@ -648,7 +647,12 @@ An RS Score < 0.95 means the sector has underperformed by more than 5% — this 
 
 **Market Breadth** (% of sector stocks above their 50-day moving average) confirms the signal — a sector showing strong RS with broad participation across its constituent stocks is a more reliable signal than one carried by a single mega-cap name.
 
-**The Cycle Wheel** visualises the current estimated phase of the economic cycle based on sector rotation patterns.
+**The Signal Log** sits alongside the heatmap on the Rotation page — a chronological record of automatically generated signals so you can see what fired and when:
+
+- **BUY** — A sector's RS score crossed above 1.05 with a rising trend.
+- **AVOID** — A sector's RS score dropped below 0.95 with a falling trend.
+- **ALERT** — A noteworthy change in breadth (the FTSE breadth crossing its bullish/bearish threshold).
+- **INFO** — General market observations.
 
 ---
 
@@ -664,20 +668,7 @@ Market breadth measures the **participation** in a market move — not just whet
 
 ---
 
-### 5.3 Signal Log
-
-A chronological record of automatically generated signals:
-
-- **BUY** — A sector's RS score crossed above 1.05 with a rising trend.
-- **AVOID** — A sector's RS score dropped below 0.95 with a falling trend.
-- **ALERT** — A noteworthy change in breadth or sentiment.
-- **INFO** — General market observations.
-
-Use the signal log to track when sector rotation signals were generated and evaluate them with hindsight.
-
----
-
-### 5.4 Sector Heatmap (Treemap)
+### 5.3 Sector Heatmap (Treemap)
 
 The **Sector Heatmap** is a single-screen "weather map" of the whole market. Open it from the **▦ Heatmap** link next to *ICB Sectors* in the left sidebar.
 
@@ -730,8 +721,6 @@ Markets are driven by two emotions: fear and greed. When greed dominates (score 
 | 45–54 | Neutral | No strong signal |
 | 25–44 | Fear | Market under stress; look for quality stocks on sale |
 | 0–24 | Extreme Fear | Potential buying opportunity for long-term investors |
-
-**Cycle Phase Suggestion:** The tool automatically suggests a market cycle phase (Recovery / Expansion / Slowdown / Contraction) based on the F&G score and its trend over time.
 
 ---
 
@@ -934,7 +923,6 @@ The sidebar is always visible (toggle it on or off via the icon at the top-left 
 | **VIX** | Current US volatility index level. Below 15 = calm; 20–30 = elevated; 30+ = stressed |
 | **CNN Fear & Greed** | External US market sentiment gauge (from CNN) |
 | **UK Fear & Greed** | The FINScope-calculated UK sentiment score |
-| **Cycle Phase** | Current estimated market cycle phase |
 | **Top RS Sector** | The sector with the highest relative strength — where market leadership currently sits |
 | **Market Breadth** | Overall % of FTSE stocks above their 50-day MA |
 
@@ -1016,12 +1004,10 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 
 **Steps:**
 
-1. Go to **Sector Analysis → Rotation**
+1. Go to **Sector Analysis → Rotation** and review the **Signal Log** for context on how long a signal has been in place
 2. Identify sectors with a BUY signal (RS > 1.05, rising trend) and strong breadth (>60% of stocks above 50-day MA)
-3. Note the **Cycle Wheel** — does the suggested phase align with your macro view?
-4. In the Screener, filter by the leading sector(s)
-5. Apply: Min Momentum **6**, Min Quality **5**, sort by Market Cap descending for the largest, most liquid names
-6. Review the **Signal Log** for context on how long the signal has been in place
+3. In the Screener, filter by the leading sector(s)
+4. Apply: Min Momentum **6**, Min Quality **5**, sort by Market Cap descending for the largest, most liquid names
 
 **What you are looking for:** The "sweet spot" is a sector that has recently generated a BUY signal (not one that has been leading for 12 months and may be due to rotate). Combine with individual stock quality and momentum scores to find the best names within the sector.
 
@@ -1103,7 +1089,7 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
      - 25–55 (Fear / Neutral): excellent time to be hunting — assets often mispriced
      - 55–75 (Greed): hunt selectively — focus on lagging quality names
      - 75+ (Extreme Greed): be defensive — see Workflow 11.5 instead
-   - Check **Cycle Phase** in the sidebar — it tells you which sectors typically lead.
+   - Check the **Top RS Sector** and **Market Breadth** in the sidebar for a read on where leadership sits.
 
 2. **Pick your sector battlefield** *(Sector Rotation)*
    - Go to **Markets → Rotation**. Note the top 3 sectors with the highest RS Score and rising trend.

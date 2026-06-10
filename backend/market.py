@@ -267,35 +267,6 @@ def _get_ftse_long():
     return _cached("ftse_long", fetch)
 
 
-# ── Cycle phase state (in-memory, manually set) ───────────────────────────────
-_cycle = {
-    "phase": "Recovery",
-    "set_at": datetime.now().isoformat(),
-}
-
-PHASE_GUIDANCE = {
-    "Recovery": {
-        "favour": ["Energy", "Financials", "Materials", "Industrials"],
-        "avoid": ["Utilities", "Consumer Staples"],
-    },
-    "Expansion": {
-        "favour": ["Technology", "Consumer Discretionary", "Industrials"],
-        "avoid": ["Health Care", "Utilities"],
-    },
-    "Slowdown": {
-        "favour": ["Health Care", "Consumer Staples", "Utilities"],
-        "avoid": ["Energy", "Materials", "Financials"],
-    },
-    "Contraction": {
-        "favour": ["Utilities", "Consumer Staples", "Health Care"],
-        "avoid": ["Energy", "Financials", "Technology"],
-    },
-}
-
-# ── In-memory signal log ──────────────────────────────────────────────────────
-_signal_log: list = []
-
-
 # ── Fear & Greed helpers ──────────────────────────────────────────────────────
 def _zscore_to_score(series, current_val, clip=2.0):
     """Map current_val to 0-100 using z-score over series. Returns 50 on insufficient data."""
@@ -325,25 +296,8 @@ def _deviation_to_score(series, current_val, clip=2.0):
     return round((z + clip) / (2 * clip) * 100)
 
 
-def _suggest_phase(score, trend):
-    """Map F&G score + trend to a suggested cycle phase string."""
-    if trend == "unknown":
-        return "no_change"
-    if 45 <= score <= 55:
-        return "no_change"
-    if score < 45 and trend == "falling":
-        return "Contraction"
-    if score < 45 and trend == "rising":
-        return "Recovery"
-    if score > 55 and trend == "rising":
-        return "Expansion"
-    if score > 55 and trend == "falling":
-        return "Slowdown"
-    return "no_change"
-
-
 # ── Fear & Greed state ────────────────────────────────────────────────────────
-_fg_history: list = []  # last 4 readings: [{score, suggested_phase, timestamp}, ...]
+_fg_history: list = []  # last 4 readings: [{score, timestamp}, ...], used for the trend read
 
 
 def _eod_cutoff():
@@ -539,50 +493,20 @@ def _compute_fear_greed():
     else:
         trend = "unknown"
 
-    # Suggested phase from score + trend
-    suggested_phase = _suggest_phase(overall, trend)
-
-    # Update history (keep last 4)
+    # Update history (keep last 4) — drives the trend read above.
     _fg_history.append(
         {
             "score": overall,
-            "suggested_phase": suggested_phase,
             "timestamp": datetime.now().isoformat(),
         }
     )
     if len(_fg_history) > 4:
         _fg_history.pop(0)
 
-    # Auto-update cycle if last 2 readings confirm same phase
-    confirmed = False
-    if len(_fg_history) >= 2 and suggested_phase != "no_change":
-        last_two = _fg_history[-2:]
-        if (
-            last_two[0]["suggested_phase"]
-            == last_two[1]["suggested_phase"]
-            == suggested_phase
-        ):
-            confirmed = True
-            if suggested_phase != _cycle["phase"]:
-                _cycle["phase"] = suggested_phase
-                _cycle["set_at"] = datetime.now().isoformat()
-                _signal_log.insert(
-                    0,
-                    {
-                        "timestamp": datetime.now().strftime("%d %b %H:%M"),
-                        "type": "INFO",
-                        "message": f"Cycle phase auto-updated to {suggested_phase} by Fear & Greed index (score: {overall})",
-                    },
-                )
-                _cache.pop("signals", None)
-                _cache.pop("sidebar", None)
-
     return {
         "score": overall,
         "sentiment": sentiment,
         "trend": trend,
-        "suggested_phase": suggested_phase,
-        "confirmed": confirmed,
         "components": components,
         "as_of": as_of,
     }
@@ -1158,10 +1082,8 @@ def sidebar():
                 "score": fg["score"],
                 "sentiment": fg["sentiment"],
                 "trend": fg["trend"],
-                "suggested_phase": fg["suggested_phase"],
             },
             "signal_summary": {
-                "cycle_phase": _cycle["phase"],
                 "top_rs_sector": top_rs,
                 "breadth": avg_breadth,
             },
@@ -1391,15 +1313,12 @@ def fear_greed():
     return _cached("fear_greed", _compute_fear_greed)
 
 
-from fastapi import Body
-
-
 def _compute_signals():
     """Generate signal log by running rotation + breadth and checking thresholds."""
     rotation_data = _compute_rotation()
     breadth_data = _compute_breadth()
     now = datetime.now().strftime("%d %b %H:%M")
-    signals = list(_signal_log)  # include manually added signals (e.g. phase changes)
+    signals = []
 
     breadth_val = breadth_data.get("pct_above_50ma")
     if breadth_val is not None:
@@ -1445,81 +1364,3 @@ def _compute_signals():
 @router.get("/signals")
 def signals():
     return _cached("signals", _compute_signals)
-
-
-def _suggest_phase_from_rotation(rotation_data):
-    """Infer cycle phase from which sectors are leading by RS rank.
-    Returns the phase whose favoured sectors best match the top-4 RS leaders,
-    or None if the signal is ambiguous (fewer than 2 matches)."""
-    if not rotation_data:
-        return None
-    top_sectors = {s["sector"] for s in rotation_data if s.get("rank", 99) <= 4}
-    scores = {
-        phase: len(set(guidance["favour"]) & top_sectors)
-        for phase, guidance in PHASE_GUIDANCE.items()
-    }
-    best_phase = max(scores, key=scores.get)
-    return best_phase if scores[best_phase] >= 2 else None
-
-
-@router.get("/cycle")
-def get_cycle():
-    rotation = _cached("rotation", _compute_rotation)
-    rotation_suggestion = _suggest_phase_from_rotation(rotation)
-
-    # Ensure F&G has been computed at least once
-    fg_data = _cached("fear_greed", _compute_fear_greed)
-    fg_score = fg_data.get("score") if fg_data else None
-
-    # Use trend-based suggestion if available, otherwise derive from score alone
-    fg_suggestion = _fg_history[-1]["suggested_phase"] if _fg_history else None
-    if not fg_suggestion or fg_suggestion == "no_change":
-        if fg_score is not None:
-            if fg_score >= 70:
-                fg_suggestion = "Expansion"
-            elif fg_score >= 55:
-                fg_suggestion = "Recovery"
-            elif fg_score <= 30:
-                fg_suggestion = "Contraction"
-            elif fg_score <= 45:
-                fg_suggestion = "Slowdown"
-            else:
-                fg_suggestion = None  # 45-55: neutral
-
-    fg_confirmed = (
-        len(_fg_history) >= 2
-        and _fg_history[-1].get("suggested_phase") not in (None, "no_change")
-        and _fg_history[-1]["suggested_phase"] == _fg_history[-2].get("suggested_phase")
-    )
-
-    return {
-        "phase": _cycle["phase"],
-        "set_at": _cycle["set_at"],
-        "guidance": PHASE_GUIDANCE.get(_cycle["phase"], {}),
-        "fg_suggested_phase": fg_suggestion,
-        "fg_confirmed": fg_confirmed,
-        "rotation_suggested_phase": rotation_suggestion,
-    }
-
-
-@router.post("/cycle")
-def set_cycle(body: dict = Body(...)):
-    phase = body.get("phase")
-    if phase not in PHASE_GUIDANCE:
-        from fastapi import HTTPException
-
-        raise HTTPException(400, f"phase must be one of {list(PHASE_GUIDANCE.keys())}")
-    _cycle["phase"] = phase
-    _cycle["set_at"] = datetime.now().isoformat()
-    _signal_log.insert(
-        0,
-        {
-            "timestamp": datetime.now().strftime("%d %b %H:%M"),
-            "type": "INFO",
-            "message": f"Cycle phase set to {phase} — manual override",
-        },
-    )
-    # clear signal cache so next fetch reflects new phase
-    _cache.pop("signals", None)
-    _cache.pop("sidebar", None)
-    return get_cycle()

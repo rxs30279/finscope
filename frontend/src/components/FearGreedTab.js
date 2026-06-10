@@ -252,12 +252,6 @@ export default function FearGreedTab({ refreshKey }) {
             Trend: <span style={{ color: fg.trend === 'rising' ? '#10b981' : fg.trend === 'falling' ? '#ef4444' : '#666' }}>
               {fg.trend === 'rising' ? '↑ Rising' : fg.trend === 'falling' ? '↓ Falling' : '—'}
             </span>
-            {fg.suggested_phase && fg.suggested_phase !== 'no_change' && (
-              <> &nbsp;|&nbsp; Auto-phase: <span style={{ color }}>{fg.suggested_phase}</span>
-              &nbsp;|&nbsp; Confirmed: <span style={{ color: fg.confirmed ? '#10b981' : '#94a3b8' }}>
-                {fg.confirmed ? '2/2 readings' : '1/2 readings'}
-              </span></>
-            )}
           </div>
         </div>
 

@@ -120,14 +120,6 @@ export default function Sidebar({ refreshKey, onNavigate }) {
           <div style={{ background:'#1a1a1a', borderRadius:2, height:4, marginBottom:6 }}>
             <div style={{ background: fgColor(data.fear_greed.score), width:`${data.fear_greed.score}%`, height:4, borderRadius:2 }}/>
           </div>
-          {data.fear_greed.suggested_phase && data.fear_greed.suggested_phase !== 'no_change' && (
-            <div style={{ color:'#555', fontSize:9 }}>
-              Auto phase: <span style={{ color: fgColor(data.fear_greed.score) }}>
-                {data.fear_greed.suggested_phase}
-                {data.fear_greed.trend === 'rising' ? ' ↑' : data.fear_greed.trend === 'falling' ? ' ↓' : ''}
-              </span>
-            </div>
-          )}
         </div>
       )}
 
@@ -183,9 +175,6 @@ export default function Sidebar({ refreshKey, onNavigate }) {
         <div style={{ marginTop:16, borderTop:'1px solid #1e1e1e', paddingTop:12 }}>
           <div style={labelStyle}>Model Signal</div>
           <div style={{ background:'#1a1400', border:'1px solid #333', borderRadius:3, padding:10 }}>
-            <div style={{ color:'#f59e0b', fontSize:11, marginBottom:6, fontWeight:700 }}>
-              ⚡ {data.signal_summary.cycle_phase?.toUpperCase()}
-            </div>
             <div style={{ color:'#666', fontSize:9 }}>
               Above 50MA: <span style={{ color:'#10b981' }}>{data.signal_summary.breadth !== null ? `${(data.signal_summary.breadth*100).toFixed(0)}%` : '—'}</span>
             </div>

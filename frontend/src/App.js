@@ -35,7 +35,6 @@ import RotationTab from "./components/RotationTab";
 import BreadthTab from "./components/BreadthTab";
 import FearGreedTab from "./components/FearGreedTab";
 import CrossAssetTab from "./components/CrossAssetTab";
-import SignalsTab from "./components/SignalsTab";
 import AnalystTab from "./components/AnalystTab";
 import AnalystMonitorTab from "./components/AnalystMonitorTab";
 import RnsTab from "./components/RnsTab";
@@ -3422,7 +3421,6 @@ export default function App() {
         { heading: "Sector Analysis" },
         { id: "rotation", label: "Rotation" },
         { id: "breadth", label: "Breadth" },
-        { id: "signals", label: "Signal Log" },
       ],
     },
   ];
@@ -4055,7 +4053,6 @@ export default function App() {
               <FearGreedTab refreshKey={refreshKey} />
             </div>
           )}
-          {page === "signals" && <SignalsTab refreshKey={refreshKey} />}
           {page === "analyst-monitor" && (
             <AnalystMonitorTab
               refreshKey={refreshKey}
