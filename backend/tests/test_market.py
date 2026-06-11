@@ -1,6 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
+from contextlib import ExitStack
 from unittest.mock import patch
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -15,9 +16,14 @@ def _fake_prices(tickers, rows=280):
     return pd.DataFrame(data, index=dates)
 
 def _patch_prices(fake_df):
-    """Context manager: patch _get_prices to return fake_df."""
+    """Context manager: patch both price feeds — the shared 1-year _get_prices and the
+    2-year F&G feed (_get_fg_prices_2y, which the Fear & Greed calc now combines in) — to
+    return fake_df, so the calcs stay hermetic and never hit the network."""
     import market
-    return patch.object(market, "_get_prices", return_value=fake_df)
+    stack = ExitStack()
+    stack.enter_context(patch.object(market, "_get_prices", return_value=fake_df))
+    stack.enter_context(patch.object(market, "_get_fg_prices_2y", return_value=fake_df))
+    return stack
 
 
 # ── sidebar tests ─────────────────────────────────────────────────────────────

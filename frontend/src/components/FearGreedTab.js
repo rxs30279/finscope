@@ -22,27 +22,27 @@ function fgColor(score) {
 // Per-component explanations: how each gauge is calculated and what it tells us.
 const COMPONENT_INFO = {
   momentum: {
-    how: 'Measures how far the FTSE 100 is trading above or below its 125-day (≈6-month) moving average. A zero gap (price sitting on its average) scores 50; the score rises as price pulls above the average and falls as it drops below, scaled by how volatile that gap typically is.',
-    means: 'When the index trades above its medium-term trend, momentum and risk appetite are positive — a greed signal. When it slips below, price is breaking trend, which tends to accompany fear and pullbacks.',
+    how: 'Measures how far the FTSE 100 is trading above or below its 125-day (≈6-month) moving average, then ranks that gap against its own trailing two-year range. The most bearish gap of the period scores near 0, the most bullish near 100, and a typical gap sits around 50.',
+    means: 'When the index trades unusually far above its medium-term trend, momentum and risk appetite are positive — a greed signal. When the gap is unusually low or negative, price is breaking trend, which tends to accompany fear and pullbacks.',
   },
   breadth: {
-    how: 'Counts the share of FTSE 100 stocks trading above their own 50-day moving average. That percentage is the score directly: 50% (half the market above trend) is neutral, higher is greed, lower is fear.',
+    how: 'Counts the share of FTSE 100 stocks trading above their own 50-day moving average, then ranks that figure against its own trailing two-year range — so the score reflects how broad participation is relative to the recent norm (near 0 = the narrowest of the period, near 100 = the broadest).',
     means: 'High breadth signals a broad, healthy advance where most stocks participate — greed. Low breadth warns that gains are narrow or that selling is widespread beneath the surface, a classic fear signal even when the headline index looks calm.',
   },
   currency: {
-    how: 'Takes the 60-day percentage change in GBP/USD and inverts it onto a 0–100 scale, scaled by how much the exchange rate typically moves over 60 days. A flat pound scores 50; a stronger pound pulls the score down and a weaker pound pushes it up.',
+    how: 'Takes the 60-day percentage change in GBP/USD, inverts it, and ranks it against its own trailing two-year range. A pound near its strongest of the period scores near 0 (fear), near its weakest near 100 (greed).',
     means: 'Around three-quarters of FTSE 100 revenue is earned overseas, so the level of sterling drives reported profits. A weaker pound flatters those overseas earnings once converted back — a tailwind that reads as greed; a stronger pound is an earnings headwind that reads as fear. The US VIX, previously used here, now sits in its own panel as a standalone cross-check.',
   },
   safe_haven: {
-    how: 'Compares the 20-day total return of the FTSE 100 against a UK gilt ETF (all-maturity gilts). A zero spread — stocks and bonds neck-and-neck — scores 50; stocks pulling ahead lifts the score, gilts winning pulls it down, scaled by how much the spread normally swings.',
+    how: 'Compares the 20-day total return of the FTSE 100 against a UK gilt ETF (all-maturity gilts), then ranks that spread against its own trailing two-year range. Stocks outpacing bonds by an unusual margin scores near 100; gilts winning by an unusual margin scores near 0.',
     means: 'When stocks outpace safe government bonds, money is chasing risk — greed. When gilts win, investors are rotating into safety — fear. It captures the tug-of-war between risk-on and risk-off positioning.',
   },
   realised_vol: {
-    how: 'Calculates the actual (realised) 20-day volatility of FTSE 100 daily returns, annualised, then inverts it onto a 0–100 scale. Calm markets score high; turbulent markets score low.',
+    how: 'Calculates the actual (realised) 20-day volatility of FTSE 100 daily returns, annualised, then ranks it (inverted) against its own trailing two-year range. The calmest stretches of the period score near 100, the most turbulent near 0.',
     means: 'Unlike the VIX, which is forward-looking, this measures volatility that has already happened. Big daily swings drag the score down and reflect genuine stress; quiet, drifting markets push it toward greed.',
   },
   hl_ratio: {
-    how: 'Counts how many FTSE 100 stocks are within 1% of a fresh 52-week high versus a 52-week low, and takes the net difference as a share of the universe. Equal highs and lows scores 50; a net ±25% of the index at new highs or lows reaches the extreme greed or fear bands.',
+    how: 'Counts how many FTSE 100 stocks are within 1% of a fresh 52-week high versus a 52-week low, takes the net difference as a share of the universe, then ranks it against its own trailing two-year range (near 100 = the strongest net-new-highs reading of the period, near 0 = the weakest).',
     means: 'A surplus of new highs over new lows shows leadership and conviction — greed. A surge of new lows points to a deteriorating market where damage is spreading, a strong fear signal.',
   },
 };
@@ -191,7 +191,7 @@ function FearGreedHistoryChart({ history, loading }) {
       <div style={{ color:'#555', fontSize:9, fontFamily:'monospace', marginTop:8, lineHeight:1.6 }}>
         {mode === 'pct'
           ? 'Each index shown as its percentile within its own trailing-year history (0 = lowest reading of the period, 100 = highest). Puts the lower-variance UK index on a like-for-like scale with the US for comparing relative extremes.'
-          : 'UK index reconstructed daily from our six price-derived components; US is CNN’s published Fear & Greed Index. 0 = extreme fear, 100 = extreme greed. Note the UK swings in a narrower band — compare via %ile for a like-for-like view.'}
+          : 'UK index reconstructed daily from our six price-derived components, each percentile-ranked against its own trailing two-year range and then averaged; US is CNN’s published Fear & Greed Index. 0 = extreme fear, 100 = extreme greed.'}
       </div>
     </div>
   );
@@ -380,7 +380,7 @@ export default function FearGreedTab({ refreshKey }) {
               display:'flex', justifyContent:'space-between', alignItems:'center',
             }}
           >
-            <span>{showComponents ? '▾ Hide' : '▸ Show'} component breakdown</span>
+            <span>{showComponents ? '▾ Hide' : '▸ Show'} UK F&amp;G component breakdown</span>
             <span style={{ color:'#555' }}>6 sub-scores</span>
           </button>
 

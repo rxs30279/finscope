@@ -296,6 +296,24 @@ def _deviation_to_score(series, current_val, clip=2.0):
     return round((z + clip) / (2 * clip) * 100)
 
 
+def _pct_rank_to_score(series, current_val, min_obs=20):
+    """Map current_val to 0-100 as its PERCENTILE within `series` (the trailing
+    window), Hazen convention (strictly-less + half-equal) so ties land mid-band and
+    the median maps to ~50. Every component scored this way uses the full 0-100 range
+    over its own history, which keeps the averaged composite dynamic rather than
+    clustered near 50. Higher raw value must already mean 'more greed' (callers negate
+    inverted signals like the VIX / realised vol / a stronger pound). Returns 50 on
+    insufficient data."""
+    w = series.dropna() if hasattr(series, "dropna") else pd.Series(series).dropna()
+    n = len(w)
+    if n < min_obs:
+        return 50
+    arr = w.to_numpy()
+    lo = float((arr < current_val).sum())
+    eq = float((arr == current_val).sum())
+    return round((lo + 0.5 * eq) / n * 100)
+
+
 # ── Fear & Greed state ────────────────────────────────────────────────────────
 _fg_history: list = []  # last 4 readings: [{score, timestamp}, ...], used for the trend read
 
@@ -325,171 +343,92 @@ def _compute_fear_greed():
     moves through the trading day rather than being pinned to the last completed
     session. The returned `as_of` carries the date of the bar actually used
     (today during an open session)."""
-    prices = _get_prices()
-    ftse_long = _get_ftse_long()
+    # Source a 2-year price frame for every component (the dedicated F&G 2y fetch), but
+    # let the fresher shared 1-year feed win on the recent overlap so the score still
+    # moves intraday on the 15-minute TTL. combine_first keeps the 2y depth and
+    # extends/refreshes the tail with the live feed.
+    prices = _get_prices().combine_first(_get_fg_prices_2y())
     components = {}
 
     ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
-    shared_ftse = (
-        prices[ftse_ticker].dropna() if ftse_ticker in prices.columns else None
-    )
 
-    # Date of the latest bar this reading is built from (UK-anchored, so a US-market
-    # day with no UK trading doesn't advance the stamp). Anchor it to the shared ^FTSE
-    # feed — the same source that drives five of the six components — so the stamp can
-    # never lag the bulk of the reading. During an open session this is today's date.
-    _ftse_for_date = (
-        shared_ftse
-        if shared_ftse is not None
-        else (ftse_long.dropna() if ftse_long is not None else None)
-    )
+    # Date of the latest bar this reading is built from (UK-anchored, so a US-market day
+    # with no UK trading doesn't advance the stamp). Anchor to the ^FTSE column — the
+    # source driving most components. During an open session this is today's date.
     as_of = None
-    if _ftse_for_date is not None and not _ftse_for_date.empty:
-        as_of = _ftse_for_date.index.max().strftime("%Y-%m-%d")
-
-    # The dedicated 2-year ^FTSE fetch (ftse_long) supplies momentum's long scaling
-    # window, but Yahoo's period="2y" pull occasionally trails the shared 1-year feed
-    # by a session — which would freeze momentum a day behind the other components and
-    # drag the headline back with it. Patch it forward with any newer shared-feed bars,
-    # then cap to as_of so momentum is scored on exactly the same session as the rest.
-    if ftse_long is not None and shared_ftse is not None:
-        fl = ftse_long.dropna()
-        if not fl.empty:
-            newer = shared_ftse[shared_ftse.index > fl.index.max()]
-            if not newer.empty:
-                fl = pd.concat([fl, newer]).sort_index()
-                fl = fl[~fl.index.duplicated(keep="last")]
-            ftse_long = fl
-    if ftse_long is not None and as_of is not None:
-        ftse_long = ftse_long[ftse_long.index <= pd.Timestamp(as_of)]
-
-    # 1. FTSE Momentum — FTSE 100 vs rolling 125-day MA.
-    # Scored on the SIGN of the gap (above MA = greed, below = fear), centred on a zero gap
-    # and scaled by the gap's own volatility — a directional trend read, not mean-reversion.
-    # Use 2y of ^FTSE so the volatility scale spans a full year of gap readings (the shared
-    # 1y fetch leaves only ~6 months after the 125-day MA); fall back to it if unavailable.
-    ftse = (
-        ftse_long.dropna()
-        if ftse_long is not None
-        else (prices[ftse_ticker].dropna() if ftse_ticker in prices.columns else None)
-    )
-    if ftse is not None and len(ftse) >= 126:
-        roll_ma125 = ftse.rolling(125).mean()
-        momentum_series = ((ftse - roll_ma125) / roll_ma125).dropna()
-        if len(momentum_series) >= 20:
-            current_momentum = float(momentum_series.iloc[-1])
-            scale_window = momentum_series.iloc[-252:]  # ~1 year of gap readings
-            components["momentum"] = {
-                "score": _deviation_to_score(scale_window, current_momentum),
-                "label": "FTSE Momentum",
-                "value": round(current_momentum * 100, 2),
-            }
-    if "momentum" not in components:
-        components["momentum"] = {"score": 50, "label": "FTSE Momentum", "value": None}
-
-    # 2. Market Breadth — % of basket stocks above their 50-day MA, scored directly.
-    # 50% participation (half the market above trend) is the natural neutral → score 50;
-    # broad participation reads as greed, narrow as fear. No trailing-mean normalisation,
-    # so the score reflects breadth in absolute terms rather than relative to recent norms.
-    breadth_data = _compute_breadth(prices)
-    above_flags = {}
-    for t in BREADTH_TICKERS:
-        if t in prices.columns:
-            col = prices[t].dropna()
-            if len(col) >= 51:
-                ma50 = col.rolling(50).mean()
-                above_flags[t] = (col > ma50).astype(float)
-    if above_flags:
-        breadth_series = pd.DataFrame(above_flags).mean(axis=1).dropna()
-        if len(breadth_series) >= 20:
-            current_breadth = float(breadth_series.iloc[-1])
-            components["breadth"] = {
-                "score": max(0, min(100, round(current_breadth * 100))),
-                "label": "Market Breadth",
-                "value": round(current_breadth * 100, 1),
-            }
-    if "breadth" not in components:
-        components["breadth"] = {"score": 50, "label": "Market Breadth", "value": None}
-
-    # 3. Currency — GBP/USD 60-day change, inverted (strong pound = fear = low score).
-    # ~75% of FTSE 100 revenue is earned overseas, so a weaker pound flatters those earnings
-    # once converted back to sterling (a tailwind = greed) while a stronger pound is an
-    # earnings headwind (fear). Centred on a zero 60-day change and scaled by its own
-    # volatility; the current change is negated so GBP appreciation reads below 50.
-    gbp_ticker = CROSS_ASSET_TICKERS["gbpusd"]
-    if gbp_ticker in prices.columns:
-        gbp = prices[gbp_ticker].dropna()
-        if len(gbp) >= 61:
-            gbp_chg = gbp.pct_change(60).dropna()
-            if len(gbp_chg) >= 20:
-                current_gbp = float(gbp_chg.iloc[-1])
-                components["currency"] = {
-                    "score": _deviation_to_score(gbp_chg, -current_gbp),
-                    "label": "Currency (GBP/USD)",
-                    "value": round(current_gbp * 100, 2),
-                }
-    if "currency" not in components:
-        components["currency"] = {"score": 50, "label": "Currency (GBP/USD)", "value": None}
-
-    # 4. Safe Haven Demand — 20-day total-return spread: FTSE 100 vs UK gilt ETF (IGLT.L,
-    # all-maturity gilts). Centred on a ZERO spread (stocks and bonds neck-and-neck), scaled
-    # by the spread's volatility: stocks beating bonds = risk-on (greed), gilts winning =
-    # flight to safety (fear). Note a small structural greed lean from the equity risk premium
-    # is accepted, far smaller than the regime bias of a trailing-mean baseline.
-    gilt_ticker = GILT_ETF_TICKER
-    if ftse_ticker in prices.columns and gilt_ticker in prices.columns:
-        ftse = prices[ftse_ticker].dropna()
-        gilt = prices[gilt_ticker].dropna()
-        if len(ftse) >= 21 and len(gilt) >= 21:
-            spread = (ftse.pct_change(20) - gilt.pct_change(20)).dropna()
-            if len(spread) >= 20:
-                current_spread = float(spread.iloc[-1])
-                components["safe_haven"] = {
-                    "score": _deviation_to_score(spread, current_spread),
-                    "label": "Safe Haven Demand",
-                    "value": round(current_spread * 100, 2),
-                }
-    if "safe_haven" not in components:
-        components["safe_haven"] = {
-            "score": 50,
-            "label": "Safe Haven Demand",
-            "value": None,
-        }
-
-    # 5. Realised Volatility — 20-day annualised vol of FTSE 100, inverted (high vol = fear = low score)
     if ftse_ticker in prices.columns:
-        ftse = prices[ftse_ticker].dropna()
-        if len(ftse) >= 22:
-            log_returns = np.log(ftse / ftse.shift(1)).dropna()
-            rv_series = log_returns.rolling(20).std().dropna() * np.sqrt(252)
-            if len(rv_series) >= 20:
-                current_rv = float(rv_series.iloc[-1])
-                components["realised_vol"] = {
-                    "score": _zscore_to_score(-rv_series, -current_rv, clip=3.0),
-                    "label": "Realised Vol",
-                    "value": round(current_rv * 100, 1),
-                }
-    if "realised_vol" not in components:
-        components["realised_vol"] = {
-            "score": 50,
-            "label": "Realised Vol",
-            "value": None,
-        }
+        ftse_col = prices[ftse_ticker].dropna()
+        if not ftse_col.empty:
+            as_of = ftse_col.index.max().strftime("%Y-%m-%d")
 
-    # 6. New Highs / Lows — % of stocks at 52w high minus % at 52w low, centred at 50.
-    # Multiplier of 100 (not 50): net ±25% of the universe reaches the extreme greed/fear
-    # bands. A ×50 scale left the gauge compressed in ~43–65 year-round (FTSE 100 rarely has
-    # more than ~30% net at new highs), so it never signalled real fear or greed.
+    # Each component: build its raw daily series over the 2-year frame, then score the
+    # latest reading as its PERCENTILE within its own trailing two-year range. This gives
+    # every component the full 0-100 range (median ~50), so the averaged composite stays
+    # dynamic rather than clustering near 50 the way the old z-score mapping did. The raw
+    # series already orient so that a higher value = more greed (inverted signals — a
+    # stronger pound, higher vol — are negated inside _fg_raw_series).
+    raw = _fg_raw_series(prices)
+    scored = {
+        k: pd.Series(_score_series_trailing(v, _pct_rank_to_score, window=504))
+        for k, v in raw.items()
+    }
+
+    def _latest_score(name):
+        s = scored.get(name)
+        return int(s.iloc[-1]) if s is not None and len(s) else 50
+
+    def _latest_raw(name):
+        s = raw.get(name)
+        return float(s.iloc[-1]) if s is not None and len(s) else None
+
+    # 1. FTSE Momentum — gap to the 125-day MA, percentile-ranked over 2y.
+    mom = _latest_raw("momentum")
+    components["momentum"] = {
+        "score": _latest_score("momentum"),
+        "label": "FTSE Momentum",
+        "value": round(mom * 100, 2) if mom is not None else None,
+    }
+
+    # 2. Market Breadth — % of basket above its 50-day MA, percentile-ranked over 2y.
+    br = _latest_raw("breadth")
+    components["breadth"] = {
+        "score": _latest_score("breadth"),
+        "label": "Market Breadth",
+        "value": round(br * 100, 1) if br is not None else None,
+    }
+
+    # 3. Currency — GBP/USD 60-day change, inverted then percentile-ranked over 2y. ~75% of
+    # FTSE 100 revenue is overseas, so a weaker pound (which ranks high) flatters earnings.
+    cur = _latest_raw("currency")  # already negated: -(60-day change)
+    components["currency"] = {
+        "score": _latest_score("currency"),
+        "label": "Currency (GBP/USD)",
+        "value": round(-cur * 100, 2) if cur is not None else None,
+    }
+
+    # 4. Safe Haven Demand — 20-day FTSE-vs-gilt return spread, percentile-ranked over 2y.
+    sh = _latest_raw("safe_haven")
+    components["safe_haven"] = {
+        "score": _latest_score("safe_haven"),
+        "label": "Safe Haven Demand",
+        "value": round(sh * 100, 2) if sh is not None else None,
+    }
+
+    # 5. Realised Volatility — 20-day annualised vol, inverted then percentile-ranked over 2y.
+    rv = _latest_raw("realised_vol")  # already negated: -(annualised vol)
+    components["realised_vol"] = {
+        "score": _latest_score("realised_vol"),
+        "label": "Realised Vol",
+        "value": round(-rv * 100, 1) if rv is not None else None,
+    }
+
+    # 6. New Highs / Lows — net 52-week highs minus lows, percentile-ranked over 2y. The
+    # displayed value keeps the raw highs/lows counts from the breadth calc.
+    breadth_data = _compute_breadth(prices)
     new_highs = breadth_data.get("new_highs", 0)
     new_lows = breadth_data.get("new_lows", 0)
-    hl_universe = breadth_data.get("hl_universe", 0)
-    if hl_universe > 0:
-        hl_score = round(50 + ((new_highs - new_lows) / hl_universe) * 100)
-        hl_score = max(0, min(100, hl_score))
-    else:
-        hl_score = 50
     components["hl_ratio"] = {
-        "score": hl_score,
+        "score": _latest_score("hl_ratio"),
         "label": "New Highs / Lows",
         "value": f"{new_highs}/{new_lows}",
     }
@@ -880,28 +819,26 @@ def _score_series_trailing(values, fn, window=252, min_obs=20):
     return out
 
 
-def _compute_fear_greed_series(days=370):
-    """Reconstruct the daily UK Fear & Greed score over the trailing `days`.
-    Returns {date_str: score}. Only dates where all six components are available
-    are emitted, so the series is directly comparable to the live headline."""
-    prices = _get_fg_prices_2y()
-    if prices.empty:
-        return {}
-
+def _fg_raw_series(prices):
+    """Raw (pre-score) daily series for each Fear & Greed component, from a close-price
+    DataFrame. Returns {name: pd.Series}. The single source of truth for the component
+    inputs, shared by the live headline and the history reconstruction. Each series is
+    oriented so a HIGHER value = more greed: momentum/breadth/safe_haven/hl_ratio are
+    naturally that way, while the currency (GBP/USD change) and realised-vol series are
+    negated so a weaker pound / a calmer market rank high. Callers then percentile-rank
+    each series against its own trailing window via _pct_rank_to_score."""
+    out = {}
     ftse_ticker = BENCHMARK_TICKERS["FTSE 100"]
     if ftse_ticker not in prices.columns:
-        return {}
+        return out
     ftse = prices[ftse_ticker].dropna()
 
-    comp = {}
-
-    # 1. Momentum — gap to 125-day MA, scored on its sign (directional).
+    # 1. Momentum — gap to the 125-day MA (above MA = greed).
     if len(ftse) >= 126:
         ma125 = ftse.rolling(125).mean()
-        mom = ((ftse - ma125) / ma125).dropna()
-        comp["momentum"] = pd.Series(_score_series_trailing(mom, _deviation_to_score))
+        out["momentum"] = ((ftse - ma125) / ma125).dropna()
 
-    # 2. Breadth — % of basket above 50-day MA, scored directly (50% = neutral).
+    # 2. Breadth — % of basket above its own 50-day MA.
     flags = {}
     for t in BREADTH_TICKERS:
         if t in prices.columns:
@@ -909,36 +846,29 @@ def _compute_fear_greed_series(days=370):
             if len(col) >= 51:
                 flags[t] = (col > col.rolling(50).mean()).astype(float)
     if flags:
-        breadth_series = pd.DataFrame(flags).mean(axis=1).dropna()
-        comp["breadth"] = (breadth_series * 100).round().clip(0, 100)
+        out["breadth"] = pd.DataFrame(flags).mean(axis=1).dropna()
 
-    # 3. Currency — GBP/USD 60-day change, inverted (strong pound = fear). Negate the
-    # change so it's scored the same way as the live calc (appreciation reads below 50).
+    # 3. Currency — GBP/USD 60-day change, NEGATED so a weaker pound (greed) ranks high.
     gbp_ticker = CROSS_ASSET_TICKERS["gbpusd"]
     if gbp_ticker in prices.columns:
-        gbp_chg = prices[gbp_ticker].dropna().pct_change(60).dropna()
-        comp["currency"] = pd.Series(_score_series_trailing(-gbp_chg, _deviation_to_score))
+        out["currency"] = (-prices[gbp_ticker].dropna().pct_change(60)).dropna()
 
-    # 4. Safe haven — 20-day total-return spread FTSE vs gilt ETF, centred on zero.
+    # 4. Safe haven — 20-day total-return spread, FTSE vs gilt ETF (stocks winning = greed).
     if GILT_ETF_TICKER in prices.columns:
         gilt = prices[GILT_ETF_TICKER].dropna()
-        spread = (ftse.pct_change(20) - gilt.pct_change(20)).dropna()
-        comp["safe_haven"] = pd.Series(_score_series_trailing(spread, _deviation_to_score))
+        out["safe_haven"] = (ftse.pct_change(20) - gilt.pct_change(20)).dropna()
 
-    # 5. Realised vol — 20-day annualised vol of FTSE, inverted (clip 3.0).
+    # 5. Realised vol — 20-day annualised vol of FTSE, NEGATED so a calmer market ranks high.
     if len(ftse) >= 22:
         lr = np.log(ftse / ftse.shift(1)).dropna()
-        rv = (lr.rolling(20).std() * np.sqrt(252)).dropna()
-        comp["realised_vol"] = pd.Series(
-            _score_series_trailing(-rv, lambda w, c: _zscore_to_score(w, c, clip=3.0))
-        )
+        out["realised_vol"] = (-(lr.rolling(20).std() * np.sqrt(252))).dropna()
 
     # 6. New highs / lows — net 52-week highs minus lows as a share of the universe.
-    # Computed per ticker on its own NaN-dropped series (each ticker trades a
-    # slightly different set of days; rolling over the unioned index would leave
-    # every 252-window NaN). Flags are masked to where the 252-day window is full,
-    # then summed across tickers — sum/notna skip NaN, so the per-date universe is
-    # exactly the tickers with ≥252 history on that date.
+    # Computed per ticker on its own NaN-dropped series (each ticker trades a slightly
+    # different set of days; rolling over the unioned index would leave every 252-window
+    # NaN). Flags are masked to where the 252-day window is full, then summed across
+    # tickers — sum/notna skip NaN, so the per-date universe is exactly the tickers with
+    # ≥252 history on that date.
     high_flags = {}
     low_flags = {}
     for t in BREADTH_TICKERS:
@@ -955,14 +885,28 @@ def _compute_fear_greed_series(days=370):
     if high_flags:
         hf = pd.DataFrame(high_flags)
         lf = pd.DataFrame(low_flags)
-        highs = hf.sum(axis=1)
-        lows = lf.sum(axis=1)
         universe = hf.notna().sum(axis=1).replace(0, np.nan)
-        net = (highs - lows) / universe
-        comp["hl_ratio"] = (50 + net * 100).round().clip(0, 100)
+        out["hl_ratio"] = ((hf.sum(axis=1) - lf.sum(axis=1)) / universe).dropna()
 
-    if not comp:
+    return out
+
+
+def _compute_fear_greed_series(days=370):
+    """Reconstruct the daily UK Fear & Greed score over the trailing `days`.
+    Returns {date_str: score}. Each component is percentile-ranked against its own
+    trailing two-year window (same as the live headline), then averaged. Only dates
+    where all six components are available are emitted, for comparability."""
+    prices = _get_fg_prices_2y()
+    if prices.empty:
         return {}
+
+    raw = _fg_raw_series(prices)
+    if not raw:
+        return {}
+    comp = {
+        k: pd.Series(_score_series_trailing(v, _pct_rank_to_score, window=504))
+        for k, v in raw.items()
+    }
 
     # Average across components, keeping only fully-populated days for comparability.
     frame = pd.DataFrame(comp).dropna()
