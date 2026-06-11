@@ -346,7 +346,7 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
       {/* CHART */}
       {tab === "chart" && (
         <div>
-          <PriceChart symbol={symbol} />
+          <PriceChart symbol={symbol} fcur={fcur} />
         </div>
       )}
 
@@ -996,8 +996,9 @@ function HybridSelect({
 }
 
 // ── PriceChart ────────────────────────────────────────────────────────────────
-function PriceChart({ symbol }) {
+function PriceChart({ symbol, fcur = "GBP" }) {
   const [priceData, setPriceData] = useState([]);
+  const [liveQuote, setLiveQuote] = useState(null);
   const [loading, setLoading] = useState(true);
   // Seed display prefs from the last-used values (persisted) so toggles like
   // "no candles" stick when moving between stocks rather than resetting.
@@ -1035,6 +1036,30 @@ function PriceChart({ symbol }) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+  }, [symbol]);
+
+  // Live last-price poll (pence, intraday during market hours; 60s server cache).
+  // Same /quotes endpoint as the watchlist; overrides the latest stored close.
+  useEffect(() => {
+    if (!symbol) return;
+    setLiveQuote(null);
+    let cancelled = false;
+    const fetchQuote = () => {
+      fetch(`${API}/quotes?symbols=${encodeURIComponent(symbol)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (cancelled || !d || typeof d !== "object") return;
+          const q = d[symbol];
+          setLiveQuote(typeof q === "number" ? q : null);
+        })
+        .catch(() => {});
+    };
+    fetchQuote();
+    const id = setInterval(fetchQuote, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [symbol]);
 
   const computeMA = (data, n) =>
@@ -1434,6 +1459,17 @@ function PriceChart({ symbol }) {
     ];
   })();
 
+  // Headline price: the live intraday quote when available, else the latest
+  // stored close. Day % is that price vs the prior trading day's close.
+  const lastClose = priceData.length
+    ? priceData[priceData.length - 1].close
+    : null;
+  const prevClose =
+    priceData.length >= 2 ? priceData[priceData.length - 2].close : null;
+  const shownPrice = liveQuote != null ? liveQuote : lastClose;
+  const dayPct =
+    shownPrice != null && prevClose ? (shownPrice / prevClose - 1) * 100 : null;
+
   if (loading)
     return (
       <div
@@ -1469,12 +1505,20 @@ function PriceChart({ symbol }) {
       <div
         style={{
           display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          marginBottom: 12,
+          justifyContent: "space-between",
           alignItems: "flex-start",
+          gap: 16,
+          marginBottom: 12,
         }}
       >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            alignItems: "flex-start",
+          }}
+        >
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
           {["1M", "3M", "6M", "1Y", "3Y", "5Y"].map((r) => (
             <button
@@ -1559,6 +1603,41 @@ function PriceChart({ symbol }) {
             </span>
           ))}
         </div>
+        </div>
+        {shownPrice != null && (
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
+            <div
+              style={{
+                fontFamily: "DM Serif Display,serif",
+                fontSize: 28,
+                color: "#f1f5f9",
+                lineHeight: 1.1,
+              }}
+            >
+              {currSym(fcur)}
+              {Number(
+                fcur === "GBP" ? shownPrice / 100 : shownPrice
+              ).toLocaleString("en-GB", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </div>
+            {dayPct != null && (
+              <div
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  marginTop: 2,
+                  color: dayPct >= 0 ? "#22c55e" : "#ef4444",
+                }}
+              >
+                {dayPct >= 0 ? "+" : "−"}
+                {Math.abs(dayPct).toFixed(2)}%
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <ResponsiveContainer width="100%" height={380}>
         <ComposedChart
