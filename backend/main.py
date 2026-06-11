@@ -991,10 +991,11 @@ def watchlist(symbols: str):
 def help_doc(slug: str = "user-manual"):
     """Stream a stored app document (default: the user manual) from Postgres.
 
-    The bytes live in app_documents (see migration 003); served inline so the
-    browser opens/downloads the .docx with its original filename. Stored in the
-    DB rather than as a static file because Vercel's Python runtime has no
-    persistent local filesystem to serve from.
+    The bytes live in app_documents (see migration 003), served with the stored
+    filename. PDFs are sent inline so the browser's built-in viewer renders them
+    in the new tab the Tool Manual link opens; anything else downloads as an
+    attachment. Stored in the DB rather than as a static file because Vercel's
+    Python runtime has no persistent local filesystem to serve from.
     """
     rows = query(
         "SELECT filename, content_type, data FROM app_documents WHERE slug = %s",
@@ -1007,11 +1008,13 @@ def help_doc(slug: str = "user-manual"):
     # psycopg2 hands BYTEA back as a memoryview; FastAPI's Response wants bytes.
     if isinstance(data, memoryview):
         data = data.tobytes()
+    ctype = row["content_type"] or "application/octet-stream"
+    disposition = "inline" if ctype == "application/pdf" else "attachment"
     return Response(
         content=bytes(data),
-        media_type=row["content_type"] or "application/octet-stream",
+        media_type=ctype,
         headers={
-            "Content-Disposition": f'attachment; filename="{row["filename"]}"',
+            "Content-Disposition": f'{disposition}; filename="{row["filename"]}"',
             "Cache-Control": "public, max-age=3600",
         },
     )

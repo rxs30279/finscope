@@ -1,9 +1,16 @@
-"""Build Alpha_Move_AI_User_Manual.docx from USER_MANUAL.md.
+"""Build Alpha_Move_AI_User_Manual.pdf from USER_MANUAL.md.
 
 USER_MANUAL.md is the single source of truth for the user manual. This script
-renders it to a styled Word document so the two never drift apart again. It
-replaces the old hand-written patch script (update_doc.py), which edited the
-.docx directly and is what let it fall out of sync.
+renders it to a styled Word document and then exports that to PDF, so the two
+never drift apart again. It replaces the old hand-written patch script
+(update_doc.py), which edited the .docx directly and is what let it fall out of
+sync.
+
+The served manual is a PDF: exporting embeds the fonts (Calibri, Consolas), so
+it renders identically on macOS / Linux machines that don't have those Microsoft
+fonts installed. The .docx is kept only as an intermediate the PDF is rendered
+from — we don't lay the PDF out by hand, we let a real Office engine do it, which
+keeps the clickable table of contents, callout boxes, and tables intact.
 
 What it produces:
   * A cover page with the existing cover image (manual_assets/cover.png).
@@ -16,15 +23,22 @@ What it produces:
   * The "Under the hood" blockquotes rendered as shaded, bordered callout boxes.
 
 Usage:
-    python build_manual.py            # MD at repo root -> docx at repo root
-    python build_manual.py in.md out.docx
+    python build_manual.py            # USER_MANUAL.md -> Alpha_Move_AI_User_Manual.pdf
+    python build_manual.py in.md out.pdf
+    python build_manual.py in.md out.docx   # stop at the Word intermediate, no PDF
+
+PDF export uses Microsoft Word (via COM on Windows) and falls back to LibreOffice
+(`soffice`) if Word is not installed.
 
 Requires python-docx (already in the toolchain): pip install python-docx
 """
 
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from urllib.parse import unquote
 
 from docx import Document
@@ -37,6 +51,7 @@ from docx.shared import Inches, Pt, RGBColor
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_MD = os.path.join(_ROOT, "USER_MANUAL.md")
 _DEFAULT_DOCX = os.path.join(_ROOT, "Alpha_Move_AI_User_Manual.docx")
+_DEFAULT_PDF = os.path.join(_ROOT, "Alpha_Move_AI_User_Manual.pdf")
 _COVER = os.path.join(_ROOT, "manual_assets", "cover.png")
 
 CODE_FONT = "Consolas"
@@ -485,16 +500,107 @@ def _set_base_style(doc):
     normal.paragraph_format.space_after = Pt(6)
 
 
+# ── PDF export ──────────────────────────────────────────────────────────────
+# We don't render the PDF from scratch — we reuse the fully-styled .docx and let
+# a real Office engine lay it out, which keeps the TOC links, callout boxes, and
+# tables intact and embeds the fonts so the result looks the same on any OS.
+
+def export_pdf(docx_path, pdf_path):
+    """Convert a .docx to PDF, preferring Word (COM) then LibreOffice.
+
+    Returns the name of the engine used. Raises RuntimeError if neither is
+    available, so the build fails loudly rather than leaving a stale PDF behind.
+    """
+    docx_path = os.path.abspath(docx_path)
+    pdf_path = os.path.abspath(pdf_path)
+    if _export_pdf_word(docx_path, pdf_path):
+        return "Microsoft Word"
+    if _export_pdf_libreoffice(docx_path, pdf_path):
+        return "LibreOffice"
+    raise RuntimeError(
+        "Could not export PDF: neither Microsoft Word (COM) nor LibreOffice "
+        "('soffice') is available. Install one, or build the .docx directly with "
+        "`python build_manual.py USER_MANUAL.md out.docx`."
+    )
+
+
+def _export_pdf_word(docx_path, pdf_path):
+    """Export via Word's ExportAsFixedFormat. Returns True on success."""
+    try:
+        import win32com.client  # from pywin32, Windows only
+    except ImportError:
+        return False
+    word = doc = None
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        doc = word.Documents.Open(docx_path, ReadOnly=True)
+        # ExportFormat=17 (wdExportFormatPDF), OptimizeFor=0 (print quality),
+        # CreateBookmarks=1 (wdExportCreateHeadingBookmarks) -> PDF nav pane.
+        doc.ExportAsFixedFormat(
+            OutputFileName=pdf_path,
+            ExportFormat=17,
+            OpenAfterExport=False,
+            OptimizeFor=0,
+            CreateBookmarks=1,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 - fall through to LibreOffice
+        print(f"Word PDF export unavailable ({exc}); trying LibreOffice.")
+        return False
+    finally:
+        if doc is not None:
+            doc.Close(False)
+        if word is not None:
+            word.Quit()
+
+
+def _export_pdf_libreoffice(docx_path, pdf_path):
+    """Export via headless LibreOffice. Returns True on success."""
+    soffice = shutil.which("soffice") or shutil.which("soffice.exe")
+    if not soffice:
+        return False
+    out_dir = os.path.dirname(pdf_path)
+    subprocess.run(
+        [soffice, "--headless", "--convert-to", "pdf", "--outdir", out_dir, docx_path],
+        check=True,
+    )
+    # LibreOffice writes <docx-stem>.pdf into out_dir; rename if that isn't pdf_path.
+    produced = os.path.join(
+        out_dir, os.path.splitext(os.path.basename(docx_path))[0] + ".pdf"
+    )
+    if produced != pdf_path and os.path.isfile(produced):
+        os.replace(produced, pdf_path)
+    return os.path.isfile(pdf_path)
+
+
 def main():
     md = sys.argv[1] if len(sys.argv) > 1 else _DEFAULT_MD
-    out = sys.argv[2] if len(sys.argv) > 2 else _DEFAULT_DOCX
+    out = sys.argv[2] if len(sys.argv) > 2 else _DEFAULT_PDF
     if not os.path.isfile(md):
         print(f"Markdown source not found: {md}")
         sys.exit(1)
-    build(md, out)
+
+    if out.lower().endswith(".docx"):
+        # Caller asked for the Word intermediate directly — no PDF step.
+        build(md, out)
+        size = os.path.getsize(out)
+        print(f"Built {out} ({size:,} bytes) from {os.path.basename(md)}.")
+        return
+
+    # Default: render the .docx to a temp file (so an open copy of the manual
+    # can't lock the build), export it to PDF, then discard the intermediate.
+    fd, docx_path = tempfile.mkstemp(suffix=".docx", prefix="manual_")
+    os.close(fd)
+    try:
+        build(md, docx_path)
+        engine = export_pdf(docx_path, out)
+    finally:
+        if os.path.isfile(docx_path):
+            os.remove(docx_path)
     size = os.path.getsize(out)
-    print(f"Built {out} ({size:,} bytes) from {os.path.basename(md)}.")
-    print("Table of contents is pre-built and clickable — no field update needed.")
+    print(f"Built {out} ({size:,} bytes) from {os.path.basename(md)} via {engine}.")
+    print("Fonts are embedded and the table of contents is clickable on any OS.")
 
 
 if __name__ == "__main__":

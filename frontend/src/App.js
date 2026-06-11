@@ -3785,7 +3785,7 @@ export default function App() {
                         borderBottom: "1px solid #1f1f1f",
                       }}
                     >
-                      📖 Tool Manual
+                      📖 Tool Manual Download
                     </a>
                     <button
                       onClick={() => {
@@ -4006,7 +4006,7 @@ export default function App() {
                 textDecoration: "none",
               }}
             >
-              Tool Manual
+              Tool Manual Download
             </a>
             <div
               style={{

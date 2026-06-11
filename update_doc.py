@@ -6,7 +6,7 @@ sync with USER_MANUAL.md.
 
 The manual is now generated from a single source of truth:
 
-    USER_MANUAL.md  --(build_manual.py)-->  Alpha_Move_AI_User_Manual.docx
+    USER_MANUAL.md  --(build_manual.py)-->  Alpha_Move_AI_User_Manual.pdf
 
 To update the manual:
     1. Edit USER_MANUAL.md

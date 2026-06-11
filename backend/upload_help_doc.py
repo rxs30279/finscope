@@ -4,8 +4,8 @@ Used to store the Alpha Move AI user manual in Postgres so the API can serve it
 from /api/help-doc (see backend/main.py). Run after applying migration 003.
 
 Usage:
-    python upload_help_doc.py                       # defaults to the user manual
-    python upload_help_doc.py path\\to\\file.docx user-manual
+    python upload_help_doc.py                       # uploads the PDF user manual
+    python upload_help_doc.py path\\to\\file.pdf user-manual
 
 Reads DB_* connection settings from backend/.env (same as run_migration.py).
 """
@@ -21,12 +21,16 @@ load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 # The manual lives at the repo root, one level up from backend/.
 _DEFAULT_PATH = os.path.join(
-    os.path.dirname(_SCRIPT_DIR), "Alpha_Move_AI_User_Manual.docx"
+    os.path.dirname(_SCRIPT_DIR), "Alpha_Move_AI_User_Manual.pdf"
 )
 _DEFAULT_SLUG = "user-manual"
 _DOCX_MIME = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+_MIME_BY_EXT = {
+    ".pdf": "application/pdf",
+    ".docx": _DOCX_MIME,
+}
 
 
 def main(path: str, slug: str):
@@ -34,9 +38,8 @@ def main(path: str, slug: str):
         data = f.read()
 
     filename = os.path.basename(path)
-    content_type = _DOCX_MIME if filename.lower().endswith(".docx") else (
-        "application/octet-stream"
-    )
+    ext = os.path.splitext(filename)[1].lower()
+    content_type = _MIME_BY_EXT.get(ext, "application/octet-stream")
 
     conn = psycopg2.connect(
         dbname=os.environ["DB_NAME"],
