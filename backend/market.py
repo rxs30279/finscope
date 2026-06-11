@@ -963,6 +963,21 @@ def _compute_fear_greed_series(days=370):
     return {ts.strftime("%Y-%m-%d"): int(v) for ts, v in overall.items()}
 
 
+def _compute_vix_series(days=370):
+    """Raw daily VIX close over the trailing `days`. Returns {date_str: value}.
+    Plotted on the F&G history chart as an overlay; this is the raw level (not the
+    inverted 0–100 sub-score that feeds the UK index)."""
+    prices = _get_fg_prices_2y()
+    if prices.empty or VIX_TICKER not in prices.columns:
+        return {}
+    vix = prices[VIX_TICKER].dropna()
+    if vix.empty:
+        return {}
+    cutoff = vix.index.max() - pd.Timedelta(days=days)
+    vix = vix[vix.index >= cutoff]
+    return {ts.strftime("%Y-%m-%d"): round(float(v), 2) for ts, v in vix.items()}
+
+
 def _fetch_cnn_fg_history():
     """Daily US CNN Fear & Greed history from CNN's graphdata endpoint.
     Returns {date_str: value}."""
@@ -985,7 +1000,7 @@ def _fetch_cnn_fg_history():
 
 
 def _upsert_fg_history(rows):
-    """Upsert (date_str, uk_score, us_score) tuples into fear_greed_history.
+    """Upsert (date_str, uk_score, us_score, vix) tuples into fear_greed_history.
     COALESCE keeps an existing value when the new one is NULL (e.g. a transient
     CNN fetch failure won't blank out previously-stored US values)."""
     if not rows:
@@ -996,10 +1011,11 @@ def _upsert_fg_history(rows):
         cur = conn.cursor()
         psycopg2.extras.execute_values(
             cur,
-            "INSERT INTO fear_greed_history (date, uk_score, us_score) VALUES %s"
+            "INSERT INTO fear_greed_history (date, uk_score, us_score, vix) VALUES %s"
             " ON CONFLICT (date) DO UPDATE SET"
             "   uk_score = COALESCE(EXCLUDED.uk_score, fear_greed_history.uk_score),"
             "   us_score = COALESCE(EXCLUDED.us_score, fear_greed_history.us_score),"
+            "   vix = COALESCE(EXCLUDED.vix, fear_greed_history.vix),"
             "   computed_at = now()",
             rows,
             page_size=500,
@@ -1017,17 +1033,18 @@ def _rebuild_fear_greed_history():
     """Recompute the trailing-year UK series + pull CNN's US history and upsert
     both. Idempotent and self-healing — safe to run daily. Returns a summary."""
     uk = _compute_fear_greed_series()
+    vix = _compute_vix_series()
     us = {}
     try:
         us = _fetch_cnn_fg_history()
     except Exception as e:
         print(f"[market] CNN F&G history fetch failed: {e}")
 
-    all_dates = sorted(set(uk) | set(us))
-    rows = [(d, uk.get(d), us.get(d)) for d in all_dates]
+    all_dates = sorted(set(uk) | set(us) | set(vix))
+    rows = [(d, uk.get(d), us.get(d), vix.get(d)) for d in all_dates]
     n = _upsert_fg_history(rows)
     _cache.pop("fg_history", None)
-    return {"rows": n, "uk_points": len(uk), "us_points": len(us)}
+    return {"rows": n, "uk_points": len(uk), "us_points": len(us), "vix_points": len(vix)}
 
 
 @router.get("/fear-greed/history")
@@ -1036,7 +1053,7 @@ def fear_greed_history():
     is empty (first run before the cron has populated it), lazily rebuilds once."""
     def read():
         rows = _db_query(
-            "SELECT date, uk_score, us_score FROM fear_greed_history"
+            "SELECT date, uk_score, us_score, vix FROM fear_greed_history"
             " WHERE date >= CURRENT_DATE - INTERVAL '370 days' ORDER BY date"
         )
         out = []
@@ -1047,6 +1064,7 @@ def fear_greed_history():
                     "date": d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d),
                     "uk": r["uk_score"],
                     "us": r["us_score"],
+                    "vix": r["vix"],
                 }
             )
         return out
