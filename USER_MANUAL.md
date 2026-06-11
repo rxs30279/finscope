@@ -43,7 +43,7 @@
    - 8.2 [The Two-Layer AI Pipeline](#82-the-two-layer-pipeline)
    - 8.3 [Reading the Feed](#83-reading-the-feed)
    - 8.4 [Action Pills — BUY / WATCH / AVOID](#84-action-pills)
-9. [PEGY — The Visual Map of the Market](#9-pegy)
+9. [Trending — Risers and Fallers](#9-trending)
 10. [The Sidebar — Your Instant Dashboard](#10-the-sidebar)
 11. [How To Find Investment Leads — Step-by-Step Workflows](#11-how-to-find-investment-leads)
     - 11.1 [The Quality + Value Filter](#111-the-quality--value-filter)
@@ -52,7 +52,7 @@
     - 11.4 [The Sector Rotation Strategy](#114-the-sector-rotation-strategy)
     - 11.5 [The Defensive Screen (Capital Preservation)](#115-the-defensive-screen)
     - 11.6 [The Catalyst Hunt — RNS-Driven Upside](#116-the-catalyst-hunt)
-    - 11.7 [The Visual Map Workflow — Cheap Quality Hunting](#117-the-visual-map-workflow)
+    - 11.7 [The Cheap-Quality Hunt](#117-the-cheap-quality-hunt)
     - 11.8 [The Combined "Maximum Upside / Minimum Downside" Workflow](#118-the-combined-workflow)
 12. [Glossary of Financial Terms](#12-glossary-of-financial-terms)
 13. [Appendix A — Methodology References](#appendix-a--methodology-references)
@@ -106,8 +106,10 @@ The tool focuses on **UK-listed equities** — companies whose shares trade on t
 
 When you open Alpha Move AI you see:
 
-- **Top navigation bar** — Screener, Trending, Watchlist, Analysts, RNS News, PEGY, Subscribe, and a Markets dropdown (Fear & Greed, Cross-Asset, and a Sector Analysis group: Rotation, Breadth).
-- **Left sidebar** — a live pulse of the market: benchmark returns, market fear levels, current cycle signals, and ICB sector strength (with a **▦ Heatmap** link to the Sector Heatmap). Toggle the sidebar on or off using the icon at the top-left of the navigation bar.
+![The home page — the Screener table with its filter bar across the top and the live market sidebar down the left.](manual_assets/shots/Home%20Page.png)
+
+- **Top navigation bar** — **Screener**, **Trending**, **Watchlist**, **Analysts**, **RNS News**, **Subscribe**, and **Markets**. On narrow screens (tablets and phones) the links collapse into a **☰ hamburger** menu. The **Markets** link opens a single combined page that stacks the Cross-Asset Monitor, Fear & Greed Index, Market Breadth, and Sector Rotation panels (see [Sections 5–6](#5-sector-analysis)).
+- **Left sidebar** — a live pulse of the market: a London Stock Exchange open/closed clock, benchmark returns, ICB sector strength, the UK and US fear gauges, and a **▦ Heatmap** link to the Sector Heatmap. See [Section 10](#10-the-sidebar). Toggle the sidebar on or off using the icon at the top-left of the navigation bar.
 - **Main content area** — changes depending on which page you are on.
 - **Search bar** — type a company name or ticker symbol to jump straight to its detail page.
 
@@ -346,6 +348,7 @@ The filter panel (above the screener table) lets you narrow the universe. Filter
 | **Min Quality** | 6 | Only businesses with strong returns and margins |
 | **Min Piotroski** | 6 | Financially healthy and improving |
 | **Max Risk** | 5 | Exclude higher-risk names |
+| **Max PEGY** | 1.5 | Keep only stocks priced fairly-or-cheaply for their growth and yield (options: ≤ 1, ≤ 1.5, ≤ 2). See [§3.5](#35-the-pegy-column). |
 
 #### Analyst Filters (in Analyst View)
 
@@ -414,6 +417,8 @@ Two refinements make this app's PEGY more robust than the textbook version:
 
 The Watchlist is no longer a plain screener table — it is a purpose-built **monitoring dashboard** for the companies you care about, designed to be the page you glance at each morning.
 
+![The Watchlist — a monitoring dashboard with streak, sparkline, 52-week range, target-buy and news columns, plus a per-share news panel.](manual_assets/shots/watchlist.png)
+
 **Multiple named lists**
 
 You can keep **several separate watchlists** — for example "Core holdings", "Research ideas", and "Buy when cheaper". There is always a default list to start with, and you can:
@@ -477,7 +482,7 @@ Sometimes you want to screen "all stocks **except** these sectors" — for examp
 
 ## 4. Company Detail
 
-Click on any company name or ticker to open the Company Detail panel. This gives you a deep dive into a single stock across seven tabs.
+Click on any company name or ticker to open the Company Detail panel. This gives you a deep dive into a single stock across eight tabs.
 
 ### 4.1 Chart Tab
 
@@ -621,7 +626,11 @@ The Company News tab pulls together everything written about the company over th
 
 ## 5. Sector Analysis
 
+> **Where to find these:** The **Sector Rotation** and **Market Breadth** panels both live on the combined **Markets** page (top nav → "Markets"), below the Cross-Asset Monitor and Fear & Greed Index. The **Sector Heatmap (Treemap)** is a separate page opened from the **▦ Heatmap** link in the sidebar.
+
 ### 5.1 Sector Rotation
+
+![The Sector Rotation panel — RS-rank heatmap, Signal Log, and the RS ranking table with breadth.](manual_assets/shots/sector%20rotation.png)
 
 **What is sector rotation?**
 
@@ -658,6 +667,8 @@ An RS Score < 0.95 means the sector has underperformed by more than 5% — this 
 
 ### 5.2 Market Breadth
 
+![The Market Breadth panel — the share of FTSE stocks above their 50-day moving average, with 52-week highs/lows and the advance/decline line.](manual_assets/shots/market%20breadth.png)
+
 Market breadth measures the **participation** in a market move — not just whether the index is rising, but how many individual stocks are rising with it.
 
 | Breadth Indicator | What it tells you |
@@ -691,11 +702,15 @@ At a glance you can see whether a sell-off or rally is **broad** (a whole sector
 
 ## 6. Markets
 
+The **Markets** page (top nav → "Markets") is a single scrolling page that stacks four panels, top to bottom: the **Cross-Asset Monitor**, the **Fear & Greed Index** (with its history charts), **Market Breadth** ([§5.2](#52-market-breadth)), and **Sector Rotation** ([§5.1](#51-sector-rotation)). The sections below describe the two market-sentiment panels; the two sector panels are covered in Section 5.
+
 ### 6.1 Fear & Greed Index
+
+![The Fear & Greed page — today's UK reading, the UK-vs-US rolling-year history chart, and the standalone US VIX panel.](manual_assets/shots/fear%20and%20greed.png)
 
 **What is it?**
 
-Inspired by CNN's Fear & Greed Index (which covers US markets), FINScope's version is purpose-built for the UK market. It combines six independent data points into a single score from 0 (Extreme Fear) to 100 (Extreme Greed).
+Inspired by CNN's Fear & Greed Index (which covers US markets), Alpha Move AI's version is purpose-built for the UK market. It combines six independent, price-derived data points into a single score from 0 (Extreme Fear) to 100 (Extreme Greed). The headline **Latest Close** reading is stamped with the trading session it was built from, and updates live through the day.
 
 **Why does it matter?**
 
@@ -703,14 +718,18 @@ Markets are driven by two emotions: fear and greed. When greed dominates (score 
 
 **The six components (each scored 0–100, equally weighted):**
 
+Each raw component is **percentile-ranked against its own trailing two-year range** before being averaged — so a sub-score of 50 means "about typical for the last two years", near 0 means "the most fearful reading of the period", and near 100 "the most greedy". This makes the index self-calibrating and more dynamic than a fixed-threshold version: it always reads the *current* mood relative to the recent past.
+
 | Component | What it measures |
 |---|---|
-| **FTSE Momentum** | How far the FTSE 100 is above/below its 125-day moving average, normalised statistically. A market well above its long-term trend is "greedy"; well below is "fearful". |
-| **Market Breadth** | % of FTSE stocks above their 50-day moving average, z-score normalised. Broad participation = greed; narrow market = fear. |
-| **VIX (Volatility)** | The CBOE VIX measures expected US market volatility. High VIX = fear; low VIX = greed. The score is inverted so high VIX produces a low (fearful) reading. |
-| **Safe Haven Demand** | The spread between FTSE 100 returns and UK Gilt ETF returns over 20 days. When investors flee stocks for government bonds, it signals fear. |
-| **Realised Volatility** | The actual 20-day volatility of the FTSE 100. High volatility indicates uncertainty and fear. |
-| **New Highs vs Lows** | The ratio of stocks hitting 52-week highs versus 52-week lows across the FTSE universe. More highs = greed; more lows = fear. |
+| **FTSE Momentum** | How far the FTSE 100 is trading above/below its 125-day (≈6-month) moving average. A market well above its medium-term trend is "greedy"; well below is "fearful". |
+| **Market Breadth** | The share of FTSE 100 stocks trading above their own 50-day moving average. Broad participation = greed; a narrow market = fear. |
+| **GBP/USD (Currency)** | The 60-day move in sterling, **inverted**. Around three-quarters of FTSE 100 revenue is earned overseas, so a *weaker* pound flatters reported profits (greed) while a *stronger* pound is an earnings headwind (fear). *This component replaced the old VIX input, which now sits in its own standalone panel (see below).* |
+| **Safe Haven Demand** | The 20-day total return of the FTSE 100 versus an all-maturity UK gilt ETF. Stocks outpacing bonds = risk-on (greed); gilts winning = risk-off (fear). |
+| **Realised Volatility** | The actual (already-happened) annualised 20-day volatility of the FTSE 100, inverted. Calm markets = greed; turbulent markets = fear. |
+| **New Highs vs Lows** | The net number of FTSE 100 stocks near a fresh 52-week high versus a 52-week low, as a share of the universe. More highs = greed; more lows = fear. |
+
+> **See exactly how each gauge is built in the app.** On the Fear & Greed panel, click **▸ Show UK F&G component breakdown** to expand all six sub-scores, each with a plain-English "How it's calculated" and "What it tells us" explanation.
 
 **Sentiment labels:**
 
@@ -722,9 +741,22 @@ Markets are driven by two emotions: fear and greed. When greed dominates (score 
 | 25–44 | Fear | Market under stress; look for quality stocks on sale |
 | 0–24 | Extreme Fear | Potential buying opportunity for long-term investors |
 
+**The UK vs US history chart**
+
+Below the headline reading, a rolling-year line chart plots the **UK** index (orange) against the **US CNN** Fear & Greed Index (sky blue), so you can see whether UK sentiment is leading, lagging, or diverging from the larger US market. Two controls help:
+
+- **Raw / %ile toggle** — *Raw* shows each index on its native 0–100 scale; *%ile* re-expresses each point as its percentile within its own trailing-year history. Because the UK index naturally swings less than the US one, the **%ile** view puts them on a like-for-like footing for comparing *relative* extremes.
+- **Range pills (1M / 3M / 6M / 1Y)** and **UK / US toggles** to show or hide either line.
+
+**The US VIX panel**
+
+A separate panel plots the **CBOE VIX** — the original US "fear gauge", measuring the S&P 500's expected 30-day volatility implied by option prices — over a rolling year, with a reference line at 20 (its rough long-run average). Higher = more fear; lower = calm. Equity risk tends to move in lockstep across markets, so the VIX is a useful global risk-appetite cross-check even for a UK investor.
+
 ---
 
 ### 6.2 Cross-Asset Monitor
+
+![The Cross-Asset Monitor — GBP/USD, Brent crude, gold, the gilt-vs-utilities gauge, and the UK gilt yield curve.](manual_assets/shots/cross%20asset.png)
 
 Shows the current state of key assets relative to their recent history (using z-scores — how many standard deviations above/below average):
 
@@ -753,6 +785,8 @@ The tool shows:
 
 ## 7. Analyst Monitor
 
+![The Analyst Monitor — the latest-consensus table, the 30-day Biggest Movers leaderboard, and the Top Bullish / Top Bearish shortlists.](manual_assets/shots/Analysts.png)
+
 The Analyst Monitor page provides a dedicated view of professional analyst sentiment across all covered stocks.
 
 **Latest Consensus table:** All stocks with analyst coverage, sortable by consensus rating, **coverage-adjusted Buy% (see below)**, upside %, or revision score. The Buy% column shows the *adjusted* figure; hover any cell to see the raw value and the number of analysts behind it.
@@ -780,6 +814,8 @@ The Analyst Monitor page provides a dedicated view of professional analyst senti
 ## 8. RNS News Screener
 
 The **RNS News Screener** (top nav → "RNS News") is one of the most powerful tools in the app for catching catalysts early.
+
+![The RNS News Screener — AI-ranked regulatory announcements with tier badges, AI thesis, scores, and BUY/WATCH/AVOID action pills.](manual_assets/shots/rns%20news.png)
 
 ### 8.1 What is RNS?
 
@@ -880,51 +916,48 @@ The clearest opportunities tend to come from:
 
 ---
 
-## 9. PEGY — The Visual Map of the Market
+## 9. Trending — Risers and Fallers
 
-The **PEGY** page (top nav → "PEGY") plots the entire UK universe on a single scatter chart, so you can spot value-and-quality opportunities visually.
+The **Trending** page (top nav → "Trending") surfaces the stocks that are currently on a **run** — a streak of consecutive up or down days — so you can spot momentum building or a sell-off accelerating across the whole universe at a glance.
 
-### Quality × PEGY
+![The Trending page — Risers and Fallers ranked by streak length, with a profile and news panel for the selected stock.](manual_assets/shots/Trending.png)
 
-- **X axis:** PEGY (lower = cheaper for the growth and income on offer)
-- **Y axis:** Quality Score (1–10; higher = better business)
-- **Each dot = one company.** Dot size scales with market capitalisation — large companies are bigger dots.
+**What "trending" means here:** a stock qualifies once it has risen (or fallen) for **3 or more consecutive trading days**. The lists are ranked by **streak length**, so the names at the top have the longest unbroken runs.
 
-**The four quadrants:**
+**The layout — three columns plus news:**
 
-| Quadrant | Meaning | Colour |
-|---|---|---|
-| **Top-left** | High Quality, Low PEGY — *Cheap quality* | Green dots |
-| **Top-right** | High Quality, High PEGY — *Expensive quality* | Amber dots |
-| **Bottom-left** | Low Quality, Low PEGY — *Cheap low-quality (potential value trap)* | Amber dots |
-| **Bottom-right** | Low Quality, High PEGY — *Avoid* | Red dots |
+| Column | What it shows |
+|---|---|
+| **Risers** *(green)* | Stocks on a run of consecutive **up** days, longest streak first. |
+| **Fallers** *(red)* | Stocks on a run of consecutive **down** days, longest streak first. |
+| **Profile** | Click any name in either list to load a mini-profile on the right — recent price action and the key headline figures — without leaving the page. |
 
-> **Most asymmetric upside lives in the green top-left quadrant** — high-quality businesses trading at fair-or-below prices for the growth they are delivering. This is the "Buffett quadrant".
+Below the three columns, a full-width **News** panel shows the selected company's recent RNS and press coverage (the same combined feed as the Company News tab, see [§4.8](#48-company-news-tab)). Click the company name in the profile to open its full detail page.
 
-> **Note:** The earlier *Momentum × Risk* view has been removed; the page now focuses on the single most useful map, Quality versus PEGY. To assess momentum and risk, use those columns in the Screener or the company Chart and Health tabs.
+**Why it matters for upside / downside:**
 
-### Controls
-
-- **Index pills** — limit the plot to FTSE 100, FTSE 250, FTSE 350, or All.
-- **Dual-handle range slider (X axis):** Drag the **two handles** to set both a lower and an upper PEGY bound, zooming into whatever slice of the value spectrum you want (e.g. PEGY 0–2). A counter shows how many companies fall outside the current window. Very extreme PEGY values (above 30) are treated as outliers and are not plotted at all, so a handful of distorted ratios can't squash the useful part of the chart.
-- **Click a dot** to open that company's detail page directly.
-
-> **Why the visual matters:** A scatter plot of the whole universe shows patterns the screener table cannot — clusters of similar companies, sector concentrations, and isolated outliers (often the most interesting opportunities). Use it to find ideas you would not have thought to filter for.
+- A long **riser** streak can confirm momentum the market is rewarding — cross-check it against the company's Quality and Risk scores before chasing it.
+- A long **faller** streak on a stock you own is an early warning to read the News panel immediately: a run of down days often coincides with a profit warning or a deteriorating story.
+- Because the News panel sits right beside the streak lists, you can quickly tell whether a move is **news-driven** (a specific catalyst) or just **drift** (no obvious reason), which changes how you should react.
 
 ---
 
 ## 10. The Sidebar — Your Instant Dashboard
 
-The sidebar is always visible (toggle it on or off via the icon at the top-left of the navigation) and gives you an instant market snapshot:
+The sidebar (toggle it on or off via the icon at the top-left of the navigation) gives you an instant market snapshot. Its figures are **live** — they refresh automatically every few minutes so an open tab stays current. From top to bottom:
 
 | Item | What it shows |
 |---|---|
-| **FTSE 100 / 250 / All-Share** | Total return for each index (price + dividends) |
-| **VIX** | Current US volatility index level. Below 15 = calm; 20–30 = elevated; 30+ = stressed |
-| **CNN Fear & Greed** | External US market sentiment gauge (from CNN) |
-| **UK Fear & Greed** | The FINScope-calculated UK sentiment score |
-| **Top RS Sector** | The sector with the highest relative strength — where market leadership currently sits |
-| **Market Breadth** | Overall % of FTSE stocks above their 50-day MA |
+| **LSE market clock** | Whether the London Stock Exchange is **open** or **closed** right now. When open, a live countdown to the 16:30 close; when closed, when it next opens. It knows weekends, UK bank holidays, and the 12:30 half-day closes (Christmas Eve / New Year's Eve). |
+| **Benchmarks** | Live total return for each headline index (FTSE 100 / 250 / All-Share) — price plus dividends. |
+| **ICB Sectors** | Each sector's latest move, colour-coded. **Click a sector** to expand it and reveal its constituent companies, each with its own daily move — a quick way to see what is driving a sector. |
+| **UK Fear & Greed** | The Alpha Move AI UK sentiment score and label. Click it to jump to the Markets page. |
+| **VIX (US)** | Current US volatility index level. Below 20 = calm; 20–30 = elevated; 30+ = stressed. |
+| **F&G (US)** | CNN's external US market sentiment gauge, with its label. |
+| **▦ Heatmap** | Opens the full-screen Sector Heatmap (treemap) — see [§5.3](#53-sector-heatmap-treemap). |
+| **Support / Feedback** | Links to support the project and to send feedback. |
+
+> **Tip:** Clicking the UK Fear & Greed score or either US indicator takes you straight to the combined **Markets** page, where the full charts and component breakdowns live.
 
 ---
 
@@ -1004,7 +1037,7 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 
 **Steps:**
 
-1. Go to **Sector Analysis → Rotation** and review the **Signal Log** for context on how long a signal has been in place
+1. Go to **Markets** and scroll to the **Sector Rotation** panel; review the **Signal Log** for context on how long a signal has been in place
 2. Identify sectors with a BUY signal (RS > 1.05, rising trend) and strong breadth (>60% of stocks above 50-day MA)
 3. In the Screener, filter by the leading sector(s)
 4. Apply: Min Momentum **6**, Min Quality **5**, sort by Market Cap descending for the largest, most liquid names
@@ -1053,26 +1086,26 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 
 ---
 
-### 11.7 The Visual Map Workflow — Cheap Quality Hunting
+### 11.7 The Cheap-Quality Hunt
 
 **Suitable for:** Long-term investors who want to find high-quality businesses at fair-or-better prices.
 
-**Philosophy:** Plotting the entire universe on a Quality vs PEGY chart instantly reveals where the asymmetric opportunities are. The top-left "cheap quality" quadrant is where Buffett-style "wonderful businesses at a fair price" cluster.
+**Philosophy:** Combining a high **Quality Score** with a low **PEGY** isolates the "cheap quality" names — Buffett-style "wonderful businesses at a fair price". A high-quality company you are not overpaying for (relative to its growth and income) is the textbook asymmetric-upside setup.
 
 **Steps:**
 
-1. Go to **PEGY**.
+1. Go to the **Screener** (Fundamentals view).
 2. Filter to **FTSE 350** (the largest 350 companies — best liquidity).
-3. Use the dual-handle range slider to zoom into the dense region (PEGY 0–3).
-4. Look for **green dots in the top-left** quadrant — high Quality, low PEGY.
-5. Click each green dot to open the company; on the detail page, run the standard checks:
+3. Set **Min Quality: 7** and **Max PEGY: 1.5** (cheap-or-fair for the growth on offer).
+4. **Sort by the PEGY column ascending** to bring the cheapest high-quality names to the top. (Remember a blank PEGY means earnings are flat/shrinking or there isn't enough data — focus on the names with a real, low figure.)
+5. Click each candidate to open the company; on the detail page, run the standard checks:
    - Health tab: Is the balance sheet healthy?
    - Growth tab: Are revenue, profit, and FCF all growing?
    - Analysts tab: Does professional consensus agree it is undervalued?
    - Company News tab: Have there been any recent negative catalysts that explain why it is cheap?
-6. Cross-check momentum and risk **in the Screener** (Momentum and Risk columns) or on the company's **Chart** and **Health** tabs. A cheap-quality name that is *also* trending up with a low Risk Score is a rare and powerful setup.
+6. Back in the Screener, cross-check the **Momentum** and **Risk** columns. A cheap-quality name that is *also* trending up with a low Risk Score is a rare and powerful setup.
 
-**What you are looking for:** Companies in the green top-left PEGY quadrant that *also* clear a momentum and risk check — the rare intersection of "good business, fairly priced, currently trending up, low risk".
+**What you are looking for:** Companies with Quality ≥ 7 and a low PEGY that *also* clear a momentum and risk check — the rare intersection of "good business, fairly priced, currently trending up, low risk".
 
 ---
 
@@ -1106,8 +1139,8 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
      - Consensus = Buy
    - Sort by **Quality Score** descending. You should now have 5–25 names.
 
-4. **Visual cross-check** *(PEGY)*
-   - Open the **PEGY** page. Cross-reference your shortlist against the green top-left quadrant. Drop any names that fall outside it.
+4. **Value cross-check** *(Screener — PEGY column)*
+   - Add **Max PEGY: 1.5** to the filters (or sort by the PEGY column ascending). Drop any names that are expensive for the growth and income they offer.
    - Confirm survivors also clear momentum and risk using the Screener's Momentum and Risk columns.
 
 5. **Catalyst check** *(RNS News + Company News tab)*
@@ -1140,7 +1173,7 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 | Safety | Screener / Health tab | Risk ≤ 5, Net Debt manageable |
 | Professional view | Analyst Monitor | Buy consensus, Upside ≥ 10%, Rev Score > 0 |
 | Catalysts | RNS News, Company News | No negative Tier A in 30 days; ideally a recent positive one |
-| Visual confirmation | PEGY | Green top-left quadrant on the Quality × PEGY map |
+| Value confirmation | Screener PEGY column | PEGY ≤ 1.5 (cheap-or-fair for the growth) |
 
 When eight or nine of these are green for a single name, you have a high-conviction, asymmetric-risk setup. When fewer than five are green, walk away — there will be better opportunities.
 
@@ -1188,7 +1221,7 @@ When eight or nine of these are green for a single name, you have a high-convict
 | **Sector Rotation** | The movement of investment capital between industry sectors as the economic cycle evolves |
 | **Shrinkage (coverage)** | A statistical adjustment that pulls a thinly-covered stock's Buy% toward a neutral 50% baseline (prior weight k=5 analysts), so a "100% bullish" rating from a single analyst is not treated as strong as the same rating from twenty (see §7) |
 | **Ticker** | A short code identifying a listed stock (e.g. `AZN.L` for AstraZeneca London) |
-| **Treemap** | A chart that fills space with nested rectangles; here, one tile per company sized by market cap and coloured by daily move (the Sector Heatmap, see §5.4) |
+| **Treemap** | A chart that fills space with nested rectangles; here, one tile per company sized by market cap and coloured by daily move (the Sector Heatmap, see §5.3) |
 | **Volatility** | The degree of price fluctuation. Higher volatility = higher uncertainty = higher risk |
 | **Yield Curve** | A graph of government bond yields across different maturities. Its shape signals economic expectations |
 | **Z-Score (Altman)** | A statistical measure predicting probability of corporate bankruptcy |
@@ -1198,7 +1231,7 @@ When eight or nine of these are green for a single name, you have a high-convict
 
 ## Appendix A — Methodology References
 
-The quantitative indicators used in FINScope are grounded in peer-reviewed academic research. Below are the key papers underlying each methodology.
+The quantitative indicators used in Alpha Move AI are grounded in peer-reviewed academic research. Below are the key papers underlying each methodology.
 
 ---
 
@@ -1287,7 +1320,7 @@ Documents how investor sentiment — measurable through market breadth, new high
 
 ## Appendix B — ICB Sector Company List
 
-The **Industry Classification Benchmark (ICB)** is the taxonomy used to classify UK-listed companies by sector. Below are the representative companies tracked by FINScope in each sector. Tickers ending `.L` are listed on the London Stock Exchange.
+The **Industry Classification Benchmark (ICB)** is the taxonomy used to classify UK-listed companies by sector. Below are the representative companies tracked by Alpha Move AI in each sector. Tickers ending `.L` are listed on the London Stock Exchange.
 
 ---
 

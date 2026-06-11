@@ -25,6 +25,7 @@ Requires python-docx (already in the toolchain): pip install python-docx
 import os
 import re
 import sys
+from urllib.parse import unquote
 
 from docx import Document
 from docx.enum.text import WD_BREAK
@@ -56,6 +57,9 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET = re.compile(r"^(\s*)[-*]\s+(.*)$")
 _NUMBERED = re.compile(r"^(\s*)(\d+)\.\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\s*\|?[\s:\-|]+\|?\s*$")
+# A standalone image line: ![caption](path). The path may contain spaces, so it
+# greedily runs to the final closing paren on the line.
+_IMAGE = re.compile(r"^!\[([^\]]*)\]\((.+)\)\s*$")
 
 
 def parse_blocks(lines):
@@ -76,6 +80,12 @@ def parse_blocks(lines):
 
         if stripped == "---":
             blocks.append(("hr", None))
+            i += 1
+            continue
+
+        im = _IMAGE.match(stripped)
+        if im:
+            blocks.append(("image", (im.group(1).strip(), im.group(2).strip())))
             i += 1
             continue
 
@@ -309,6 +319,35 @@ def render_list(container, items):
         add_runs(p, text)
 
 
+def render_image(container, alt, rel_path):
+    """Insert a centred screenshot with an italic caption underneath.
+
+    Paths in the markdown are relative to the repo root (e.g.
+    ``manual_assets/shots/Foo.png``). A missing file is warned about and skipped
+    rather than failing the whole build.
+    """
+    # Markdown image paths are URL-style (spaces written as %20 so GitHub renders
+    # them); decode back to a real filesystem path before opening.
+    rel_path = unquote(rel_path)
+    path = rel_path if os.path.isabs(rel_path) else os.path.join(_ROOT, rel_path)
+    if not os.path.isfile(path):
+        print(f"WARNING: image not found at {path}; skipping.")
+        return
+    p = container.add_paragraph()
+    p.alignment = 1  # centre
+    p.paragraph_format.space_before = Pt(6)
+    p.paragraph_format.space_after = Pt(2)
+    p.add_run().add_picture(path, width=Inches(6.0))
+    if alt:
+        cap = container.add_paragraph()
+        cap.alignment = 1  # centre
+        cap.paragraph_format.space_after = Pt(12)
+        run = cap.add_run(alt)
+        run.italic = True
+        run.font.size = Pt(9)
+        run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+
 def render_code(container, code_lines):
     p = container.add_paragraph()
     _shade(p._p.get_or_add_pPr(), CODE_FILL)
@@ -365,6 +404,8 @@ def render_blocks(container, blocks, *, top_level=False, toc_entries=None):
             render_table(container, payload[0], payload[1])
         elif kind == "code":
             render_code(container, payload)
+        elif kind == "image":
+            render_image(container, payload[0], payload[1])
         elif kind == "quote":
             render_quote(container, payload)
         elif kind == "hr":

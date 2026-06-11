@@ -39,3 +39,7 @@ Thumbs.db
 *.docx
 *.pdf
 *.xlsx
+
+# Manual screenshots — source images for the user manual, kept local only
+# (they're embedded into Alpha_Move_AI_User_Manual.docx by build_manual.py)
+manual_assets/shots/
