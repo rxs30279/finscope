@@ -181,15 +181,24 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
             style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2 }}
             title="London Stock Exchange — 08:00–16:30, Mon–Fri, excl. UK bank holidays"
           >
-            <span style={{ display:'flex', alignItems:'center', gap:5 }}>
-              <span style={{ width:6, height:6, borderRadius:'50%', flexShrink:0, background: m.open ? '#10b981' : '#64748b', boxShadow: m.open ? '0 0 5px #10b981' : 'none' }} />
-              <span style={{ color: m.open ? '#10b981' : '#64748b', fontSize:9.5, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.5px' }}>
-                {m.open ? 'Markets open' : 'Markets closed'}
+            <span style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:5, width:'100%' }}>
+              <span style={{ display:'flex', alignItems:'center', gap:5 }}>
+                <span style={{ width:6, height:6, borderRadius:'50%', flexShrink:0, background: m.open ? '#10b981' : '#64748b', boxShadow: m.open ? '0 0 5px #10b981' : 'none' }} />
+                <span style={{ color: m.open ? '#10b981' : '#64748b', fontSize:9.5, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.5px' }}>
+                  {m.open ? 'Markets open' : 'Markets closed'}
+                </span>
               </span>
+              {m.open && (
+                <span style={{ background:'#0d2318', color:'#10b981', padding:'1px 5px', borderRadius:2, fontSize:10, fontFamily:'monospace', position:'relative', top:1 }}>
+                  {fmtCountdown(m.secondsToClose)}
+                </span>
+              )}
             </span>
-            <span style={{ marginLeft:11, color:'#64748b', fontSize:9, fontFamily:'monospace' }}>
-              {m.open ? `Closes in ${fmtCountdown(m.secondsToClose)}` : m.nextOpen}
-            </span>
+            {!m.open && (
+              <span style={{ marginLeft:11, color:'#64748b', fontSize:9, fontFamily:'monospace' }}>
+                {m.nextOpen}
+              </span>
+            )}
           </div>
         );
       })()}
@@ -243,7 +252,11 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
 
       {/* UK Fear & Greed */}
       {data?.fear_greed && (
-        <div style={{ marginTop:16, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
+        <div
+          onClick={() => onNavigate && onNavigate('markets')}
+          title="Open the markets page"
+          style={{ marginTop:16, paddingTop:10, borderTop:'1px solid #1e1e1e', cursor:'pointer' }}
+        >
           <div style={labelStyle}>UK Fear &amp; Greed</div>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
             <span style={{ fontFamily:'monospace', fontSize:22, fontWeight:700, color: fgColor(data.fear_greed.score) }}>
@@ -269,8 +282,12 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
         (data?.cnn_fear_greed?.value !== null && data?.cnn_fear_greed?.value !== undefined)) && (
         <div style={{ marginTop:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
           {data?.vix !== undefined && data.vix !== null && (
-            <div style={{ ...rowStyle, marginBottom:12 }}>
-              <span style={nameStyle}>VIX</span>
+            <div
+              onClick={() => onNavigate && onNavigate('markets')}
+              title="Open the markets page"
+              style={{ ...rowStyle, marginBottom:12, cursor:'pointer' }}
+            >
+              <span style={nameStyle}>VIX (US)</span>
               <span style={{
                 fontFamily:'monospace', fontSize:10, fontWeight:700,
                 color: data.vix < 20 ? '#10b981' : data.vix < 30 ? '#f59e0b' : '#ef4444'
@@ -280,9 +297,13 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
             </div>
           )}
           {data?.cnn_fear_greed?.value !== null && data?.cnn_fear_greed?.value !== undefined && (
-            <div>
+            <div
+              onClick={() => onNavigate && onNavigate('markets')}
+              title="Open the markets page"
+              style={{ cursor:'pointer' }}
+            >
               <div style={rowStyle}>
-                <span style={nameStyle}>CNN F&amp;G</span>
+                <span style={nameStyle}>F&amp;G (US)</span>
                 <span style={{ fontFamily:'monospace', fontSize:10, fontWeight:700, color: fgColor(data.cnn_fear_greed.value) }}>
                   {data.cnn_fear_greed.value.toFixed(2)}
                 </span>
