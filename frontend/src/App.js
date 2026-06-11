@@ -29,6 +29,8 @@ import {
   loadChartPrefs,
   saveChartPrefs,
 } from "./utils";
+import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import { useIsMobile, useIsNarrowDesktop } from "./useMediaQuery";
 import Sidebar from "./components/Sidebar";
 import RotationTab from "./components/RotationTab";
@@ -4040,6 +4042,8 @@ export default function App() {
           )}
         </main>
       </div>
+      <Analytics />
+      <SpeedInsights />
     </div>
   );
 }
