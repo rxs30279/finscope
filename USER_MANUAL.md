@@ -170,16 +170,16 @@ Momentum Return = (Price 63 days ago) ÷ (Price 252 days ago) − 1
 
 The most recent 3 months are deliberately excluded. Research shows that very recent returns tend to **reverse** (a short-term bounce is often followed by a pullback), while the 3–12 month window tends to **persist** (winners keep winning, losers keep losing). This phenomenon is called **price momentum**.
 
-All stocks are then **ranked against each other** by this return and assigned a score of 1–10. The score is a *percentile rank within the current screened universe*, not an absolute number — a 10 means the stock is in the top tenth of momentum among the stocks on screen, and a 1 means the bottom tenth.
+All stocks are then **ranked against each other** by this return and assigned a score of 1–10. The score is a *percentile rank across the whole UK universe*, not an absolute number — a 10 means the stock is in the top tenth of momentum across the entire market, and a 1 means the bottom tenth. This ranking is computed **once a day** (after the overnight price refresh), so a stock's momentum score is fixed for the day and does **not** change depending on which filters you apply.
 
-**Worked example:** Imagine 200 stocks pass your screen. The app computes each one's 12-1 month return, sorts them from worst to best, and splits them into ten equal bands. A stock sitting 184th out of 200 (the 92nd percentile) lands in the top band and scores **10**; a stock 5th from bottom scores **1**.
+**Worked example:** Suppose the full universe is ~700 stocks. Each day the app computes every stock's 12-1 month return, sorts them from worst to best, and splits them into ten equal bands. A stock sitting in the 92nd percentile of that whole-market ranking lands in the top band and scores **10**; a stock near the bottom scores **1**. Its rank among the subset that happens to pass your current screen is irrelevant — the score is the same whatever you filter on.
 
 **What to look for:** A score of 7 or higher suggests the stock has been among the better performers. Combined with strong fundamentals, this can confirm that the market is already recognising the quality you have identified.
 
 > **Under the hood — Momentum (1–10)**
 > - **Raw signal:** `Momentum Return = close(63 trading days ago) ÷ close(252 trading days ago) − 1`. This is the return over the window from ~12 months ago to ~3 months ago, deliberately skipping the most recent 3 months (short-term reversal).
 > - **Data requirement:** a stock needs at least 252 trading days of price history; otherwise it gets no momentum score (blank).
-> - **Scoring:** all stocks with a raw return are sorted ascending. For a stock at position `i` (0-based) out of `n`, `score = clamp(1, 10, int(i ÷ n × 10) + 1)`. Because it is a percentile rank, the score is **relative to whatever set of stocks is currently on screen** — the same company can score differently under different filters.
+> - **Scoring:** all stocks with a raw return are sorted ascending. For a stock at position `i` (0-based) out of `n`, `score = clamp(1, 10, int(i ÷ n × 10) + 1)`. The rank is taken across the **full universe**, and is **precomputed once daily** (after the price refresh) and stored — the screener simply reads it back. The same company therefore keeps the same score regardless of which filters are active.
 
 **Academic reference:** See Appendix A — Jegadeesh & Titman (1993).
 
@@ -201,7 +201,7 @@ The score awards up to 2 points for each of five business-quality measures. For 
 | **Operating Margin** | greater than 10% | at or above the universe median operating margin | 2 |
 | **Cash / Net profitability** | FCF Margin greater than 5% | Net Margin at or above the universe median | 2 |
 
-> **Note on the relative checks:** "Median of the universe" means the median across the stocks currently passing your screen, so — like Momentum — the relative half of the Quality score shifts slightly depending on which filters are active. The absolute half never moves.
+> **Note on the relative checks:** "Median of the universe" means the median across the stocks currently passing your screen, so the relative half of the Quality score shifts slightly depending on which filters are active. The absolute half never moves. (This is unlike Momentum, which is ranked once daily across the whole market and so does not move with your filters.)
 
 **Key terms:**
 - **ROIC (Return on Invested Capital):** Profit generated for every £1 of capital invested in the business. It is the best single measure of business quality — a high ROIC means the company has a competitive advantage (a "moat") that lets it earn outsized returns.
