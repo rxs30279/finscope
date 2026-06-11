@@ -109,86 +109,44 @@ SECTOR_TICKERS = {
     "Real Estate": ["LAND.L", "SGRO.L", "BLND.L", "BBOX.L", "PCTN.L", "GPE.L"],
 }
 
-# FTSE 100 — used for breadth calculations
-BREADTH_TICKERS = [
-    # Top 50 by market cap
-    "AZN.L",
-    "SHEL.L",
-    "HSBA.L",
-    "ULVR.L",
-    "BP.L",
-    "RIO.L",
-    "GSK.L",
-    "LSEG.L",
-    "REL.L",
-    "DGE.L",
-    "BATS.L",
-    "GLEN.L",
-    "LLOY.L",
-    "BARC.L",
-    "NG.L",
-    "RKT.L",
-    "IMB.L",
-    "HLN.L",
-    "AAL.L",
-    "NWG.L",
-    "TSCO.L",
-    "SSE.L",
-    "AHT.L",
-    "BA.L",
-    "RR.L",
-    "HLMA.L",
-    "SGE.L",
-    "IHG.L",
-    "SN.L",
-    "HIK.L",
-    "CPG.L",
-    "EXPN.L",
-    "STAN.L",
-    "IAG.L",
-    "ANTO.L",
-    "PRU.L",
-    "ABF.L",
-    "WPP.L",
-    "BT-A.L",
-    "AUTO.L",
-    "FRES.L",
-    "MNG.L",
-    "CNA.L",
-    "SVT.L",
-    "UU.L",
-    "LAND.L",
-    "SGRO.L",
-    "BLND.L",
-    "VOD.L",
-    "NXT.L",
-    # FTSE 100 remainder
-    "AV.L",
-    "LGEN.L",
-    "ADM.L",
-    "III.L",
-    "ITRK.L",
-    "CRDA.L",
-    "RTO.L",
+# FTSE 100 constituents — the breadth universe for the Breadth tab and the Fear &
+# Greed breadth / new-highs-lows components. Sourced from company_metadata (kept current
+# by the quarterly refresh_index_membership.py) so the list tracks index reshuffles
+# instead of drifting; the hardcoded snapshot below is the fallback used only if the DB
+# is unreachable. Regenerate the fallback periodically from the same query.
+_BREADTH_TICKERS_FALLBACK = [
+    "AAF.L", "AAL.L", "ABF.L", "ADM.L", "ALW.L", "ANTO.L", "AUTO.L", "AV.L", "AZN.L",
+    "BA.L", "BAB.L", "BARC.L", "BATS.L", "BBOX.L", "BEZ.L", "BGEO.L", "BKG.L", "BLND.L",
+    "BNZL.L", "BP.L", "BRBY.L", "BT-A.L", "BTRW.L", "CCEP.L", "CCH.L", "CNA.L", "CPG.L",
+    "CRDA.L", "CTEC.L", "DCC.L", "DGE.L", "DPLM.L", "EDV.L", "ENT.L", "EXPN.L", "FCIT.L",
+    "FRES.L", "GAW.L", "GLEN.L", "GSK.L", "HLMA.L", "HLN.L", "HSBA.L", "HSX.L", "HWDN.L",
+    "IAG.L", "ICG.L", "IGG.L", "IHG.L", "III.L", "IMB.L", "IMI.L", "INF.L", "ITRK.L",
+    "JD.L", "KGF.L", "LAND.L", "LGEN.L", "LLOY.L", "LMP.L", "LSEG.L", "MKS.L", "MNDI.L",
+    "MNG.L", "MRO.L", "MTLN.L", "NG.L", "NWG.L", "NXT.L", "PCT.L", "PRU.L", "PSH.L",
+    "PSN.L", "PSON.L", "REL.L", "RIO.L", "RKT.L", "RMV.L", "RR.L", "RTO.L", "SBRY.L",
+    "SDLF.L", "SDR.L", "SGE.L", "SGRO.L", "SHEL.L", "SMIN.L", "SMT.L", "SN.L", "SPX.L",
+    "SSE.L", "STAN.L", "STJ.L", "SVT.L", "TSCO.L", "ULVR.L", "UU.L", "VOD.L", "WEIR.L",
     "WTB.L",
-    "JD.L",
-    "MKS.L",
-    "SBRY.L",
-    "MNDI.L",
-    "EZJ.L",
-    "ENT.L",
-    "FLTR.L",
-    "PSON.L",
-    "SDR.L",
-    "PSN.L",
-    "TW.L",
-    "MRO.L",
-    "IMI.L",
-    "WEIR.L",
-    "SKG.L",
-    "RMV.L",
-    "GAW.L",
 ]
+
+
+def _load_breadth_tickers():
+    """Active FTSE 100 symbols from company_metadata, falling back to the hardcoded
+    snapshot if the DB is unreachable or returns an implausibly short list (a partial
+    refresh shouldn't shrink the breadth universe). Evaluated once at import; backend
+    processes are long-lived and re-import on restart, so this picks up reshuffles."""
+    try:
+        rows = _db_query(
+            "SELECT symbol FROM company_metadata"
+            " WHERE ftse_index = 'FTSE 100' AND is_active ORDER BY symbol"
+        )
+        syms = [r["symbol"] for r in rows]
+        return syms if len(syms) >= 90 else list(_BREADTH_TICKERS_FALLBACK)
+    except Exception:
+        return list(_BREADTH_TICKERS_FALLBACK)
+
+
+BREADTH_TICKERS = _load_breadth_tickers()
 
 CROSS_ASSET_TICKERS = {
     "gbpusd": "GBPUSD=X",

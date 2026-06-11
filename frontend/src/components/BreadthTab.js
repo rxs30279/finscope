@@ -75,7 +75,8 @@ export default function BreadthTab({ refreshKey }) {
 
   return (
     <div>
-      <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Market Breadth</h2>
+      <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:4 }}>Market Breadth</h2>
+      <div style={{ fontFamily:'monospace', fontSize:10, color:'#64748b', marginBottom:20 }}>Across the FTSE 100 constituents</div>
       <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap:16, marginBottom:16 }}>
 
         {/* Gauge */}

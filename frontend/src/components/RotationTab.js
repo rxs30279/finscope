@@ -76,6 +76,7 @@ function SectorHeatmap({ sectors, isMobile }) {
 function RSTable({ sectors }) {
   if (!sectors?.length) return null;
   return (
+    <>
     <table style={{ width:'100%', minWidth:460, borderCollapse:'collapse', fontSize:11, fontFamily:'monospace' }}>
       <thead>
         <tr style={{ borderBottom:'1px solid #2a2a2a' }}>
@@ -101,6 +102,11 @@ function RSTable({ sectors }) {
         ))}
       </tbody>
     </table>
+    <div style={{ color:'#64748b', fontSize:9, fontFamily:'monospace', marginTop:8, lineHeight:1.5 }}>
+      RS Score = the basket's return over the past 3 months (63 trading days) relative to the All-Share; &gt;1 means it outperformed.<br/>
+      Breadth = % of each sector's basket trading above its 50-day MA, measured over the curated sector baskets (not the full FTSE 100).
+    </div>
+    </>
   );
 }
 

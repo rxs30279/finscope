@@ -177,7 +177,7 @@ function FearGreedHistoryChart({ history, loading }) {
             <ReferenceLine yAxisId="left" y={50} stroke="#2a2a2a" strokeDasharray="3 3" />
             <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
             <XAxis dataKey="date" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} ticks={ticks} interval={0} tickMargin={8} tickFormatter={tickFormatter} />
-            <YAxis yAxisId="left" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
+            <YAxis yAxisId="left" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} width={40} tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
             <Tooltip
               contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:10, fontFamily:'monospace' }}
               formatter={(v, name) => [v != null ? `${Math.round(v)}${mode === 'pct' ? ' %ile' : ''}` : '—', name]}
@@ -253,12 +253,12 @@ function VixHistoryChart({ history, loading }) {
         <div style={{ color:'#444', fontFamily:'monospace', fontSize:11, padding:'40px 0', textAlign:'center' }}>No VIX history available yet.</div>
       ) : (
         <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={filtered} margin={{ top:5, right:10, bottom:5, left:0 }}>
+          <LineChart data={filtered} margin={{ top:5, right:34, bottom:5, left:0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
             {/* 20 ≈ the VIX long-run average — a rough fear/calm divider. */}
             <ReferenceLine y={20} stroke="#2a2a2a" strokeDasharray="3 3" label={{ value:'20', position:'right', fill:'#555', fontSize:9, fontFamily:'monospace' }} />
             <XAxis dataKey="date" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} ticks={ticks} interval={0} tickMargin={8} tickFormatter={tickFormatter} />
-            <YAxis domain={['auto', 'auto']} tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} width={34} />
+            <YAxis domain={['auto', 'auto']} width={40} tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
             <Tooltip
               contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:10, fontFamily:'monospace' }}
               formatter={(v) => [v != null ? v.toFixed(2) : '—', 'US VIX']}
