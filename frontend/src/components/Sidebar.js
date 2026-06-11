@@ -250,6 +250,15 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
         );
       }) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
 
+      {/* Heatmap link — sits at the bottom of the sector list */}
+      <div
+        onClick={() => onNavigate && onNavigate('heatmap')}
+        title="Open the market heatmap"
+        style={{ color:'#f97316', cursor:'pointer', fontSize:12, letterSpacing:0.5, display:'flex', alignItems:'center', justifyContent:'center', gap:5, marginTop:12, padding:'7px 10px', border:'1px solid #f9731633', borderRadius:4, background:'#f973160d', boxSizing:'border-box' }}
+      >
+        ▦ Heatmap
+      </div>
+
       {/* UK Fear & Greed */}
       {data?.fear_greed && (
         <div
@@ -315,15 +324,6 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
           )}
         </div>
       )}
-
-      {/* Heatmap link — sits below the Fear & Greed indicators */}
-      <div
-        onClick={() => onNavigate && onNavigate('heatmap')}
-        title="Open the market heatmap"
-        style={{ color:'#f97316', cursor:'pointer', fontSize:12, letterSpacing:0.5, display:'flex', alignItems:'center', justifyContent:'center', gap:5, marginTop:16 }}
-      >
-        ▦ Heatmap
-      </div>
 
       {/* Support / Feedback — subtle full-width links to the in-app meta pages */}
       <div style={{ marginTop:16, paddingTop:12, borderTop:'1px solid #1e1e1e', display:'flex', flexDirection:'column', gap:8 }}>
