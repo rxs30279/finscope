@@ -173,21 +173,12 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
   return (
     <aside style={asideStyle}>
 
-      {/* Benchmarks */}
-      <div style={labelStyle}>Benchmarks</div>
-      {data?.benchmarks?.map(b => (
-        <div key={b.name} style={rowStyle}>
-          <span style={nameStyle}>{b.name}</span>
-          <PctBadge value={b.pct_change} />
-        </div>
-      )) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
-
-      {/* LSE market clock */}
+      {/* LSE market clock — sits at the very top of the sidebar */}
       {(() => {
         const m = lseStatus();
         return (
           <div
-            style={{ marginTop:8, paddingTop:8, borderTop:'1px solid #1e1e1e', display:'flex', justifyContent:'space-between', alignItems:'center' }}
+            style={{ display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2 }}
             title="London Stock Exchange — 08:00–16:30, Mon–Fri, excl. UK bank holidays"
           >
             <span style={{ display:'flex', alignItems:'center', gap:5 }}>
@@ -196,16 +187,63 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
                 {m.open ? 'Markets open' : 'Markets closed'}
               </span>
             </span>
-            <span style={{ color:'#64748b', fontSize:9, fontFamily:'monospace' }}>
+            <span style={{ marginLeft:11, color:'#64748b', fontSize:9, fontFamily:'monospace' }}>
               {m.open ? `Closes in ${fmtCountdown(m.secondsToClose)}` : m.nextOpen}
             </span>
           </div>
         );
       })()}
 
-      {/* UK Fear & Greed — sits directly under the market clock */}
+      {/* Benchmarks */}
+      <div style={{ ...labelStyle, marginTop:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>Benchmarks</div>
+      {data?.benchmarks?.map(b => (
+        <div key={b.name} style={rowStyle}>
+          <span style={nameStyle}>{b.name}</span>
+          <PctBadge value={b.pct_change} />
+        </div>
+      )) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
+
+      {/* Sectors */}
+      <div style={{ ...labelStyle, marginTop:16, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>ICB Sectors</div>
+      {data?.sectors?.map(s => {
+        const isOpen = expandedSector === s.name;
+        const members = constituents?.[s.name];
+        return (
+          <div key={s.name}>
+            <div
+              onClick={() => toggleSector(s.name)}
+              style={{ ...rowStyle, cursor:'pointer' }}
+              title="Show companies in this sector"
+            >
+              <span style={{ display:'flex', alignItems:'center', gap:3, maxWidth:120, overflow:'hidden' }}>
+                <span style={{ color: isOpen ? '#94a3b8' : '#444', fontSize:7, flexShrink:0 }}>{isOpen ? '▾' : '▸'}</span>
+                <span style={{ ...nameStyle, color: isOpen ? '#cbd5e1' : nameStyle.color, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>
+              </span>
+              <PctBadge value={s.pct_change} />
+            </div>
+            {isOpen && (
+              <div style={{ margin:'2px 0 8px 10px', paddingLeft:6, borderLeft:'1px solid #1e1e1e' }}>
+                {members === undefined ? (
+                  <div style={{ color:'#333', fontSize:9 }}>Loading…</div>
+                ) : members.length === 0 ? (
+                  <div style={{ color:'#333', fontSize:9 }}>No data</div>
+                ) : (
+                  members.map(c => (
+                    <div key={c.symbol} style={{ display:'flex', justifyContent:'space-between', gap:6, marginBottom:2 }}>
+                      <span style={{ color:pctColor(c.pct_change), fontSize:9, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.name}</span>
+                      <span style={{ color:'#475569', fontSize:9, fontFamily:'monospace', flexShrink:0 }}>{c.symbol.replace('.L','')}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
+
+      {/* UK Fear & Greed */}
       {data?.fear_greed && (
-        <div style={{ marginTop:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
+        <div style={{ marginTop:16, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>
           <div style={labelStyle}>UK Fear &amp; Greed</div>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
             <span style={{ fontFamily:'monospace', fontSize:22, fontWeight:700, color: fgColor(data.fear_greed.score) }}>
@@ -257,45 +295,7 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
         </div>
       )}
 
-      {/* Sectors */}
-      <div style={{ ...labelStyle, marginTop:16 }}>ICB Sectors</div>
-      {data?.sectors?.map(s => {
-        const isOpen = expandedSector === s.name;
-        const members = constituents?.[s.name];
-        return (
-          <div key={s.name}>
-            <div
-              onClick={() => toggleSector(s.name)}
-              style={{ ...rowStyle, cursor:'pointer' }}
-              title="Show companies in this sector"
-            >
-              <span style={{ display:'flex', alignItems:'center', gap:3, maxWidth:120, overflow:'hidden' }}>
-                <span style={{ color: isOpen ? '#94a3b8' : '#444', fontSize:7, flexShrink:0 }}>{isOpen ? '▾' : '▸'}</span>
-                <span style={{ ...nameStyle, color: isOpen ? '#cbd5e1' : nameStyle.color, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>
-              </span>
-              <PctBadge value={s.pct_change} />
-            </div>
-            {isOpen && (
-              <div style={{ margin:'2px 0 8px 10px', paddingLeft:6, borderLeft:'1px solid #1e1e1e' }}>
-                {members === undefined ? (
-                  <div style={{ color:'#333', fontSize:9 }}>Loading…</div>
-                ) : members.length === 0 ? (
-                  <div style={{ color:'#333', fontSize:9 }}>No data</div>
-                ) : (
-                  members.map(c => (
-                    <div key={c.symbol} style={{ display:'flex', justifyContent:'space-between', gap:6, marginBottom:2 }}>
-                      <span style={{ color:pctColor(c.pct_change), fontSize:9, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.name}</span>
-                      <span style={{ color:'#475569', fontSize:9, fontFamily:'monospace', flexShrink:0 }}>{c.symbol.replace('.L','')}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-        );
-      }) ?? <div style={{ color:'#333', fontSize:10 }}>Loading…</div>}
-
-      {/* Heatmap link — sits at the foot of the sector list */}
+      {/* Heatmap link — sits below the Fear & Greed indicators */}
       <div
         onClick={() => onNavigate && onNavigate('heatmap')}
         title="Open the market heatmap"
