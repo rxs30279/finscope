@@ -29,9 +29,9 @@ const COMPONENT_INFO = {
     how: 'Counts the share of FTSE 100 stocks trading above their own 50-day moving average. That percentage is the score directly: 50% (half the market above trend) is neutral, higher is greed, lower is fear.',
     means: 'High breadth signals a broad, healthy advance where most stocks participate — greed. Low breadth warns that gains are narrow or that selling is widespread beneath the surface, a classic fear signal even when the headline index looks calm.',
   },
-  vix: {
-    how: 'Takes the VIX — expected 30-day volatility implied by S&P 500 option prices — and inverts it onto a 0–100 scale relative to its one-year range. Higher VIX produces a lower score. The VIX is US-derived, used here as a global risk-appetite proxy (it tracks the UK’s VFTSE index very closely) because no free UK implied-volatility index is available; UK-specific volatility is captured separately by the Realised Vol gauge below.',
-    means: 'The VIX is the original "fear gauge". A low score here means investors are paying up for crash protection (fear); a high score means options are cheap and complacency/greed prevails. Because global equity risk moves in lockstep, it remains a meaningful read on the mood facing UK investors.',
+  currency: {
+    how: 'Takes the 60-day percentage change in GBP/USD and inverts it onto a 0–100 scale, scaled by how much the exchange rate typically moves over 60 days. A flat pound scores 50; a stronger pound pulls the score down and a weaker pound pushes it up.',
+    means: 'Around three-quarters of FTSE 100 revenue is earned overseas, so the level of sterling drives reported profits. A weaker pound flatters those overseas earnings once converted back — a tailwind that reads as greed; a stronger pound is an earnings headwind that reads as fear. The US VIX, previously used here, now sits in its own panel as a standalone cross-check.',
   },
   safe_haven: {
     how: 'Compares the 20-day total return of the FTSE 100 against a UK gilt ETF (all-maturity gilts). A zero spread — stocks and bonds neck-and-neck — scores 50; stocks pulling ahead lifts the score, gilts winning pulls it down, scaled by how much the spread normally swings.',
@@ -300,7 +300,7 @@ export default function FearGreedTab({ refreshKey }) {
   }, [refreshKey]);
 
   const color = fg ? fgColor(fg.score) : '#666';
-  const COMPONENT_ORDER = ['momentum', 'breadth', 'vix', 'safe_haven', 'realised_vol', 'hl_ratio'];
+  const COMPONENT_ORDER = ['momentum', 'breadth', 'currency', 'safe_haven', 'realised_vol', 'hl_ratio'];
   const latestDate = (history && history.length) ? history[history.length - 1].date : null;
   // The headline is an EOD figure stamped with the session it was built from;
   // fall back to the history's latest row if the backend didn't supply one.

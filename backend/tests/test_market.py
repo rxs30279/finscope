@@ -265,7 +265,7 @@ def test_fear_greed_components_all_present(client):
     with _patch_prices(fake):
         r = client.get("/api/market/fear-greed")
     components = r.json()["components"]
-    for key in ["momentum", "breadth", "vix", "safe_haven", "hl_ratio"]:
+    for key in ["momentum", "breadth", "currency", "safe_haven", "hl_ratio"]:
         assert key in components, f"Missing component: {key}"
 
 def test_fear_greed_component_scores_in_range(client):

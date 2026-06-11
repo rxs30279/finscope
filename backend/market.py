@@ -411,20 +411,25 @@ def _compute_fear_greed():
     if "breadth" not in components:
         components["breadth"] = {"score": 50, "label": "Market Breadth", "value": None}
 
-    # 3. Implied volatility — VIX, inverted (high VIX = fear = low score).
-    # ^VIX is US-derived (S&P 500 options); used here as a global risk-appetite proxy as no
-    # free UK implied-vol index (VFTSE) exists. UK-specific vol is the Realised Vol component.
-    if VIX_TICKER in prices.columns:
-        vix = prices[VIX_TICKER].dropna()
-        if len(vix) >= 20:
-            current_vix = float(vix.iloc[-1])
-            components["vix"] = {
-                "score": _zscore_to_score(-vix, -current_vix),
-                "label": "Implied Vol (VIX)",
-                "value": round(current_vix, 2),
-            }
-    if "vix" not in components:
-        components["vix"] = {"score": 50, "label": "Implied Vol (VIX)", "value": None}
+    # 3. Currency — GBP/USD 60-day change, inverted (strong pound = fear = low score).
+    # ~75% of FTSE 100 revenue is earned overseas, so a weaker pound flatters those earnings
+    # once converted back to sterling (a tailwind = greed) while a stronger pound is an
+    # earnings headwind (fear). Centred on a zero 60-day change and scaled by its own
+    # volatility; the current change is negated so GBP appreciation reads below 50.
+    gbp_ticker = CROSS_ASSET_TICKERS["gbpusd"]
+    if gbp_ticker in prices.columns:
+        gbp = prices[gbp_ticker].dropna()
+        if len(gbp) >= 61:
+            gbp_chg = gbp.pct_change(60).dropna()
+            if len(gbp_chg) >= 20:
+                current_gbp = float(gbp_chg.iloc[-1])
+                components["currency"] = {
+                    "score": _deviation_to_score(gbp_chg, -current_gbp),
+                    "label": "Currency (GBP/USD)",
+                    "value": round(current_gbp * 100, 2),
+                }
+    if "currency" not in components:
+        components["currency"] = {"score": 50, "label": "Currency (GBP/USD)", "value": None}
 
     # 4. Safe Haven Demand — 20-day total-return spread: FTSE 100 vs UK gilt ETF (IGLT.L,
     # all-maturity gilts). Centred on a ZERO spread (stocks and bonds neck-and-neck), scaled
@@ -814,11 +819,15 @@ def _fetch_cnn_fg():
 # endpoint (the same source the fear_and_greed package uses), which ships ~1.5y
 # of daily values. Both are upserted into fear_greed_history (idempotent).
 
-# F&G needs only the breadth basket + the FTSE / VIX / gilt proxies — not the
-# sector or cross-asset tickers — so the 2-year reconstruction fetch is lighter
-# than the full proxy universe.
+# F&G needs only the breadth basket + the FTSE / gilt / GBP-USD proxies (VIX is no
+# longer an index component but is still fetched for the standalone VIX panel) — not
+# the sector tickers — so the 2-year reconstruction fetch is lighter than the full
+# proxy universe.
 FG_HISTORY_TICKERS = list(
-    dict.fromkeys(BREADTH_TICKERS + [BENCHMARK_TICKERS["FTSE 100"], VIX_TICKER, GILT_ETF_TICKER])
+    dict.fromkeys(
+        BREADTH_TICKERS
+        + [BENCHMARK_TICKERS["FTSE 100"], VIX_TICKER, GILT_ETF_TICKER, CROSS_ASSET_TICKERS["gbpusd"]]
+    )
 )
 
 CNN_FG_HISTORY_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -903,10 +912,12 @@ def _compute_fear_greed_series(days=370):
         breadth_series = pd.DataFrame(flags).mean(axis=1).dropna()
         comp["breadth"] = (breadth_series * 100).round().clip(0, 100)
 
-    # 3. Implied vol — VIX, inverted via trailing z-score.
-    if VIX_TICKER in prices.columns:
-        vix = prices[VIX_TICKER].dropna()
-        comp["vix"] = pd.Series(_score_series_trailing(-vix, _zscore_to_score))
+    # 3. Currency — GBP/USD 60-day change, inverted (strong pound = fear). Negate the
+    # change so it's scored the same way as the live calc (appreciation reads below 50).
+    gbp_ticker = CROSS_ASSET_TICKERS["gbpusd"]
+    if gbp_ticker in prices.columns:
+        gbp_chg = prices[gbp_ticker].dropna().pct_change(60).dropna()
+        comp["currency"] = pd.Series(_score_series_trailing(-gbp_chg, _deviation_to_score))
 
     # 4. Safe haven — 20-day total-return spread FTSE vs gilt ETF, centred on zero.
     if GILT_ETF_TICKER in prices.columns:
