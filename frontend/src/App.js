@@ -91,6 +91,7 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
   const [quarterly, setQuarterly] = useState([]);
   const [tab, setTab] = useState(initialTab || "chart");
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
 
   // Honour a requested tab (e.g. opening straight to News from the watchlist),
   // and reset to that tab when the viewed company changes.
@@ -156,6 +157,7 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
     net_income: r.net_income ? r.net_income / 1e9 : null,
     eps: r.eps_diluted,
   }));
+  const hasQuarterlyRevenue = qChart.some((r) => r.revenue != null);
 
   const tabs = [
     "chart",
@@ -327,8 +329,12 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
       <div
         style={{
           display: "flex",
+          flexWrap: isMobile ? "wrap" : "nowrap",
+          rowGap: isMobile ? 2 : 0,
           gap: 2,
-          borderBottom: "1px solid #334155",
+          // On mobile the row wraps, so the container border would only sit
+          // under the bottom row — let each tab's own border show the active state.
+          borderBottom: isMobile ? "none" : "1px solid #334155",
           marginBottom: 24,
         }}
       >
@@ -336,7 +342,11 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
           <button
             key={t}
             onClick={() => setTab(t)}
-            style={{ ...S.tab, ...(tab === t ? S.tabActive : {}) }}
+            style={{
+              ...S.tab,
+              ...(isMobile ? { padding: "8px 10px", fontSize: 11 } : {}),
+              ...(tab === t ? S.tabActive : {}),
+            }}
           >
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
@@ -508,31 +518,38 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
             </ResponsiveContainer>
           </div>
           <div
-            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                isMobile || !hasQuarterlyRevenue ? "1fr" : "1fr 1fr",
+              gap: 20,
+            }}
           >
-            <div style={S.card}>
-              <h3 style={S.cardTitle}>{`Quarterly Revenue (${sym}B)`}</h3>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart
-                  data={qChart}
-                  margin={{ top: 5, right: 10, bottom: 5, left: 0 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
-                  <XAxis dataKey="q" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip
-                    formatter={(v) => sym + v?.toFixed(2) + "B"}
-                    contentStyle={S.tooltip}
-                  />
-                  <Bar
-                    dataKey="revenue"
-                    fill="#6366f1"
-                    radius={[4, 4, 0, 0]}
-                    name="Revenue"
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            {hasQuarterlyRevenue && (
+              <div style={S.card}>
+                <h3 style={S.cardTitle}>{`Quarterly Revenue (${sym}B)`}</h3>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart
+                    data={qChart}
+                    margin={{ top: 5, right: 10, bottom: 5, left: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
+                    <XAxis dataKey="q" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip
+                      formatter={(v) => sym + v?.toFixed(2) + "B"}
+                      contentStyle={S.tooltip}
+                    />
+                    <Bar
+                      dataKey="revenue"
+                      fill="#6366f1"
+                      radius={[4, 4, 0, 0]}
+                      name="Revenue"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
             <div style={S.card}>
               <h3 style={S.cardTitle}>EPS Diluted (Annual)</h3>
               <ResponsiveContainer width="100%" height={200}>
@@ -632,7 +649,11 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
             ))}
           </div>
           <div
-            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}
+            style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+              gap: 20,
+            }}
           >
             <div style={S.card}>
               <h3 style={S.cardTitle}>EPS History</h3>
@@ -815,7 +836,11 @@ function CompanyDetail({ symbol, onBack, initialTab }) {
             ))}
           </div>
           <div
-            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}
+            style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+              gap: 20,
+            }}
           >
             <div style={S.card}>
               <h3 style={S.cardTitle}>Debt / Equity History</h3>
