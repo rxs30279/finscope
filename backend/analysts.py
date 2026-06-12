@@ -1,6 +1,6 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import urllib.error
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from typing import Optional
 import psycopg2
 import psycopg2.extras
@@ -452,9 +452,12 @@ def refresh_status(since: Optional[str] = Query(None,
     return gh_actions.pipeline_status(_ANALYSTS_WORKFLOW, since)
 
 @router.get("/{symbol}")
-def get_history(symbol: str):
+def get_history(symbol: str, response: Response = None):
     """Full snapshot history for one stock, oldest first."""
     from fastapi import HTTPException
+    # Analyst snapshots land once daily — hold an hour at the edge.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
     rows = _query("""
         SELECT snapshot_date, consensus, buy_pct, total_analysts,
                strong_buy, buy, hold, sell, strong_sell,

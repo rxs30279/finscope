@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 import yfinance as yf
 import time
 import numpy as np
@@ -996,7 +996,13 @@ def fear_greed_history():
 
 
 @router.get("/sidebar")
-def sidebar():
+def sidebar(response: Response):
+    # Polled by every open tab and identical for all users (no params). The 15-min
+    # in-process _cached() does nothing across Vercel's cold/separate instances —
+    # each poll still invoked the function. Edge-cache it so the whole fleet of
+    # pollers collapses to ~one function call per 15 min globally.
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
+
     def compute():
         # Benchmarks, sectors and VIX are intentionally LIVE: they read the raw
         # current-day bar (Yahoo's daily Close tracks the live price intraday) and

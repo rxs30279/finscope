@@ -94,7 +94,11 @@ def search(q: str = Query(..., min_length=1)):
 
 
 @app.get("/api/company")
-def company(symbol: str = Query(...)):
+def company(symbol: str = Query(...), response: Response = None):
+    # Company metadata changes only on the quarterly index refresh — safe to hold
+    # at the edge for an hour so repeat profile views don't re-invoke the function.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
     rows = query("SELECT * FROM company_metadata WHERE symbol = %s", (symbol,))
     if not rows:
         raise HTTPException(404, "Not found")
@@ -102,7 +106,12 @@ def company(symbol: str = Query(...)):
 
 
 @app.get("/api/snapshot")
-def snapshot(symbol: str = Query(...)):
+def snapshot(symbol: str = Query(...), response: Response = None):
+    # Does a price_history scan + risk computation per call; the underlying data
+    # only changes daily, so edge-caching removes both the DB read and the CPU
+    # on every repeat view.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
     rows = query(
         """
         SELECT t.*, m.sector
@@ -123,7 +132,10 @@ def snapshot(symbol: str = Query(...)):
 
 
 @app.get("/api/annual")
-def annual(symbol: str = Query(...)):
+def annual(symbol: str = Query(...), response: Response = None):
+    # Annual financials change at most a few times a year — hold 6h at the edge.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=21600, stale-while-revalidate=86400"
     return query(
         """
         SELECT * FROM annual_financials
@@ -135,7 +147,10 @@ def annual(symbol: str = Query(...)):
 
 
 @app.get("/api/quarterly")
-def quarterly(symbol: str = Query(...)):
+def quarterly(symbol: str = Query(...), response: Response = None):
+    # Quarterly financials change ~4x/year — hold 6h at the edge.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=21600, stale-while-revalidate=86400"
     return query(
         """
         SELECT * FROM quarterly_financials
@@ -813,7 +828,7 @@ _QUOTE_TTL = 60  # seconds
 
 
 @app.get("/api/quotes")
-def quotes(symbols: str):
+def quotes(symbols: str, response: Response):
     """Return live last-price for each symbol via yfinance fast_info. 60s cache per symbol."""
     import time
     import yfinance as yf
@@ -822,6 +837,11 @@ def quotes(symbols: str):
     requested = [s.strip() for s in symbols.split(",") if s.strip()]
     if not requested:
         return {}
+
+    # Live prices are already designed to be up to 60s stale (_QUOTE_TTL); mirror
+    # that at the edge so many tabs polling the same symbol(s) collapse to one
+    # function call per symbol-set per minute instead of one per poll per user.
+    response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=60"
 
     now = time.time()
     out = {}
@@ -862,7 +882,7 @@ def quotes(symbols: str):
 
 
 @app.get("/api/watchlist")
-def watchlist(symbols: str):
+def watchlist(symbols: str, response: Response = None):
     """Per-stock monitoring data for the watchlist page.
 
     Takes a comma-separated symbol list (the user's saved watchlist) and returns
@@ -876,6 +896,12 @@ def watchlist(symbols: str):
     requested = [s.strip() for s in symbols.split(",") if s.strip()]
     if not requested:
         return []
+
+    # Per-user symbol set, so edge hit-rate is lower than the single-symbol
+    # endpoints, but a 60s hold still collapses the repeated polls from each open
+    # watchlist tab into one function call per minute per distinct set.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=60"
 
     # 1. Base metadata + the TTM fields the risk scorer needs + latest analyst snapshot.
     rows = query(

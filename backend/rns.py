@@ -29,7 +29,7 @@ import psycopg2
 import psycopg2.extras
 import psycopg2.pool
 from bs4 import BeautifulSoup
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -1091,8 +1091,11 @@ def get_significant(hours: int = Query(24, ge=1, le=168)):
 
 
 @router.get("/by-symbol/{symbol}")
-def get_by_symbol(symbol: str, limit: int = Query(50, ge=1, le=500)):
+def get_by_symbol(symbol: str, limit: int = Query(50, ge=1, le=500), response: Response = None):
     """All announcements for one resolved symbol, newest first."""
+    # RNS lands intraday — hold 15 min at the edge.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
     rows = _query(
         """
         SELECT id, published_at, wire, headline, url, tier, category, score

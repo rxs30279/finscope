@@ -21,7 +21,7 @@ from xml.etree import ElementTree as ET
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -406,7 +406,7 @@ def generate_summary(symbol: str):
 
 
 @router.get("/{symbol}")
-def get_company_news(symbol: str, refresh: bool = Query(False)):
+def get_company_news(symbol: str, refresh: bool = Query(False), response: Response = None):
     """Combined news feed for one symbol.
 
     Returns:
@@ -419,6 +419,14 @@ def get_company_news(symbol: str, refresh: bool = Query(False)):
     name = _get_company_name(symbol)
     if not name:
         raise HTTPException(404, f"Unknown symbol {symbol}")
+
+    # RNS lands intraday, so hold only 15 min at the edge. A forced refresh must
+    # always hit live data, so never cache that variant.
+    if response is not None:
+        response.headers["Cache-Control"] = (
+            "no-store" if refresh
+            else "public, s-maxage=900, stale-while-revalidate=3600"
+        )
 
     if refresh or not _cache_is_fresh(symbol):
         items = _fetch_google_news(name, symbol)
