@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useIsMobile, useIsTablet } from "../useMediaQuery";
-import { API, ADMIN_HEADERS } from "../utils";
+import { API } from "../utils";
 
 const TIER_COLORS = {
   A: { bg: "#1f1200", color: "#f97316", label: "Tier A" },
@@ -212,10 +212,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const isMobile = isMobileWidth || isTablet;
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [pipelineStage, setPipelineStage] = useState(null); // 'queueing' | 'queued' | 'in_progress' | null
-  const [elapsed, setElapsed] = useState(0); // seconds since refresh start
-  const [toast, setToast] = useState(null);
   const [hours, setHours] = useState(72);
   const [minScore, setMinScore] = useState(20);
   const [tierFilter, setTierFilter] = useState("all"); // all | A | B | C
@@ -251,68 +247,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
       })
       .catch(() => setLoading(false));
   }, [refreshKey, hours, minScore]);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    setElapsed(0);
-    setPipelineStage("queueing");
-    const startedAt = Date.now();
-    const elapsedTimer = setInterval(
-      () => setElapsed(Math.round((Date.now() - startedAt) / 1000)),
-      500,
-    );
-
-    try {
-      const r = await fetch(`${API}/rns/pipeline`, { method: "POST", headers: ADMIN_HEADERS });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.detail || "dispatch failed");
-    } catch {
-      clearInterval(elapsedTimer);
-      setRefreshing(false);
-      setPipelineStage(null);
-      setToast("Refresh failed");
-      setTimeout(() => setToast(null), 5000);
-      return;
-    }
-
-    // Pipeline dispatched. Wait for it to complete (typically 2-5 min),
-    // then reload the feed.
-    setPipelineStage("in_progress");
-    const startedPollMs = Date.now();
-    const poll = setInterval(async () => {
-      try {
-        const s = await fetch(`${API}/rns/pipeline/status`).then((r) =>
-          r.json(),
-        );
-        setPipelineStage(s.stage);
-        if (!s.running) {
-          clearInterval(poll);
-          clearInterval(elapsedTimer);
-          setRefreshing(false);
-          setPipelineStage(null);
-          setToast(
-            `Refresh complete in ${Math.round((Date.now() - startedAt) / 1000)}s — reloading…`,
-          );
-          fetch(
-            `${API}/rns/latest?min_score=${minScore}&hours=${hours}&limit=500`,
-          )
-            .then((r) => r.json())
-            .then((d) => setRows(Array.isArray(d) ? d : []))
-            .catch(() => {});
-          setTimeout(() => setToast(null), 4000);
-        } else if (Date.now() - startedPollMs > 480000) {
-          clearInterval(poll);
-          clearInterval(elapsedTimer);
-          setRefreshing(false);
-          setPipelineStage(null);
-          setToast("Refresh timed out — check Render dashboard logs");
-          setTimeout(() => setToast(null), 6000);
-        }
-      } catch {
-        // transient poll failure — keep trying
-      }
-    }, 4000);
-  };
 
   const filtered = useMemo(() => {
     let r = rows;
@@ -732,44 +666,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
               Subscribe →
             </a>
           </span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {toast && (
-            <span
-              style={{
-                fontSize: 11,
-                color: "#94a3b8",
-                fontFamily: "monospace",
-              }}
-            >
-              {toast}
-            </span>
-          )}
-          <button
-            onClick={(e) => {
-              if (e.ctrlKey || e.metaKey) handleRefresh();
-            }}
-            disabled={refreshing}
-            style={{
-              background: refreshing ? "#1f1200" : "#1a1a1a",
-              color: refreshing ? "#f97316" : "#f97316",
-              border: `1px solid ${refreshing ? "#f97316" : "#2a2a2a"}`,
-              padding: "4px 12px",
-              borderRadius: 2,
-              fontFamily: "monospace",
-              fontSize: 10,
-              cursor: refreshing ? "default" : "pointer",
-              letterSpacing: 1,
-              textTransform: "uppercase",
-              boxShadow: refreshing ? "0 0 8px rgba(249,115,22,0.4)" : "none",
-              transition: "background 0.2s, box-shadow 0.2s, border-color 0.2s",
-              minWidth: 160,
-            }}
-          >
-            {refreshing
-              ? `⟳ ${pipelineStage || "starting"}… ${elapsed}s`
-              : "↻ Refresh + AI rank"}
-          </button>
         </div>
       </div>
 
