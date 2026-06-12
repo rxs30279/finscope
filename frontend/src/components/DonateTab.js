@@ -12,10 +12,10 @@ const KOFI_URL = "https://ko-fi.com/alphamoveai";
 // Rough monthly running costs, shown for transparency to a finance-savvy
 // audience. Edit the figures to match reality — concrete numbers build trust.
 const COSTS = [
-  ["Market & price data", "£0"],
   ["LLM ranking layer", "£10"],
   ["Email digest delivery", "£20"],
-  ["Hosting (Render + Vercel + DB)", "£10"],
+  ["Hosting (Render + Vercel + DB)", "£50"],
+  ["Maintenance (Claude Code)", "£18"],
 ];
 
 const LABEL = {
@@ -118,6 +118,19 @@ export default function DonateTab() {
               <span style={{ color: "#e5e5e5" }}>{cost}/mo</span>
             </div>
           ))}
+        </div>
+        <div
+          style={{
+            color: "#666",
+            fontSize: 11,
+            fontFamily: "monospace",
+            lineHeight: 1.7,
+            marginTop: 12,
+          }}
+        >
+          Market &amp; price data is currently free from Yahoo Finance and the
+          LSE. Curated commercial data would be an improvement — and one of the
+          first things extra support would fund.
         </div>
       </div>
 
