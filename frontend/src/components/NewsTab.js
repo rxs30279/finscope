@@ -189,7 +189,7 @@ export default function NewsTab({ symbol, split = false }) {
               </span>
             )}
             <button
-              onClick={(e) => { if (e.ctrlKey || e.metaKey) generateSummary(); }}
+              onClick={(e) => { /* Ctrl/Cmd requirement disabled — restore: if (e.ctrlKey || e.metaKey) generateSummary(); */ generateSummary(); }}
               disabled={summarising}
               style={{
                 background: summarising ? '#2e1065' : '#1a1a1a',
