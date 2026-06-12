@@ -266,10 +266,16 @@ function ListTabs({ lists, activeId, onSelect, counts }) {
     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       {lists.map((l) => {
         const active = l.id === activeId;
+        const empty = (counts[l.id] || 0) === 0;
         return (
           <button
             key={l.id}
             onClick={() => onSelect(l.id)}
+            title={
+              empty
+                ? "This list is empty — tap the ☆ next to any stock in the Screener to add it here."
+                : undefined
+            }
             style={{
               background: active ? "#f97316" : "#1a1a1a",
               color: active ? "#0a0a0a" : "#cbd5e1",
