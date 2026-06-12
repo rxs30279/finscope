@@ -1053,8 +1053,11 @@ function PriceChart({ symbol, fcur = "GBP" }) {
   useEffect(() => {
     if (!symbol) return;
     setLoading(true);
-    fetch(`${API}/prices/refresh/${symbol}`, { method: "POST" })
-      .then(() => fetch(`${API}/prices/${symbol}`))
+    // No per-view refresh: prices already top up nightly via the prices cron, so
+    // a POST /prices/refresh on every chart open was redundant DB+yfinance I/O.
+    // Reading straight from the (now edge-cached) history keeps Supabase egress
+    // flat regardless of how many users view the same stock.
+    fetch(`${API}/prices/${symbol}`)
       .then((r) => r.json())
       .then((data) => {
         setPriceData(Array.isArray(data) ? data : []);
