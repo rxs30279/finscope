@@ -280,7 +280,12 @@ def test_attach_risk_score_vol_none_when_insufficient_history():
 
 def test_screener_includes_risk_score(client):
     from unittest.mock import patch
+    import main
 
+    # momentum/piotroski/risk/altman_z/volatility are precomputed into
+    # screener_scores and pulled in via a single JOIN (see compute_and_store_scores),
+    # so the endpoint now makes ONE query() call and the score columns arrive already
+    # attached to the row — no inline _attach_risk_score/_attach_momentum DB calls.
     screener_row = {
         'symbol': 'SHEL.L', 'name': 'Shell', 'sector': 'Energy',
         'country': 'GB', 'exchange': 'LSE', 'ftse_index': 'FTSE 100',
@@ -295,35 +300,24 @@ def test_screener_includes_risk_score(client):
         'fcf_margin': 0.13,
         'gross_margin_median': 0.38, 'operating_margin_median': 0.23,
         'net_margin_median': 0.15, 'roe_median': 0.14, 'roic_median': 0.11,
+        # precomputed columns supplied by the screener_scores JOIN
+        'momentum_score': 7, 'piotroski_score': 6, 'risk_score': 8,
+        'altman_z': 3.2, 'volatility_annualised': 0.28,
     }
-    piotroski_row = {
-        'company_symbol': 'SHEL.L',
-        'roa_cur': 0.08, 'roa_prev': 0.07, 'cf_cfo': 4e8,
-        'ta_cur': 4e9, 'ta_prev': 3.8e9,
-        'de_cur': 0.5, 'de_prev': 0.6,
-        'cr_cur': 1.5, 'cr_prev': 1.4,
-        'sh_cur': 1e9, 'sh_prev': 1e9,
-        'gm_cur': 0.4, 'gm_prev': 0.38,
-        'rev_cur': 3e9, 'rev_prev': 2.8e9,
-    }
-    ta_row = [{'company_symbol': 'SHEL.L', 'total_assets': 4e9}]
-    price_rows = [{'symbol': 'SHEL.L', 'close': 100.0 + i * 0.05} for i in range(252)]
 
-    with patch('main.query', side_effect=[
-        [screener_row],   # screener SQL
-        [piotroski_row],  # _attach_piotroski annual_financials
-        ta_row,           # _attach_risk_score total_assets
-        price_rows,       # _attach_risk_score price_history
-    ]):
-        with patch('prices.query', return_value=[]):  # _attach_momentum
+    main._screener_cache.clear()  # avoid a stale entry from another test
+    try:
+        with patch('main.query', return_value=[screener_row]):
             r = client.get('/api/screener')
+    finally:
+        main._screener_cache.clear()
 
     assert r.status_code == 200
     data = r.json()
     assert len(data) == 1
-    assert 'risk_score' in data[0]
-    assert 'altman_z' in data[0]
-    assert 'volatility_annualised' in data[0]
+    assert data[0]['risk_score'] == 8
+    assert data[0]['altman_z'] == 3.2
+    assert data[0]['volatility_annualised'] == 0.28
 
 
 def test_snapshot_includes_risk_fields(client):
