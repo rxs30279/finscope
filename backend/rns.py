@@ -28,7 +28,6 @@ _UK_TZ = ZoneInfo("Europe/London")
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from bs4 import BeautifulSoup
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from dotenv import load_dotenv
 
@@ -737,6 +736,7 @@ def _parse_rows(html: str) -> list[dict]:
     Returns a list of raw row dicts (not yet classified or upserted) with keys:
         id, published_at, wire, ticker, company_name, headline, headline_slug, url
     """
+    from bs4 import BeautifulSoup  # deferred — only the ingest/scrape path needs it
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("div", class_="announcement-table")
     if table is None:
@@ -965,6 +965,7 @@ def _fetch_summary(url: str, timeout: int = 15) -> Optional[str]:
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         html = resp.read().decode("utf-8", errors="replace")
+    from bs4 import BeautifulSoup  # deferred — only the ingest/scrape path needs it
     soup = BeautifulSoup(html, "html.parser")
     node = soup.find(id="collapseSummary")
     if node is None:

@@ -5,7 +5,6 @@ from typing import Optional
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-import yfinance as yf
 import pandas as pd
 import time
 import threading
@@ -242,6 +241,7 @@ def _fetch_one(symbol, max_retries=3):
 
     Retries up to max_retries times with exponential backoff on rate-limit errors.
     """
+    import yfinance as yf  # deferred — only this refresh path needs it
     delay = 30  # initial backoff in seconds
     for attempt in range(max_retries + 1):
         try:

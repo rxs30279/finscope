@@ -27,7 +27,7 @@ def _fake_yf_download(symbols, start, rows=300):
 # ── refresh endpoint tests ────────────────────────────────────────────────────
 
 def test_refresh_returns_summary(client):
-    with patch('prices.yf.download', return_value=_fake_yf_download(['SHEL.L'], None)) as mock_dl, \
+    with patch('yfinance.download', return_value=_fake_yf_download(['SHEL.L'], None)) as mock_dl, \
          patch('prices.query') as mock_query, \
          patch('prices._upsert_rows', return_value=10) as mock_upsert, \
          patch('prices._update_activity', return_value=[]) as mock_activity:
@@ -103,7 +103,7 @@ def test_fetch_ohlcv_batch_single_ticker_multiindex():
     import prices
     from datetime import date as _date
     df = _single_ticker_multiindex('WISE.L', [10, 20, 30])
-    with patch('prices.yf.download', return_value=df):
+    with patch('yfinance.download', return_value=df):
         rows = prices._fetch_ohlcv_batch(['WISE.L'], _date(2026, 1, 1))
     assert len(rows) == 3
     assert all(len(r) == 7 and r[0] == 'WISE.L' for r in rows)
@@ -115,7 +115,7 @@ def test_fetch_ohlcv_batch_handles_nan_volume():
     import prices
     from datetime import date as _date
     df = _single_ticker_multiindex('X.L', [np.nan, 5])
-    with patch('prices.yf.download', return_value=df):
+    with patch('yfinance.download', return_value=df):
         rows = prices._fetch_ohlcv_batch(['X.L'], _date(2026, 1, 1))
     assert len(rows) == 2
     assert rows[0][6] == 0  # NaN volume coerced to 0

@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Response
-import yfinance as yf
 import time
 import numpy as np
 import pandas as pd
@@ -175,6 +174,7 @@ ALL_PROXY_TICKERS = list(
 
 # ── Shared price fetch (all proxy tickers, 1 year history, cached) ────────────
 def _get_prices():
+    import yfinance as yf  # deferred — only this fetch path needs it
     def fetch():
         def _fetch_one(ticker):
             try:
@@ -208,6 +208,7 @@ def _get_ftse_long():
     """2-year ^FTSE close history, cached separately. Used only for the momentum
     component so its scaling window covers a full year of gap readings (the 125-day MA
     eats the first ~6 months, leaving too few points in the shared 1y fetch)."""
+    import yfinance as yf  # deferred — only this fetch path needs it
     def fetch():
         try:
             hist = yf.Ticker(BENCHMARK_TICKERS["FTSE 100"]).history(
@@ -734,6 +735,7 @@ def _get_fg_prices_2y():
     """2-year close history for the F&G tickers, cached. A 252-day output series
     needs ~2y of input once the 52-week-high/low and 125-day-MA lookbacks are
     consumed, so this is fetched separately from the shared 1-year _get_prices()."""
+    import yfinance as yf  # deferred — only this fetch path needs it
     def fetch():
         def _fetch_one(ticker):
             try:

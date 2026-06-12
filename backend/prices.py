@@ -1,10 +1,8 @@
 from fastapi import APIRouter, HTTPException, Response
-import yfinance as yf
 import pandas as pd
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-import holidays
 import os
 import time
 import logging
@@ -12,8 +10,17 @@ from datetime import date, timedelta
 from dotenv import load_dotenv
 from _mem import snapshot as _mem
 
-# LSE follows England & Wales bank holidays.
-_LSE_HOLIDAYS = holidays.UnitedKingdom(subdiv="ENG")
+# LSE follows England & Wales bank holidays. Built lazily on first use so a cold
+# start serving a read endpoint never pays the ~240ms `holidays` import.
+_LSE_HOLIDAYS = None
+
+
+def _lse_holidays():
+    global _LSE_HOLIDAYS
+    if _LSE_HOLIDAYS is None:
+        import holidays
+        _LSE_HOLIDAYS = holidays.UnitedKingdom(subdiv="ENG")
+    return _LSE_HOLIDAYS
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +108,7 @@ def _next_trading_day(d: date) -> date:
     that previously OOM'd the Render worker on 2026-05-26.
     """
     # Monday=0 … Sunday=6
-    while d.weekday() >= 5 or d in _LSE_HOLIDAYS:
+    while d.weekday() >= 5 or d in _lse_holidays():
         d += timedelta(days=1)
     return d
 
@@ -117,6 +124,7 @@ _DEACTIVATE_AFTER = 3  # consecutive empty refreshes before a symbol is dropped
 def _fetch_ohlcv_batch(symbols, start_date):
     """Fetch adjusted daily OHLCV for a single batch of symbols.
     Returns list of (symbol, date, open, high, low, close, volume) tuples."""
+    import yfinance as yf  # deferred: the heaviest import (~1.9s), only the refresh path needs it
     # yfinance's `end` is exclusive — use tomorrow so today's bar is included
     # once the LSE has closed for the day.
     end_date = date.today() + timedelta(days=1)
