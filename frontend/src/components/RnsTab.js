@@ -742,9 +742,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
           )}
           <button
             onClick={(e) => {
-              // Ctrl/Cmd requirement disabled — restore by re-enabling the guard below.
-              // if (e.ctrlKey || e.metaKey) handleRefresh();
-              handleRefresh();
+              if (e.ctrlKey || e.metaKey) handleRefresh();
             }}
             disabled={refreshing}
             style={{
