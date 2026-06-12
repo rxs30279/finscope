@@ -204,7 +204,12 @@ export default function RnsTab({ refreshKey, onSelect }) {
   // Use the stacked single-column layout on phones AND tablet-width screens
   // (e.g. a Surface Pro in portrait, ~912px). The full desktop table has too
   // many columns to fit those widths and otherwise spills off the page.
-  const isMobile = useIsMobile() || useIsTablet();
+  // Call both hooks unconditionally — `||` would short-circuit useIsTablet()
+  // when useIsMobile() is true, changing the hook count across a resize and
+  // crashing React (Rules of Hooks).
+  const isMobileWidth = useIsMobile();
+  const isTablet = useIsTablet();
+  const isMobile = isMobileWidth || isTablet;
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
