@@ -22,9 +22,10 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from dotenv import load_dotenv
 
+from admin_auth import require_admin_token
 from rns import _query, _get_pool
 
 load_dotenv()
@@ -544,7 +545,7 @@ def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
 
-@router.post("/rank")
+@router.post("/rank", dependencies=[Depends(require_admin_token)])
 def rank(
     background_tasks: BackgroundTasks,
     limit: int = Query(50, ge=1, le=500),
@@ -555,7 +556,7 @@ def rank(
     return {"status": "ranking started", "limit": limit, "hours": hours}
 
 
-@router.post("/rank/{row_id}")
+@router.post("/rank/{row_id}", dependencies=[Depends(require_admin_token)])
 def rank_one(row_id: int):
     """Rank a single announcement synchronously (for debugging)."""
     try:

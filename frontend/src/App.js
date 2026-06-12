@@ -18,6 +18,7 @@ import {
 } from "recharts";
 import {
   API,
+  ADMIN_HEADERS,
   fmt,
   gc,
   currSym,
@@ -3500,7 +3501,7 @@ export default function App() {
     setPriceRefreshing(true);
     setPriceToast(null);
     try {
-      const res = await fetch(`${API}/prices/refresh`, { method: "POST" });
+      const res = await fetch(`${API}/prices/refresh`, { method: "POST", headers: ADMIN_HEADERS });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setPriceToast({

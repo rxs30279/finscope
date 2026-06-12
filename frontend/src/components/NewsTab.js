@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { API } from '../utils';
+import { API, ADMIN_HEADERS } from '../utils';
 import { useIsMobile } from '../useMediaQuery';
 
 const TIER_STYLE = {
@@ -123,7 +123,7 @@ export default function NewsTab({ symbol, split = false }) {
   const generateSummary = () => {
     setSummarising(true);
     setSummaryError(null);
-    fetch(`${API}/news/${encodeURIComponent(symbol)}/summary`, { method: 'POST' })
+    fetch(`${API}/news/${encodeURIComponent(symbol)}/summary`, { method: 'POST', headers: ADMIN_HEADERS })
       .then(async r => {
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 import pandas as pd
 import psycopg2
 import psycopg2.extras
@@ -9,6 +9,7 @@ import logging
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from _mem import snapshot as _mem
+from admin_auth import require_admin_token
 
 # LSE follows England & Wales bank holidays. Built lazily on first use so a cold
 # start serving a read endpoint never pays the ~240ms `holidays` import.
@@ -349,7 +350,7 @@ def _attach_momentum(results):
 # ── Refresh endpoint ──────────────────────────────────────────────────────────
 
 
-@router.post("/api/prices/refresh")
+@router.post("/api/prices/refresh", dependencies=[Depends(require_admin_token)])
 def refresh_prices():
     """Fetch missing price history for all stocks via yfinance and upsert."""
     t0 = time.time()
@@ -606,7 +607,7 @@ def trending(response: Response, min_streak: int = 3, limit: int = 40):
     return result
 
 
-@router.post("/api/prices/refresh/{symbol}")
+@router.post("/api/prices/refresh/{symbol}", dependencies=[Depends(require_admin_token)])
 def refresh_symbol(symbol: str):
     """Top up price history for a single symbol to today, backfilling to 5Y if needed."""
     rows = query(

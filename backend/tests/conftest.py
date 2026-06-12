@@ -1,12 +1,16 @@
 import sys, os, pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The refresh/LLM POST endpoints are guarded by admin_auth.require_admin_token,
+# which reads this at request time — set a known value and send it on every
+# test request so the guard passes without each test caring about it.
+os.environ["ADMIN_API_TOKEN"] = "test-admin-token"
 import main
 from main import app
 from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    return TestClient(app, headers={"X-Admin-Token": "test-admin-token"})
 
 
 @pytest.fixture(autouse=True)

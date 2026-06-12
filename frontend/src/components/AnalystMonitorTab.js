@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { API } from '../utils';
+import { API, ADMIN_HEADERS } from '../utils';
 import { useIsMobile, useIsNarrowDesktop } from '../useMediaQuery';
 
 const CONSENSUS_COLORS = {
@@ -104,7 +104,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await fetch(`${API}/analysts/refresh`, { method: 'POST' });
+      await fetch(`${API}/analysts/refresh`, { method: 'POST', headers: ADMIN_HEADERS });
       setToast('Refresh started — this takes a few minutes');
     } catch {
       setToast('Refresh failed');

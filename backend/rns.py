@@ -28,8 +28,10 @@ _UK_TZ = ZoneInfo("Europe/London")
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from dotenv import load_dotenv
+
+from admin_auth import require_admin_token
 
 load_dotenv()
 
@@ -1112,14 +1114,14 @@ def get_by_symbol(symbol: str, limit: int = Query(50, ge=1, le=500), response: R
     return rows
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(require_admin_token)])
 def refresh(background_tasks: BackgroundTasks, max_pages: int = Query(7, ge=1, le=20)):
     """Kick off an ingest in the background."""
     background_tasks.add_task(_run_ingest, max_pages)
     return {"status": "ingest started", "max_pages": max_pages}
 
 
-@router.post("/backfill-summaries")
+@router.post("/backfill-summaries", dependencies=[Depends(require_admin_token)])
 def backfill_summaries(
     background_tasks: BackgroundTasks, limit: int = Query(50, ge=1, le=500)
 ):

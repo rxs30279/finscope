@@ -21,8 +21,10 @@ from xml.etree import ElementTree as ET
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from dotenv import load_dotenv
+
+from admin_auth import require_admin_token
 
 load_dotenv()
 
@@ -398,7 +400,7 @@ def _generate_summary(symbol: str) -> dict:
     }
 
 
-@router.post("/{symbol}/summary")
+@router.post("/{symbol}/summary", dependencies=[Depends(require_admin_token)])
 def generate_summary(symbol: str):
     """Call DeepSeek to summarise the last 60 days of news for this company."""
     _ensure_schema()

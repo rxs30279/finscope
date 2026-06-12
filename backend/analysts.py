@@ -1,6 +1,6 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import urllib.error
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from typing import Optional
 import psycopg2
 import psycopg2.extras
@@ -12,6 +12,7 @@ from datetime import date
 from dotenv import load_dotenv
 
 import gh_actions
+from admin_auth import require_admin_token
 
 load_dotenv()
 
@@ -434,7 +435,7 @@ def get_movers(window_days: int = Query(30, ge=1, le=365)):
 _ANALYSTS_WORKFLOW = "refresh-analysts.yml"
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(require_admin_token)])
 def refresh():
     try:
         dispatched_at = gh_actions.dispatch(_ANALYSTS_WORKFLOW)

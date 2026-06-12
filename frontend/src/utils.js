@@ -1,5 +1,10 @@
 export const API = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api';
 
+// Sent on the guarded refresh/summary POST endpoints (backend/admin_auth.py).
+// Baked in at build time, so it's recoverable from the bundle — it gates
+// drive-by cost abuse, not determined attackers.
+export const ADMIN_HEADERS = { 'X-Admin-Token': process.env.REACT_APP_ADMIN_TOKEN || '' };
+
 export const currSym = (code) =>
   code === 'USD' ? '$' : code === 'EUR' ? '\u20AC' : '\u00A3';
 

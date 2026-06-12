@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useIsMobile, useIsTablet } from "../useMediaQuery";
-import { API } from "../utils";
+import { API, ADMIN_HEADERS } from "../utils";
 
 const TIER_COLORS = {
   A: { bg: "#1f1200", color: "#f97316", label: "Tier A" },
@@ -263,7 +263,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
     );
 
     try {
-      const r = await fetch(`${API}/rns/pipeline`, { method: "POST" });
+      const r = await fetch(`${API}/rns/pipeline`, { method: "POST", headers: ADMIN_HEADERS });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.detail || "dispatch failed");
     } catch {
