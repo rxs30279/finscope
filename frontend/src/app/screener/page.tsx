@@ -1,24 +1,14 @@
-"use client";
+import type { Metadata } from "next";
+import ScreenerPageClient from "./_client";
 
-import { useRouter } from "next/navigation";
-import { useWatchlist, useRefresh } from "@/app/providers";
-import Screener from "@/components/screener/Screener";
+export const metadata: Metadata = {
+  title: "UK Stock Screener — FTSE 100, 250, SmallCap & AIM",
+  description:
+    "Screen 500+ UK-listed shares across the FTSE 100, 250, SmallCap and AIM by " +
+    "valuation, quality, growth, momentum and risk. Free fundamentals and composite scores.",
+  alternates: { canonical: "/screener" },
+};
 
 export default function ScreenerPage() {
-  const router = useRouter();
-  const { defaultMembers, toggleWatchlist } = useWatchlist();
-  const { highlightSymbol } = useRefresh();
-
-  return (
-    <Screener
-      onSelect={(sym, tab) =>
-        router.push(
-          `/company?symbol=${encodeURIComponent(sym)}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`,
-        )
-      }
-      highlightSymbol={highlightSymbol}
-      watchlist={defaultMembers}
-      onToggleWatchlist={toggleWatchlist}
-    />
-  );
+  return <ScreenerPageClient />;
 }

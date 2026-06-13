@@ -1,17 +1,14 @@
-"use client";
+import type { Metadata } from "next";
+import RnsPageClient from "./_client";
 
-import { useRouter } from "next/navigation";
-import { useRefresh } from "@/app/providers";
-import RnsTab from "@/components/RnsTab";
+export const metadata: Metadata = {
+  title: "UK RNS Regulatory News — AI-Scored",
+  description:
+    "The latest London Stock Exchange RNS regulatory announcements, filtered and " +
+    "scored by significance so you see the news that actually moves UK shares.",
+  alternates: { canonical: "/rns" },
+};
 
 export default function RnsPage() {
-  const router = useRouter();
-  const { refreshKey } = useRefresh();
-
-  return (
-    <RnsTab
-      refreshKey={refreshKey}
-      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
-    />
-  );
+  return <RnsPageClient />;
 }

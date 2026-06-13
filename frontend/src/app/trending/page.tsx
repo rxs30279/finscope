@@ -1,13 +1,14 @@
-"use client";
+import type { Metadata } from "next";
+import TrendingPageClient from "./_client";
 
-import { useRouter } from "next/navigation";
-import TrendingTab from "@/components/trending/TrendingTab";
+export const metadata: Metadata = {
+  title: "Trending UK Stocks — Today's Risers & Fallers",
+  description:
+    "Today's biggest movers on the London market — top-rising and top-falling UK shares " +
+    "plus momentum streaks across the FTSE 100, 250, SmallCap and AIM.",
+  alternates: { canonical: "/trending" },
+};
 
 export default function TrendingPage() {
-  const router = useRouter();
-  return (
-    <TrendingTab
-      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
-    />
-  );
+  return <TrendingPageClient />;
 }

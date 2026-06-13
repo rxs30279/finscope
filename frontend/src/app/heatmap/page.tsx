@@ -1,17 +1,14 @@
-"use client";
+import type { Metadata } from "next";
+import HeatmapPageClient from "./_client";
 
-import { useRouter } from "next/navigation";
-import { useRefresh } from "@/app/providers";
-import HeatmapTab from "@/components/HeatmapTab";
+export const metadata: Metadata = {
+  title: "UK Market Heatmap by Sector",
+  description:
+    "A visual heatmap of the UK market — see at a glance which sectors and shares are " +
+    "up or down across the FTSE 100, 250, SmallCap and AIM.",
+  alternates: { canonical: "/heatmap" },
+};
 
 export default function HeatmapPage() {
-  const router = useRouter();
-  const { refreshKey } = useRefresh();
-
-  return (
-    <HeatmapTab
-      refreshKey={refreshKey}
-      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
-    />
-  );
+  return <HeatmapPageClient />;
 }

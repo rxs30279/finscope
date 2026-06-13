@@ -80,6 +80,60 @@ def query(sql, params=None):
         pool.putconn(conn)
 
 
+SITEMAP_BASE = os.environ.get("SITE_URL", "https://alphamoveai.co.uk").rstrip("/")
+
+# Static frontend routes mirrored from the Next app (kept in sync manually — there
+# are only a handful). Per-company URLs are appended from the DB at request time.
+_SITEMAP_STATIC = [
+    ("/", "daily", "1.0"),
+    ("/screener", "daily", "0.9"),
+    ("/markets", "daily", "0.8"),
+    ("/trending", "daily", "0.8"),
+    ("/analysts", "daily", "0.7"),
+    ("/rns", "daily", "0.7"),
+    ("/heatmap", "daily", "0.6"),
+    ("/benchmarks", "weekly", "0.5"),
+    ("/subscribe", "monthly", "0.5"),
+    ("/donate", "yearly", "0.3"),
+    ("/feedback", "yearly", "0.3"),
+]
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    # Served by the backend (not Next) so the full ~500-stock universe comes straight
+    # from the DB — no build-time loopback fetch that can silently fall back to an
+    # empty company list. Routed via the /sitemap.xml entry in vercel.json.
+    from urllib.parse import quote
+    from xml.sax.saxutils import escape
+
+    rows = query(
+        "SELECT symbol FROM company_metadata WHERE is_active ORDER BY symbol"
+    )
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    for path, freq, prio in _SITEMAP_STATIC:
+        loc = escape(f"{SITEMAP_BASE}{path}")
+        parts.append(
+            f"<url><loc>{loc}</loc><changefreq>{freq}</changefreq>"
+            f"<priority>{prio}</priority></url>"
+        )
+    for r in rows:
+        loc = escape(f"{SITEMAP_BASE}/company?symbol={quote(r['symbol'])}")
+        parts.append(
+            f"<url><loc>{loc}</loc><changefreq>daily</changefreq>"
+            f"<priority>0.6</priority></url>"
+        )
+    parts.append("</urlset>")
+    return Response(
+        content="\n".join(parts),
+        media_type="application/xml",
+        headers={"Cache-Control": "public, s-maxage=86400, stale-while-revalidate=86400"},
+    )
+
+
 @app.get("/api/search")
 def search(q: str = Query(..., min_length=1)):
     return query(

@@ -146,7 +146,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         {/* Logo */}
         <Link
-          href="/screener"
+          href="/"
           style={{
             fontFamily: '"DM Sans", sans-serif',
             fontSize: isMobile ? 10 : 12,
