@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect, useMemo, useRef } from "react";
-import { API, loadTargets, saveTargets, DEFAULT_LIST_ID } from "../utils";
-import { useMediaQuery } from "../useMediaQuery";
+import { API } from "@/lib/api";
+import { loadTargets, saveTargets, DEFAULT_LIST_ID } from "@/lib/storage";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 
 // Relative time for recent items ("2h", "3d"); a real date once past a week,
 // which reads better than "5w" for older news.

@@ -4,8 +4,8 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer
 } from 'recharts';
-import { API } from '../utils';
-import { useIsMobile } from '../useMediaQuery';
+import { API } from "@/lib/api";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 function AssetCard({ label, item, decimals = 2, prefix = '', suffix = '' }) {
   if (!item) return (

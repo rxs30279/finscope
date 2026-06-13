@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
-import { API } from "../utils";
+import { API } from "@/lib/api";
 
 // ── Colour scale ──────────────────────────────────────────────────────────────
 // finviz-style red→grey→green ramp, clamped at ±3% daily move. No data → neutral.

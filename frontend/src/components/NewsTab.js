@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from 'react';
-import { API, ADMIN_HEADERS } from '../utils';
-import { useIsMobile } from '../useMediaQuery';
+import { API, ADMIN_HEADERS } from "@/lib/api";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 const TIER_STYLE = {
   A: { bg:'#0d3320', color:'#10b981', label:'A' },

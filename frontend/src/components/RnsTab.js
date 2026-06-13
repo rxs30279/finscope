@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
-import { useIsMobile, useIsTablet } from "../useMediaQuery";
-import { API } from "../utils";
+import { useIsMobile, useIsTablet } from "@/hooks/useMediaQuery";
+import { API } from "@/lib/api";
 
 const TIER_COLORS = {
   A: { bg: "#1f1200", color: "#f97316", label: "Tier A" },

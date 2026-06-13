@@ -4,8 +4,8 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceArea, ReferenceLine
 } from 'recharts';
-import { API } from '../utils';
-import { useIsMobile } from '../useMediaQuery';
+import { API } from "@/lib/api";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 const RANGE_DAYS = { '1M': 31, '3M': 92, '6M': 183, '1Y': 366 };
 const UK_COLOR = '#f97316'; // orange — matches the page accent

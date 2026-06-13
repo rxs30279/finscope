@@ -1,8 +1,8 @@
 "use client";
 import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { API } from '../utils';
-import { useIsMobile } from '../useMediaQuery';
+import { API } from "@/lib/api";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 
 function BreadthGauge({ value }) {

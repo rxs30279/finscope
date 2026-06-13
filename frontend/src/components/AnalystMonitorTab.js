@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useMemo } from 'react';
-import { API, ADMIN_HEADERS } from '../utils';
-import { useIsMobile, useIsNarrowDesktop } from '../useMediaQuery';
+import { API, ADMIN_HEADERS } from "@/lib/api";
+import { useIsMobile, useIsNarrowDesktop } from "@/hooks/useMediaQuery";
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },

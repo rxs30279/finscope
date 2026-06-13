@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from 'react';
-import { API } from '../utils';
-import { useIsMobile } from '../useMediaQuery';
+import { API } from "@/lib/api";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 // Shared badge palette for both the Signal Log and the RS table's Signal column,
 // so the two can't drift apart. BUY/AVOID are common to both; ALERT/INFO are

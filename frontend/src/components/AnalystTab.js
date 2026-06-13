@@ -4,8 +4,9 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
-import { API, fmt } from '../utils';
-import { useIsMobile } from '../useMediaQuery';
+import { API } from "@/lib/api";
+import { fmt } from "@/lib/format";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },

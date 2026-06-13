@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { API } from "../utils";
+import { API } from "@/lib/api";
 
 const LABEL = {
   color: "#f97316",

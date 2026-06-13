@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from 'react';
-import { API, pctColor } from '../utils';
+import { API } from "@/lib/api";
+import { pctColor } from "@/lib/format";
 
 // ── London Stock Exchange trading clock ──────────────────────────────────────
 // Regular hours: 08:00–16:30 London, Mon–Fri, excluding England & Wales bank
