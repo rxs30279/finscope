@@ -80,7 +80,7 @@ def query(sql, params=None):
         pool.putconn(conn)
 
 
-SITEMAP_BASE = os.environ.get("SITE_URL", "https://alphamoveai.co.uk").rstrip("/")
+SITEMAP_BASE = os.environ.get("SITE_URL", "https://app.alphamoveai.co.uk").rstrip("/")
 
 # Static frontend routes mirrored from the Next app (kept in sync manually — there
 # are only a handful). Per-company URLs are appended from the DB at request time.
