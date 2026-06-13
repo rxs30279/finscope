@@ -1,7 +1,7 @@
 // Canonical site origin, used for metadataBase, OG/canonical URLs, the sitemap,
 // and server-side API fetches. Override per-environment with NEXT_PUBLIC_SITE_URL.
 export const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "https://alphamoveai.co.uk";
+  process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "https://app.alphamoveai.co.uk";
 
 export const SITE_NAME = "Alpha Move AI";
 
