@@ -56,7 +56,7 @@ const normalizeWatchlists = (data: any): WatchlistsData => {
   }
   const members: Record<string, string[]> = {};
   for (const l of lists) {
-    const arr = Array.isArray(rawMembers[l.id]) ? rawMembers[l.id] : [];
+    const arr: any[] = Array.isArray(rawMembers[l.id]) ? rawMembers[l.id] : [];
     members[l.id] = [...new Set(arr.filter((s): s is string => typeof s === "string"))];
   }
   return { lists, members };
