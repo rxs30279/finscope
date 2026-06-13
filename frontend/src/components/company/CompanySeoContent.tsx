@@ -5,6 +5,12 @@ import { SITE_URL } from "@/lib/seo";
 // Server-rendered, crawlable summary that sits above the interactive (client-only)
 // CompanyDetail dashboard. This is the real HTML search engines index for each of
 // the ~500 stock pages — a unique H1, a descriptive sentence, key facts and JSON-LD.
+//
+// It is rendered visually hidden (off-screen, not display:none) because the
+// dashboard below already shows the name + metrics to sighted users, so an
+// on-page copy was redundant. The dashboard is loaded ssr:false, so this block
+// is the ONLY content crawlers can read — keep it in the DOM. Do not switch to
+// display:none/visibility:hidden, which can suppress the text for indexing.
 
 interface Props {
   symbol: string;
@@ -78,11 +84,17 @@ export default function CompanySeoContent({ symbol, meta, snap }: Props) {
 
   return (
     <section
+      // Visually hidden but kept in the DOM for search engines (see note above).
       style={{
-        maxWidth: 1100,
-        margin: "0 auto 8px",
-        padding: "4px 2px 0",
-        fontFamily: "monospace",
+        position: "absolute",
+        width: 1,
+        height: 1,
+        padding: 0,
+        margin: -1,
+        overflow: "hidden",
+        clip: "rect(0, 0, 0, 0)",
+        whiteSpace: "nowrap",
+        border: 0,
       }}
     >
       <script
