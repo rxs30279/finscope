@@ -1,3 +1,4 @@
+"use client";
 import { useState, useEffect, useMemo } from "react";
 import { useIsMobile, useIsTablet } from "../useMediaQuery";
 import { API } from "../utils";

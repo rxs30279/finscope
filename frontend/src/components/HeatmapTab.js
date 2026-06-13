@@ -1,3 +1,4 @@
+"use client";
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
 import { API } from "../utils";
 

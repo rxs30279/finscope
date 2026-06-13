@@ -1,3 +1,4 @@
+"use client";
 import { useState, useEffect, useMemo } from 'react';
 import { API, ADMIN_HEADERS } from '../utils';
 import { useIsMobile, useIsNarrowDesktop } from '../useMediaQuery';

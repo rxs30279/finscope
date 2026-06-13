@@ -1,3 +1,4 @@
+"use client";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { API, loadTargets, saveTargets, DEFAULT_LIST_ID } from "../utils";
 import { useMediaQuery } from "../useMediaQuery";

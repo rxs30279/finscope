@@ -1,3 +1,4 @@
+"use client";
 // ── Support / Donate ──────────────────────────────────────────────────────────
 // Ko-fi-backed tip jar. No backend, no PCI scope — the button just deep-links to
 // the hosted Ko-fi page. Set KOFI_URL to your own page before shipping.
