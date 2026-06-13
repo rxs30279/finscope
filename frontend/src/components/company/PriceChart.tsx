@@ -191,10 +191,10 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
   const UP = "#22c55e", DOWN = "#ef4444";
 
   const priceDomain = (() => {
-    if (!showCandles) return ["auto", "auto"] as const;
+    if (!showCandles) return ["auto", "auto"] as ["auto", "auto"];
     const lows = chartData.map((d) => d.low).filter((v) => v != null) as number[];
     const highs = chartData.map((d) => d.high).filter((v) => v != null) as number[];
-    if (!lows.length || !highs.length) return ["auto", "auto"] as const;
+    if (!lows.length || !highs.length) return ["auto", "auto"] as ["auto", "auto"];
     const lo = Math.min(...lows), hi = Math.max(...highs);
     const span = hi - lo || hi || 1;
     const mag = Math.pow(10, Math.floor(Math.log10(span / 5)));
