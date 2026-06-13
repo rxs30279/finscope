@@ -20,6 +20,28 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // The company page is dynamically rendered (it awaits searchParams), so by
+  // default every request — including each distinct ?symbol= URL and every
+  // search-engine recrawl — invokes the function and re-runs SSR. The upstream
+  // data is already cached (getCompanyData uses next.revalidate=3600), but the
+  // render still costs CPU on each hit. These headers let Vercel's Edge Network
+  // cache the rendered HTML per-URL: repeat hits within s-maxage are served from
+  // the CDN with no function invocation; stale-while-revalidate refreshes it in
+  // the background after that. The page carries no personalised state (the live
+  // dashboard hydrates client-side), so a shared edge cache is safe.
+  async headers() {
+    return [
+      {
+        source: "/company",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, s-maxage=3600, stale-while-revalidate=86400",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
