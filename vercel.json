@@ -20,13 +20,6 @@
       "dest": "backend/main.py"
     },
     {
-      "src": "/company",
-      "headers": {
-        "cache-control": "public, s-maxage=3600, stale-while-revalidate=86400"
-      },
-      "continue": true
-    },
-    {
       "src": "/(.*)",
       "dest": "frontend/$1"
     }
