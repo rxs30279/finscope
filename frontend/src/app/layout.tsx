@@ -5,14 +5,40 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { WatchlistProvider, RefreshProvider } from "./providers";
 import AppShell from "@/components/layout/AppShell";
+import { SITE_URL, SITE_NAME } from "@/lib/seo";
 
 export const viewport: Viewport = {
   themeColor: "#0d1117",
 };
 
+const DEFAULT_TITLE = "Alpha Move AI — UK Stock Screener";
+const DEFAULT_DESCRIPTION =
+  "Free UK stock screener for FTSE 100, 250, SmallCap and AIM — fundamentals, " +
+  "composite scores, analyst consensus, RNS news and market signals.";
+
 export const metadata: Metadata = {
-  title: "Alpha Move AI",
-  description: "UK Stock Screener — FTSE fundamentals, scores and news",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: DEFAULT_TITLE,
+    template: "%s | Alpha Move AI",
+  },
+  description: DEFAULT_DESCRIPTION,
+  applicationName: SITE_NAME,
+  alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    siteName: SITE_NAME,
+    title: DEFAULT_TITLE,
+    description: DEFAULT_DESCRIPTION,
+    url: SITE_URL,
+    // og:image is supplied by the app/opengraph-image.tsx file convention.
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: DEFAULT_TITLE,
+    description: DEFAULT_DESCRIPTION,
+    // twitter:image falls back to the opengraph-image convention.
+  },
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
@@ -55,6 +81,27 @@ export default function RootLayout({
         </Script>
       </head>
       <body style={{ margin: 0 }} suppressHydrationWarning>
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify([
+              {
+                "@context": "https://schema.org",
+                "@type": "WebSite",
+                name: SITE_NAME,
+                url: SITE_URL,
+                description: DEFAULT_DESCRIPTION,
+              },
+              {
+                "@context": "https://schema.org",
+                "@type": "Organization",
+                name: SITE_NAME,
+                url: SITE_URL,
+                logo: `${SITE_URL}/android-chrome-512.png`,
+              },
+            ]),
+          }}
+        />
         <WatchlistProvider>
           <RefreshProvider>
             <AppShell>{children}</AppShell>

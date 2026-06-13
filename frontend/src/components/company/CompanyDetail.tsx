@@ -103,7 +103,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               ) : <div style={badgeStyle}>{label}</div>;
             })()}
             <div>
-              <h1 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h1>
+              <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
               <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
                 {[symbol, meta?.exchange, meta?.sector, meta?.country, meta?.ftse_index].filter(Boolean).map((t: string) => (
                   <span key={t} style={S.badge}>{t}</span>

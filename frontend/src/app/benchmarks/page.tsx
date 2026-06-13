@@ -1,18 +1,14 @@
-"use client";
+import type { Metadata } from "next";
+import BenchmarksPageClient from "./_client";
 
-import { useRouter } from "next/navigation";
-import { useRefresh } from "@/app/providers";
-import Sidebar from "@/components/Sidebar";
+export const metadata: Metadata = {
+  title: "UK Index Benchmarks",
+  description:
+    "Benchmark performance across the FTSE 100, 250, SmallCap and AIM, plus key " +
+    "market gauges for UK equities.",
+  alternates: { canonical: "/benchmarks" },
+};
 
 export default function BenchmarksPage() {
-  const router = useRouter();
-  const { refreshKey } = useRefresh();
-
-  return (
-    <Sidebar
-      refreshKey={refreshKey}
-      onNavigate={(page: string) => router.push(`/${page}`)}
-      mobile
-    />
-  );
+  return <BenchmarksPageClient />;
 }

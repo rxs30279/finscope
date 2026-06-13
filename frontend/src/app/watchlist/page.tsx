@@ -1,29 +1,14 @@
-"use client";
+import type { Metadata } from "next";
+import WatchlistPageClient from "./_client";
 
-import { useRouter } from "next/navigation";
-import { useWatchlist } from "@/app/providers";
-import WatchlistTab from "@/components/WatchlistTab";
+// User-specific state stored in the browser — no shared content to index.
+export const metadata: Metadata = {
+  title: "My Watchlist",
+  description: "Your saved UK shares and watchlists on Alpha Move AI.",
+  robots: { index: false, follow: true },
+  alternates: { canonical: "/watchlist" },
+};
 
 export default function WatchlistPage() {
-  const router = useRouter();
-  const {
-    watchlists,
-    createWatchlist,
-    renameWatchlist,
-    deleteWatchlist,
-    addToWatchlist,
-    removeFromWatchlist,
-  } = useWatchlist();
-
-  return (
-    <WatchlistTab
-      watchlists={watchlists}
-      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
-      onCreateList={createWatchlist}
-      onRenameList={renameWatchlist}
-      onDeleteList={deleteWatchlist}
-      onAddSymbol={addToWatchlist}
-      onRemoveSymbol={removeFromWatchlist}
-    />
-  );
+  return <WatchlistPageClient />;
 }
