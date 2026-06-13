@@ -36,7 +36,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [priceRefreshing, setPriceRefreshing] = useState(false);
   const [priceToast, setPriceToast] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  const isCompanyPage = pathname.startsWith("/company/");
+  const isCompanyPage = pathname.startsWith("/company");
   const showSidebar = !isCompanyPage;
 
   const doSearch = useCallback((q: string) => {

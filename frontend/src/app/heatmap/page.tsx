@@ -11,7 +11,7 @@ export default function HeatmapPage() {
   return (
     <HeatmapTab
       refreshKey={refreshKey}
-      onSelect={(sym: string) => router.push(`/company/${encodeURIComponent(sym)}`)}
+      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
     />
   );
 }

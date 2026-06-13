@@ -7,7 +7,7 @@ export default function TrendingPage() {
   const router = useRouter();
   return (
     <TrendingTab
-      onSelect={(sym: string) => router.push(`/company/${encodeURIComponent(sym)}`)}
+      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
     />
   );
 }

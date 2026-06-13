@@ -13,7 +13,7 @@ export default function ScreenerPage() {
     <Screener
       onSelect={(sym, tab) =>
         router.push(
-          `/company/${encodeURIComponent(sym)}${tab ? `?tab=${encodeURIComponent(tab)}` : ""}`,
+          `/company?symbol=${encodeURIComponent(sym)}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`,
         )
       }
       highlightSymbol={highlightSymbol}

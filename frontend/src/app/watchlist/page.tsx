@@ -18,7 +18,7 @@ export default function WatchlistPage() {
   return (
     <WatchlistTab
       watchlists={watchlists}
-      onSelect={(sym: string) => router.push(`/company/${encodeURIComponent(sym)}`)}
+      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
       onCreateList={createWatchlist}
       onRenameList={renameWatchlist}
       onDeleteList={deleteWatchlist}

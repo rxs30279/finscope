@@ -13,7 +13,7 @@ export default function AnalystsPage() {
       refreshKey={refreshKey}
       onSelect={(sym: string, tab?: string) =>
         router.push(
-          `/company/${encodeURIComponent(sym)}${tab ? `?tab=${encodeURIComponent(tab)}` : ""}`,
+          `/company?symbol=${encodeURIComponent(sym)}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`,
         )
       }
     />
