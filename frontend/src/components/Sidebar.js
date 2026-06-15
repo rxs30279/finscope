@@ -50,6 +50,12 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
   const [autoTick, setAutoTick] = useState(0);
   // Per-second tick that drives the live LSE close countdown.
   const [, setClockTick] = useState(0);
+  // The LSE clock is time-derived (live countdown), so the server-rendered value
+  // and the client's first render differ by however long hydration took, tripping
+  // a hydration mismatch. Gate the clock on a post-mount flag so it renders only
+  // on the client, where the per-second tick keeps it current.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     const tick = () => { if (!document.hidden) setAutoTick(t => t + 1); };
@@ -103,7 +109,11 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
     <aside style={asideStyle}>
 
       {/* LSE market clock — sits at the very top of the sidebar */}
-      {(() => {
+      {!mounted ? (
+        // Placeholder before mount keeps the clock's space so the rest of the
+        // sidebar doesn't jump when the live clock appears on the client.
+        <div style={{ minHeight: 28 }} />
+      ) : (() => {
         const m = lseStatus();
         return (
           <div
