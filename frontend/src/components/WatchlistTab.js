@@ -3,7 +3,6 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { API } from "@/lib/api";
 import { loadTargets, saveTargets, DEFAULT_LIST_ID } from "@/lib/storage";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { lseStatus } from "@/lib/lse";
 
 // Relative time for recent items ("2h", "3d"); a real date once past a week,
 // which reads better than "5w" for older news.
@@ -771,9 +770,7 @@ export default function WatchlistTab({
     };
   }, [symbols]);
 
-  // Live last-price poll (pence). Only polls during LSE trading hours (08:00–16:30
-  // London, Mon–Fri) and only when the tab is visible. Pauses in background tabs
-  // and resumes with an immediate fetch when the user switches back.
+  // Live last-price poll (pence), same cadence/endpoint as the old watchlist.
   useEffect(() => {
     if (symbols.length === 0) {
       setLiveQuotes({});
@@ -781,7 +778,6 @@ export default function WatchlistTab({
     }
     let cancelled = false;
     const fetchQuotes = () => {
-      if (document.hidden || !lseStatus().open) return;
       fetch(`${API}/quotes?symbols=${encodeURIComponent(symbols.join(","))}`)
         .then((r) => r.json())
         .then((d) => {
@@ -790,13 +786,10 @@ export default function WatchlistTab({
         .catch(() => {});
     };
     fetchQuotes();
-    const id = setInterval(fetchQuotes, 5 * 60 * 1000);
-    const onVisible = () => fetchQuotes();
-    document.addEventListener('visibilitychange', onVisible);
+    const id = setInterval(fetchQuotes, 60000);
     return () => {
       cancelled = true;
       clearInterval(id);
-      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [symbols]);
 
