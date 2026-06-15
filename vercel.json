@@ -4,10 +4,6 @@
     {
       "src": "backend/main.py",
       "use": "@vercel/python"
-    },
-    {
-      "src": "frontend/package.json",
-      "use": "@vercel/next"
     }
   ],
   "routes": [
@@ -18,10 +14,6 @@
     {
       "src": "/sitemap.xml",
       "dest": "backend/main.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "frontend/$1"
     }
   ]
 }
