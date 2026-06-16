@@ -4,8 +4,9 @@ import { useState, useCallback, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useIsMobile, useIsNarrowDesktop } from "@/hooks/useMediaQuery";
+import { useIsAdmin } from "@/hooks/useAdmin";
 import { useRefresh } from "@/app/providers";
-import { API, ADMIN_HEADERS } from "@/lib/api";
+import { API, adminHeaders } from "@/lib/api";
 import { S } from "@/lib/theme";
 import Sidebar from "@/components/Sidebar";
 
@@ -24,6 +25,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const isMobile = useIsMobile();
   const isNarrow = useIsNarrowDesktop();
+  const isAdmin = useIsAdmin();
   const { refreshKey, refresh, setHighlightSymbol } = useRefresh();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -59,7 +61,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     setPriceRefreshing(true);
     setPriceToast(null);
     try {
-      const res = await fetch(`${API}/prices/refresh`, { method: "POST", headers: ADMIN_HEADERS });
+      const res = await fetch(`${API}/prices/refresh`, { method: "POST", headers: adminHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setPriceToast({ ok: true, msg: `+${data.rows_added} rows (${data.duration_seconds}s)` });
@@ -239,21 +241,25 @@ export default function AppShell({ children }: { children: ReactNode }) {
                     >
                       📖 Tool Manual Download
                     </a>
-                    <button
-                      onClick={() => { handleRefresh(); setToolsOpen(false); }}
-                      style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid #1f1f1f", padding: "10px 14px", color: "#999", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}
-                    >
-                      ↻ Refresh Market
-                    </button>
-                    <button
-                      onClick={handlePriceRefresh}
-                      disabled={priceRefreshing}
-                      style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 14px", color: priceRefreshing ? "#f97316" : "#999", fontFamily: "monospace", fontSize: 11, cursor: priceRefreshing ? "not-allowed" : "pointer" }}
-                    >
-                      <span className={priceRefreshing ? "spinning" : ""}>↻</span>
-                      {priceRefreshing ? " Refreshing prices…" : " Refresh Prices"}
-                    </button>
-                    {(lastUpdated || priceToast) && (
+                    {isAdmin && (
+                      <button
+                        onClick={() => { handleRefresh(); setToolsOpen(false); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid #1f1f1f", padding: "10px 14px", color: "#999", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}
+                      >
+                        ↻ Refresh Market
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <button
+                        onClick={handlePriceRefresh}
+                        disabled={priceRefreshing}
+                        style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 14px", color: priceRefreshing ? "#f97316" : "#999", fontFamily: "monospace", fontSize: 11, cursor: priceRefreshing ? "not-allowed" : "pointer" }}
+                      >
+                        <span className={priceRefreshing ? "spinning" : ""}>↻</span>
+                        {priceRefreshing ? " Refreshing prices…" : " Refresh Prices"}
+                      </button>
+                    )}
+                    {isAdmin && (lastUpdated || priceToast) && (
                       <div style={{ padding: "8px 14px", borderTop: "1px solid #1f1f1f", background: "#0f0f0f", fontFamily: "monospace", fontSize: 9, lineHeight: 1.5 }}>
                         {lastUpdated && <div style={{ color: "#555" }}>Updated {lastUpdated}</div>}
                         {priceToast && <div style={{ color: priceToast.ok ? "#10b981" : "#ef4444" }}>{priceToast.msg}</div>}
@@ -355,19 +361,23 @@ export default function AppShell({ children }: { children: ReactNode }) {
               >
                 ♥ Support
               </Link>
-              <button
-                onClick={() => { handleRefresh(); setMobileMenuOpen(false); }}
-                style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 20px", color: "#666", cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}
-              >
-                ↻ Refresh Market Data
-              </button>
-              <button
-                onClick={handlePriceRefresh}
-                disabled={priceRefreshing}
-                style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 20px", color: priceRefreshing ? "#f97316" : "#666", cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}
-              >
-                ↻ {priceRefreshing ? "Refreshing…" : "Refresh Stock Prices"}
-              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => { handleRefresh(); setMobileMenuOpen(false); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 20px", color: "#666", cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}
+                >
+                  ↻ Refresh Market Data
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  onClick={handlePriceRefresh}
+                  disabled={priceRefreshing}
+                  style={{ display: "block", width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 20px", color: priceRefreshing ? "#f97316" : "#666", cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}
+                >
+                  ↻ {priceRefreshing ? "Refreshing…" : "Refresh Stock Prices"}
+                </button>
+              )}
             </div>
           </div>
         </>

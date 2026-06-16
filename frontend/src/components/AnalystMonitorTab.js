@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect, useMemo } from 'react';
-import { API, ADMIN_HEADERS } from "@/lib/api";
+import { API, adminHeaders } from "@/lib/api";
 import { useIsMobile, useIsNarrowDesktop } from "@/hooks/useMediaQuery";
+import { useIsAdmin } from "@/hooks/useAdmin";
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
@@ -73,6 +74,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
     color: '#e5e5e5', fontFamily: 'monospace', fontWeight: 700,
     cursor: 'pointer', textDecoration: 'none',
   };
+  const isAdmin = useIsAdmin();
   const [latest, setLatest]   = useState([]);
   const [movers, setMovers]   = useState([]);
   const [loading, setLoading] = useState(true);
@@ -105,7 +107,7 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await fetch(`${API}/analysts/refresh`, { method: 'POST', headers: ADMIN_HEADERS });
+      await fetch(`${API}/analysts/refresh`, { method: 'POST', headers: adminHeaders() });
       setToast('Refresh started — this takes a few minutes');
     } catch {
       setToast('Refresh failed');
@@ -229,13 +231,15 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
           {dataAsOf && (
             <span style={{ fontSize: 10, color: '#555', fontFamily: 'monospace' }}>Data as of {dataAsOf}</span>
           )}
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            style={{ background: '#1a1a1a', color: refreshing ? '#444' : '#666', border: '1px solid #2a2a2a', padding: '4px 12px', borderRadius: 2, fontFamily: 'monospace', fontSize: 10, cursor: refreshing ? 'default' : 'pointer' }}
-          >
-            {refreshing ? '↻ Starting…' : '↻ Refresh'}
-          </button>
+          {isAdmin && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              style={{ background: '#1a1a1a', color: refreshing ? '#444' : '#666', border: '1px solid #2a2a2a', padding: '4px 12px', borderRadius: 2, fontFamily: 'monospace', fontSize: 10, cursor: refreshing ? 'default' : 'pointer' }}
+            >
+              {refreshing ? '↻ Starting…' : '↻ Refresh'}
+            </button>
+          )}
         </div>
       </div>
 

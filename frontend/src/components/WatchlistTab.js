@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { API } from "@/lib/api";
 import { loadTargets, saveTargets, DEFAULT_LIST_ID } from "@/lib/storage";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useIsAdmin } from "@/hooks/useAdmin";
 import { lseStatus } from "@/lib/lse";
 
 // Relative time for recent items ("2h", "3d"); a real date once past a week,
@@ -424,6 +425,7 @@ function AddStockBox({ onAdd, existing }) {
 // (or always, with refresh=true). Sits right of the table on wide screens,
 // underneath on narrow ones.
 function NewsPanel({ symbol, name, sideBySide }) {
+  const isAdmin = useIsAdmin();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const reqRef = useRef("");
@@ -528,24 +530,26 @@ function NewsPanel({ symbol, name, sideBySide }) {
             loading…
           </span>
         )}
-        <button
-          onClick={() => load(symbol, true)}
-          disabled={loading || !symbol}
-          title="Pull fresh press now"
-          style={{
-            marginLeft: "auto",
-            background: "none",
-            border: "1px solid #2a2a2a",
-            borderRadius: 4,
-            color: loading ? "#475569" : "#94a3b8",
-            cursor: loading || !symbol ? "default" : "pointer",
-            fontSize: 12,
-            lineHeight: 1,
-            padding: "3px 7px",
-          }}
-        >
-          {loading ? "…" : "↻"}
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => load(symbol, true)}
+            disabled={loading || !symbol}
+            title="Pull fresh press now"
+            style={{
+              marginLeft: "auto",
+              background: "none",
+              border: "1px solid #2a2a2a",
+              borderRadius: 4,
+              color: loading ? "#475569" : "#94a3b8",
+              cursor: loading || !symbol ? "default" : "pointer",
+              fontSize: 12,
+              lineHeight: 1,
+              padding: "3px 7px",
+            }}
+          >
+            {loading ? "…" : "↻"}
+          </button>
+        )}
       </div>
       <div style={{ overflowY: "auto" }}>
         {items.length === 0 ? (

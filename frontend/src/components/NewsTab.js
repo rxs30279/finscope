@@ -1,7 +1,8 @@
 "use client";
 import { useState, useEffect } from 'react';
-import { API, ADMIN_HEADERS } from "@/lib/api";
+import { API, adminHeaders } from "@/lib/api";
 import { useIsMobile } from "@/hooks/useMediaQuery";
+import { useIsAdmin } from "@/hooks/useAdmin";
 
 const TIER_STYLE = {
   A: { bg:'#0d3320', color:'#10b981', label:'A' },
@@ -107,6 +108,7 @@ export default function NewsTab({ symbol, split = false }) {
   const [summarising, setSummarising] = useState(false);
   const [summaryError, setSummaryError] = useState(null);
   const isMobile = useIsMobile();
+  const isAdmin = useIsAdmin();
 
   const load = (force = false) => {
     if (force) setRefreshing(true); else setLoading(true);
@@ -124,7 +126,7 @@ export default function NewsTab({ symbol, split = false }) {
   const generateSummary = () => {
     setSummarising(true);
     setSummaryError(null);
-    fetch(`${API}/news/${encodeURIComponent(symbol)}/summary`, { method: 'POST', headers: ADMIN_HEADERS })
+    fetch(`${API}/news/${encodeURIComponent(symbol)}/summary`, { method: 'POST', headers: adminHeaders() })
       .then(async r => {
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));
@@ -164,17 +166,19 @@ export default function NewsTab({ symbol, split = false }) {
           {google.length} press{googleSpan && ` (${googleSpan})`} · {rns.length} RNS{rnsSpan && ` (${rnsSpan})`}
           {data.google_fetched_at && <> · Google updated {fmtTime(data.google_fetched_at)}</>}
         </div>
-        <button
-          onClick={() => load(true)}
-          disabled={refreshing}
-          style={{
-            background:'#1a1a1a', color: refreshing ? '#f97316' : '#666',
-            border:'1px solid #2a2a2a', padding:'4px 10px', borderRadius:2,
-            fontFamily:'monospace', fontSize:10, cursor: refreshing ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {refreshing ? '↻ Refreshing…' : '↻ Refresh news'}
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => load(true)}
+            disabled={refreshing}
+            style={{
+              background:'#1a1a1a', color: refreshing ? '#f97316' : '#666',
+              border:'1px solid #2a2a2a', padding:'4px 10px', borderRadius:2,
+              fontFamily:'monospace', fontSize:10, cursor: refreshing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {refreshing ? '↻ Refreshing…' : '↻ Refresh news'}
+          </button>
+        )}
       </div>
 
       {/* AI Summary card */}
@@ -189,20 +193,22 @@ export default function NewsTab({ symbol, split = false }) {
                 Generated {fmtTime(summary.generated_at)}
               </span>
             )}
-            <button
-              onClick={(e) => { /* Ctrl/Cmd requirement disabled — restore: if (e.ctrlKey || e.metaKey) generateSummary(); */ generateSummary(); }}
-              disabled={summarising}
-              style={{
-                background: summarising ? '#2e1065' : '#1a1a1a',
-                color:      summarising ? '#c4b5fd' : '#a78bfa',
-                border: '1px solid #4c1d95',
-                padding: '4px 10px', borderRadius: 2,
-                fontFamily: 'monospace', fontSize: 10,
-                cursor: summarising ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {summarising ? '✦ Summarising…' : (summary ? '↻ Regenerate' : '✦ Generate summary')}
-            </button>
+            {isAdmin && (
+              <button
+                onClick={(e) => { /* Ctrl/Cmd requirement disabled — restore: if (e.ctrlKey || e.metaKey) generateSummary(); */ generateSummary(); }}
+                disabled={summarising}
+                style={{
+                  background: summarising ? '#2e1065' : '#1a1a1a',
+                  color:      summarising ? '#c4b5fd' : '#a78bfa',
+                  border: '1px solid #4c1d95',
+                  padding: '4px 10px', borderRadius: 2,
+                  fontFamily: 'monospace', fontSize: 10,
+                  cursor: summarising ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {summarising ? '✦ Summarising…' : (summary ? '↻ Regenerate' : '✦ Generate summary')}
+              </button>
+            )}
           </div>
         </div>
         <div style={{ padding:'14px 16px' }}>
@@ -213,7 +219,9 @@ export default function NewsTab({ symbol, split = false }) {
           )}
           {!summary && !summaryError && (
             <div style={{ color:'#666', fontSize:12, fontFamily:'monospace', lineHeight:1.7 }}>
-              Press <span style={{ color:'#a78bfa' }}>✦ Generate summary</span> to have DeepSeek read the last 60 days of RNS + press coverage and produce a short summary.
+              {isAdmin
+                ? <>Press <span style={{ color:'#a78bfa' }}>✦ Generate summary</span> to have DeepSeek read the last 60 days of RNS + press coverage and produce a short summary.</>
+                : 'No AI summary has been generated for this company yet.'}
             </div>
           )}
           {summary && (
@@ -270,7 +278,7 @@ export default function NewsTab({ symbol, split = false }) {
           </div>
           {google.length === 0 ? (
             <div style={{ padding:20, color:'#555', fontSize:12, fontFamily:'monospace', textAlign:'center' }}>
-              No press articles yet — try ↻ Refresh news above
+              No press articles yet{isAdmin ? ' — try ↻ Refresh news above' : ''}
             </div>
           ) : google.map(r => <GoogleRow key={r.id} r={r} />)}
         </div>
