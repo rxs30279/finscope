@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from "react";
 import {
-  LineChart, Line, BarChart, Bar, AreaChart, Area,
-  CartesianGrid, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer,
+  LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart, Cell, LabelList,
+  XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
 import { API } from "@/lib/api";
 import { fmt, gc, currSym, dividendDataUrl } from "@/lib/format";
@@ -84,6 +84,30 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
     eps: r.eps_diluted,
   }));
   const hasQuarterlyRevenue = qChart.some((r: any) => r.revenue != null);
+  const hasDebtEq = annualChart.some((r: any) => r.debt_eq != null);
+
+  // Latest-year income-statement waterfall: Revenue → Cost of Revenue →
+  // Gross Profit → Other Expenses → Earnings. Cost of Revenue and Other
+  // Expenses are the reconciling bridges (revenue−gross profit, gross
+  // profit−net income), so the bars always tie out even if the reported
+  // `cogs` field is missing. Each bar is a floating [low, high] range — the
+  // native recharts way to draw hanging bars — which also renders a loss-making
+  // year correctly (negative `low`) with no clamping.
+  const latestAnnual = annual.length ? annual[annual.length - 1] : null;
+  const waterfall = (() => {
+    if (!latestAnnual) return null;
+    const revenue = latestAnnual.revenue;
+    const grossProfit = latestAnnual.gross_profit;
+    const earnings = latestAnnual.net_income;
+    if (revenue == null || grossProfit == null || earnings == null) return null;
+    return [
+      { name: "Revenue", range: [0, revenue], amount: revenue, fill: "#2495e0" },
+      { name: "Cost of Revenue", range: [grossProfit, revenue], amount: revenue - grossProfit, fill: "#833131" },
+      { name: "Gross Profit", range: [0, grossProfit], amount: grossProfit, fill: "#2ecc87" },
+      { name: "Other Expenses", range: [earnings, grossProfit], amount: grossProfit - earnings, fill: "#833131" },
+      { name: "Earnings", range: [0, earnings], amount: earnings, fill: "#3fd9c2" },
+    ];
+  })();
 
   const tabs = ["chart", "overview", "financials", "valuation", "health", "growth", "analysts", "news"];
 
@@ -132,7 +156,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", flexWrap: isMobile ? "wrap" : "nowrap", rowGap: isMobile ? 2 : 0, gap: 2, borderBottom: isMobile ? "none" : "1px solid #334155", marginBottom: 24 }}>
+      <div style={{ display: "flex", flexWrap: isMobile ? "wrap" : "nowrap", rowGap: isMobile ? 2 : 0, columnGap: 2, borderBottom: isMobile ? "none" : "1px solid #334155", marginBottom: 24 }}>
         {tabs.map((t) => (
           <button key={t} onClick={() => setTab(t)} style={{ ...S.tab, ...(isMobile ? { padding: "8px 10px", fontSize: 11 } : {}), ...(tab === t ? S.tabActive : {}) }}>
             {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -162,7 +186,6 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
             <h3 style={S.cardTitle}>{`Revenue & Net Income (Annual ${sym}B)`}</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />
                 <XAxis dataKey="year" tick={{ fontSize: 11, fill: "#666", fontFamily: "monospace" }} />
                 <YAxis tick={{ fontSize: 11, fill: "#666", fontFamily: "monospace" }} />
                 <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
@@ -179,7 +202,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
           <div style={S.card}>
             <h3 style={S.cardTitle}>{`Revenue, EBITDA & FCF (Annual ${sym}B)`}</h3>
             <ResponsiveContainer width="100%" height={250}>
-              <AreaChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+              <ComposedChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
                 <defs>
                   <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} /><stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
@@ -188,14 +211,13 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                     <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                 <XAxis dataKey="year" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
                 <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
                 <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#gR)" strokeWidth={2} name="Revenue" />
                 <Area type="monotone" dataKey="ebitda" stroke="#10b981" fill="url(#gE)" strokeWidth={2} name="EBITDA" />
                 <Line type="monotone" dataKey="fcf" stroke="#f59e0b" strokeWidth={2} dot={false} name="FCF" />
-              </AreaChart>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: isMobile || !hasQuarterlyRevenue ? "1fr" : "1fr 1fr", gap: 20 }}>
@@ -204,7 +226,6 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                 <h3 style={S.cardTitle}>{`Quarterly Revenue (${sym}B)`}</h3>
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={qChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                     <XAxis dataKey="q" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 11 }} />
                     <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
                     <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Revenue" />
@@ -216,7 +237,6 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               <h3 style={S.cardTitle}>EPS Diluted (Annual)</h3>
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: any) => sym + v?.toFixed(2)} contentStyle={S.tooltip} />
                   <ReferenceLine y={0} stroke="#334155" />
@@ -225,6 +245,38 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               </ResponsiveContainer>
             </div>
           </div>
+          {waterfall && (
+            <div style={S.card}>
+              <h3 style={S.cardTitle}>{`Earnings & Revenue (FY ${latestAnnual.period_end_date?.slice(0, 4)})`}</h3>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={waterfall} margin={{ top: 24, right: 10, bottom: 5, left: 4 }} barCategoryGap="12%">
+                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#cbd5e1" }} interval={0} tickLine={false} axisLine={{ stroke: "#334155" }} />
+                  <YAxis hide />
+                  <Tooltip
+                    cursor={{ fill: "#ffffff08" }}
+                    contentStyle={S.tooltip}
+                    itemStyle={{ color: "#e5e7eb" }}
+                    formatter={(_v: any, _n: any, p: any) => [fmt(p?.payload?.amount, "currency", fcur), p?.payload?.name]}
+                    labelFormatter={() => ""}
+                  />
+                  <Bar dataKey="range" radius={[2, 2, 0, 0]}>
+                    {waterfall.map((d, i) => <Cell key={i} fill={d.fill} />)}
+                    <LabelList
+                      dataKey="amount"
+                      content={(props: any) => {
+                        const { x, y, width, value } = props;
+                        return (
+                          <text x={x} y={y - 6} textAnchor="start" fill="#e5e7eb" fontSize={12} fontFamily="monospace">
+                            {fmt(value, "currency", fcur)}
+                          </text>
+                        );
+                      }}
+                    />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
           <div style={S.card}>
             <h3 style={S.cardTitle}>{`Income Statement (${sym}B)`}</h3>
             <div style={{ overflowX: "auto" }}>
@@ -261,7 +313,6 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               <h3 style={S.cardTitle}>EPS History</h3>
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
                   <Tooltip contentStyle={S.tooltip} />
                   <ReferenceLine y={0} stroke="#334155" />
@@ -273,7 +324,6 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               <h3 style={S.cardTitle}>Return on Capital (%)</h3>
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" />
                   <Tooltip formatter={(v: any) => `${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
                   <ReferenceLine y={0} stroke="#334155" />
@@ -314,25 +364,29 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
             <div style={S.card}>
               <h3 style={S.cardTitle}>Debt / Equity History</h3>
-              <ResponsiveContainer width="100%" height={210}>
-                <AreaChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <defs>
-                    <linearGradient id="gD" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} /><stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip contentStyle={S.tooltip} />
-                  <Area type="monotone" dataKey="debt_eq" stroke="#ef4444" fill="url(#gD)" strokeWidth={2} name="D/E" />
-                </AreaChart>
-              </ResponsiveContainer>
+              {hasDebtEq ? (
+                <ResponsiveContainer width="100%" height={210}>
+                  <AreaChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+                    <defs>
+                      <linearGradient id="gD" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} /><stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip contentStyle={S.tooltip} />
+                    <Area type="monotone" dataKey="debt_eq" stroke="#ef4444" fill="url(#gD)" strokeWidth={2} dot={{ r: 3, fill: "#ef4444" }} name="D/E" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div style={{ height: 210, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 13 }}>
+                  No debt / equity data reported
+                </div>
+              )}
             </div>
             <div style={S.card}>
               <h3 style={S.cardTitle}>Current Ratio History</h3>
               <ResponsiveContainer width="100%" height={210}>
                 <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
                   <Tooltip contentStyle={S.tooltip} />
                   <ReferenceLine y={1} stroke="#f59e0b" strokeDasharray="4 4" />
@@ -355,7 +409,6 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
             <h3 style={S.cardTitle}>Profit Margins History (%)</h3>
             <ResponsiveContainer width="100%" height={250}>
               <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
                 <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" />
                 <Tooltip formatter={(v: any) => `${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
                 <ReferenceLine y={0} stroke="#334155" />
