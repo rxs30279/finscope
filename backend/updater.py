@@ -375,9 +375,13 @@ def process_stock(symbol: str):
                     else None
                 )
 
+                # With positive equity, a debt-free company yields 0/equity = 0
+                # (a real, plottable value) rather than None — only leave it null
+                # when equity is missing or non-positive, where the ratio is
+                # genuinely undefined.
                 de = (
                     sf(((st_debt or 0) + (lt_debt or 0)) / total_equity)
-                    if (total_equity and total_equity > 0 and (st_debt or lt_debt))
+                    if (total_equity and total_equity > 0)
                     else None
                 )
                 da_r = (
