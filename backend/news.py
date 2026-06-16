@@ -48,7 +48,14 @@ def _get_llm_client():
         if not _DEEPSEEK_API_KEY:
             raise RuntimeError("DEEPSEEK_API_KEY not set in environment")
         from openai import OpenAI
-        _llm_client = OpenAI(api_key=_DEEPSEEK_API_KEY, base_url=_DEEPSEEK_BASE_URL)
+        # Cap the per-request time and retries so a slow/down DeepSeek fails the
+        # function in ~80s instead of hanging near the platform timeout.
+        _llm_client = OpenAI(
+            api_key=_DEEPSEEK_API_KEY,
+            base_url=_DEEPSEEK_BASE_URL,
+            timeout=40.0,
+            max_retries=1,
+        )
     return _llm_client
 
 
@@ -404,7 +411,16 @@ def _generate_summary(symbol: str) -> dict:
 def generate_summary(symbol: str):
     """Call DeepSeek to summarise the last 60 days of news for this company."""
     _ensure_schema()
-    return _generate_summary(symbol)
+    try:
+        return _generate_summary(symbol)
+    except HTTPException:
+        raise  # 404 unknown symbol / 400 no news — already meaningful
+    except Exception as e:
+        # DeepSeek upstream failure (5xx / 429 / timeout), malformed JSON, etc.
+        # Surface a clean reason via response.detail instead of a bare 500 so the
+        # UI can show it and the real cause is visible in the logs.
+        print(f"[news] summary failed for {symbol}: {type(e).__name__}: {e}", flush=True)
+        raise HTTPException(502, f"AI summariser unavailable: {e}") from e
 
 
 @router.get("/{symbol}")
