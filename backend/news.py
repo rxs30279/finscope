@@ -47,14 +47,23 @@ def _get_llm_client():
     if _llm_client is None:
         if not _DEEPSEEK_API_KEY:
             raise RuntimeError("DEEPSEEK_API_KEY not set in environment")
+        import httpx
         from openai import OpenAI
-        # Cap the per-request time and retries so a slow/down DeepSeek fails the
-        # function in ~80s instead of hanging near the platform timeout.
+        # On Vercel this call fails with APIConnectionError ("Connection error.")
+        # while the identical call works from Render. The difference is the
+        # route: Vercel's serverless egress picks an IPv6 path to
+        # api.deepseek.com that doesn't connect. Bind the outbound socket to an
+        # IPv4 local address to force IPv4. Cap time/retries so a bad route fails
+        # fast instead of hanging near the platform timeout.
         _llm_client = OpenAI(
             api_key=_DEEPSEEK_API_KEY,
             base_url=_DEEPSEEK_BASE_URL,
             timeout=40.0,
             max_retries=1,
+            http_client=httpx.Client(
+                timeout=40.0,
+                transport=httpx.HTTPTransport(local_address="0.0.0.0"),
+            ),
         )
     return _llm_client
 
