@@ -27,7 +27,7 @@ script does not verify it.
 
 Env vars (same DB_* set the refresh workflows already use):
   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-  VERCEL_BASE_URL  — optional, defaults to https://finscope-roan.vercel.app
+  VERCEL_BASE_URL  — optional, defaults to https://finscope-api.vercel.app
 
 Usage:
   python healthcheck.py            # plain table, exit 1 on any FAIL
@@ -56,7 +56,7 @@ DB_CONFIG = {
     "sslmode": "require",
 }
 
-VERCEL_BASE_URL = os.environ.get("VERCEL_BASE_URL", "https://finscope-roan.vercel.app").rstrip("/")
+VERCEL_BASE_URL = os.environ.get("VERCEL_BASE_URL", "https://finscope-api.vercel.app").rstrip("/")
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
