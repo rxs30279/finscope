@@ -146,7 +146,7 @@ _PAGE_OK = """<!doctype html><html><head><meta charset="utf-8">
   <div style="height:2px;background:#f97316;width:60px;margin:0 auto 24px;"></div>
   <p style="color:#222;font-size:15px;line-height:1.5;">You've been unsubscribed.</p>
   <p style="color:#666;font-size:13px;line-height:1.5;">{email} will no longer receive the daily RNS digest.</p>
-  <p style="margin-top:24px;color:#999;font-size:12px;">Changed your mind? <a href="/?tab=subscribe" style="color:#f97316;">Sign up again</a>.</p>
+  <p style="margin-top:24px;color:#999;font-size:12px;">Changed your mind? <a href="/subscribe" style="color:#f97316;">Sign up again</a>.</p>
 </div></body></html>"""
 
 _PAGE_BAD = """<!doctype html><html><head><meta charset="utf-8">
@@ -156,7 +156,7 @@ _PAGE_BAD = """<!doctype html><html><head><meta charset="utf-8">
 <div style="max-width:520px;margin:80px auto;padding:32px;background:#fff;border:1px solid #eee;border-radius:6px;text-align:center;">
   <h1 style="margin:0 0 12px;font-family:monospace;color:#f97316;letter-spacing:2px;font-size:16px;text-transform:uppercase;">Alpha Move AI</h1>
   <p style="color:#222;font-size:15px;line-height:1.5;">This unsubscribe link is invalid or expired.</p>
-  <p style="margin-top:24px;color:#999;font-size:12px;"><a href="/?tab=subscribe" style="color:#f97316;">Manage subscription</a></p>
+  <p style="margin-top:24px;color:#999;font-size:12px;"><a href="/subscribe" style="color:#f97316;">Manage subscription</a></p>
 </div></body></html>"""
 
 

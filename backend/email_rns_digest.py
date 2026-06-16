@@ -468,7 +468,7 @@ def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
     try:
         from subscribers import build_unsubscribe_url  # local import to avoid cycles
         unsub_url  = build_unsubscribe_url(to_email)
-        manage_url = f"{base_url.rstrip('/')}/?tab=subscribe" if base_url else "/?tab=subscribe"
+        manage_url = f"{base_url.rstrip('/')}/subscribe" if base_url else "/subscribe"
         footer = _sub_footer(unsub_url, manage_url)
         headers = {
             "List-Unsubscribe":      f"<{unsub_url}>, <mailto:unsubscribe@alphamoveai.co.uk>",
@@ -535,7 +535,7 @@ def main() -> int:
         if base_url and os.environ.get("UNSUBSCRIBE_SECRET"):
             from subscribers import build_unsubscribe_url
             unsub_url  = build_unsubscribe_url(to_addr)
-            manage_url = f"{base_url.rstrip('/')}/?tab=subscribe"
+            manage_url = f"{base_url.rstrip('/')}/subscribe"
             footer = _sub_footer(unsub_url, manage_url)
             headers = {
                 "List-Unsubscribe":      f"<{unsub_url}>, <mailto:unsubscribe@alphamoveai.co.uk>",

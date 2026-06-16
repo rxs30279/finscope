@@ -657,7 +657,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
             </span>
             <span style={{ color: "#444" }}>·</span>
             <a
-              href="/?tab=subscribe"
+              href="/subscribe"
               style={{
                 color: "#f97316",
                 textDecoration: "none",
