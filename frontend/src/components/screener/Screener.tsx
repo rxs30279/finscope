@@ -47,7 +47,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
   useEffect(() => {
     fetch(`${API}/filters`).then((r) => r.json()).then(setFilterOpts);
-    runScreener(EMPTY_FILTERS);
+    runScreener();
   }, []);
 
   useEffect(() => {
@@ -57,27 +57,19 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     }
   }, [highlightSymbol, results]);
 
-  const runScreener = useCallback((f: typeof EMPTY_FILTERS) => {
+  // Fetch the full universe once. All filtering is done client-side (below), so
+  // this is a single canonical request → one Vercel edge cache key shared by all
+  // users, instead of one per filter combination. See backend screener() comment.
+  const runScreener = useCallback(() => {
     setLoading(true);
-    const p = new URLSearchParams();
-    if (f.sector) p.set("sector", f.sector);
-    if (f.exclude_sectors) p.set("exclude_sectors", f.exclude_sectors);
-    if (f.ftse_index) p.set("ftse_index", f.ftse_index);
-    if (f.min_market_cap) p.set("min_market_cap", f.min_market_cap);
-    if (f.max_pe) p.set("max_pe", f.max_pe);
-    if (f.min_roe) p.set("min_roe", f.min_roe);
-    if (f.min_revenue_growth) p.set("min_revenue_growth", f.min_revenue_growth);
-    if (f.consensus) p.set("consensus", f.consensus);
-    if (f.min_upside_pct) p.set("min_upside_pct", f.min_upside_pct);
-    p.set("limit", "1000");
-    fetch(`${API}/screener?${p}`)
+    fetch(`${API}/screener?limit=1000`)
       .then((r) => r.json())
       .then((d) => { setResults(Array.isArray(d) ? d : []); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
-  const update = (k: string, v: string) => { const f = { ...filters, [k]: v }; setFilters(f); runScreener(f); };
-  const updateMany = (patch: Partial<typeof EMPTY_FILTERS>) => { const f = { ...filters, ...patch }; setFilters(f); runScreener(f as typeof EMPTY_FILTERS); };
+  const update = (k: string, v: string) => setFilters((f) => ({ ...f, [k]: v }));
+  const updateMany = (patch: Partial<typeof EMPTY_FILTERS>) => setFilters((f) => ({ ...f, ...patch }));
   const excludedSectors = filters.exclude_sectors ? filters.exclude_sectors.split(",").filter(Boolean) : [];
   const toggleExcludeSector = (s: string) => {
     const set = new Set(excludedSectors);
@@ -94,11 +86,27 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   const handleCustomCommit = (key: string, rawValue: number, parse: (n: number) => number) => {
     update(key, String(parse(rawValue)));
   };
-  const clearFilters = () => { setFilters(EMPTY_FILTERS); setSelectModes(EMPTY_MODES); setScoreFilters(EMPTY_SCORE_FILTERS); runScreener(EMPTY_FILTERS); };
+  const clearFilters = () => { setFilters(EMPTY_FILTERS); setSelectModes(EMPTY_MODES); setScoreFilters(EMPTY_SCORE_FILTERS); };
   const updateScore = (k: string, v: string) => setScoreFilters((sf) => ({ ...sf, [k]: v }));
 
   const watchlistSet = watchlist instanceof Set ? watchlist : new Set(watchlist || []);
   const displayed = results.filter((r) => {
+    // Fundamental filters — applied client-side (mirrors backend screener() WHERE clause).
+    const f = filters;
+    if (f.sector && r.sector !== f.sector) return false;
+    if (f.exclude_sectors && excludedSectors.includes(r.sector)) return false;
+    if (f.ftse_index) {
+      if (f.ftse_index === "FTSE 350") { if (r.ftse_index !== "FTSE 100" && r.ftse_index !== "FTSE 250") return false; }
+      else if (f.ftse_index === "FTSE All-Share") { if (r.ftse_index !== "FTSE 100" && r.ftse_index !== "FTSE 250" && r.ftse_index !== "FTSE SmallCap") return false; }
+      else if (r.ftse_index !== f.ftse_index) return false;
+    }
+    if (f.min_market_cap && (r.market_cap == null || r.market_cap < +f.min_market_cap)) return false;
+    if (f.max_pe && (r.price_to_earnings == null || r.price_to_earnings <= 0 || r.price_to_earnings > +f.max_pe)) return false;
+    if (f.min_roe && (r.roe == null || r.roe < +f.min_roe)) return false;
+    if (f.min_revenue_growth && (r.revenue_growth == null || r.revenue_growth < +f.min_revenue_growth)) return false;
+    if (f.consensus && r.consensus !== f.consensus) return false;
+    if (f.min_upside_pct && (r.upside_pct == null || r.upside_pct < +f.min_upside_pct)) return false;
+    // Score filters (already client-side before this change).
     const sf = scoreFilters;
     if (sf.min_momentum && (r.momentum_score == null || r.momentum_score < +sf.min_momentum)) return false;
     if (sf.min_quality && (r.quality_score == null || r.quality_score < +sf.min_quality)) return false;

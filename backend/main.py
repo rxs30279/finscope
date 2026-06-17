@@ -758,7 +758,7 @@ def compute_and_store_scores():
 
 
 _screener_cache: dict = {}
-_SCREENER_TTL = 900  # 15 minutes — underlying data only refreshes once/day
+_SCREENER_TTL = 21600  # 6h — underlying data only refreshes once/day (matches edge s-maxage)
 
 
 @app.get("/api/screener")
@@ -776,10 +776,12 @@ def screener(
     min_upside_pct: Optional[float] = None,
     limit: int = 100,
 ):
-    # Vercel edge CDN cache — fresh for 15 min, then serve stale up to 1h
-    # while refetching in the background. Keeps cold-start delays off the
-    # critical path for nearly all users.
-    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
+    # Vercel edge CDN cache — the underlying data only changes once/day (17:00
+    # UTC Render cron), and the frontend now calls a single canonical URL
+    # (no filters; it filters client-side), so this is one cache key for all
+    # users. Fresh for 6h, then serve stale up to 24h while refetching in the
+    # background, so a user never waits on the ~13s cold-start MISS.
+    response.headers["Cache-Control"] = "public, s-maxage=21600, stale-while-revalidate=86400"
     import time
     cache_key = (
         sector, exclude_sectors, country, ftse_index, min_market_cap, max_pe,
