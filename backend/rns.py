@@ -1052,12 +1052,16 @@ def get_latest(
     min_score: int = Query(40, ge=0, le=100),
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(200, ge=1, le=1000),
+    response: Response = None,
 ):
     """Recent announcements above min_score threshold, newest first.
 
     Includes market_cap from ttm_financials (DB) with a yfinance fallback for
     companies that don't have financial data stored yet.
     """
+    # RNS lands intraday — a short edge cache collapses repeat polls/views.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=300"
     return _query(
         """
         SELECT r.id, r.published_at, r.wire, r.ticker, r.symbol, r.company_name,
@@ -1078,8 +1082,11 @@ def get_latest(
 
 
 @router.get("/significant")
-def get_significant(hours: int = Query(24, ge=1, le=168)):
+def get_significant(hours: int = Query(24, ge=1, le=168), response: Response = None):
     """Tier-A-only feed: the morning 'must-read' list."""
+    # RNS lands intraday — a short edge cache collapses repeat polls/views.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=300"
     return _query(
         """
         SELECT id, published_at, wire, ticker, symbol, company_name, headline,
@@ -1182,6 +1189,7 @@ def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
 def get_market_caps(
     hours: int = Query(72, ge=1, le=168),
     min_score: int = Query(0, ge=0, le=100),
+    response: Response = None,
 ):
     """Fetch market caps for rows that don't have one in the DB yet.
 
@@ -1191,6 +1199,10 @@ def get_market_caps(
 
     Uses Yahoo Finance with a ThreadPoolExecutor and in-memory cache.
     """
+    # Intraday data and the miss path does per-symbol yfinance calls — a short
+    # edge cache collapses repeat requests and saves those fetches.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=300"
     # Find rows in the window that are missing market_cap in ttm_financials.
     # Two cases:
     #   1. symbol IS NOT NULL but no matching ttm_financials row

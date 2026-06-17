@@ -342,8 +342,11 @@ def get_refresh_log(lines: int = 20):
 # ── API endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/latest")
-def get_latest():
+def get_latest(response: Response = None):
     """Latest analyst snapshot for every stock, with company metadata."""
+    # Analyst snapshots land once daily — hold 6h at the edge.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=21600, stale-while-revalidate=86400"
     return _query("""
         SELECT DISTINCT ON (s.symbol)
             s.symbol, s.snapshot_date, s.consensus, s.buy_pct, s.total_analysts,
@@ -358,8 +361,11 @@ def get_latest():
     """)
 
 @router.get("/changes")
-def get_changes():
+def get_changes(response: Response = None):
     """Stocks where consensus changed, buy_pct shifted >5pts, or upside_pct shifted >5pts since prior snapshot."""
+    # Analyst snapshots land once daily — hold 6h at the edge.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=21600, stale-while-revalidate=86400"
     return _query("""
         WITH ranked AS (
             SELECT *,
@@ -387,13 +393,16 @@ def get_changes():
     """)
 
 @router.get("/movers")
-def get_movers(window_days: int = Query(30, ge=1, le=365)):
+def get_movers(window_days: int = Query(30, ge=1, le=365), response: Response = None):
     """Per stock, compare the latest snapshot to the closest snapshot on or before
     `window_days` ago. Returns current + baseline analyst fields so the frontend can
     rank biggest upgrades/downgrades over the window.
 
     Only stocks with a baseline snapshot that old (enough history) are returned.
     """
+    # Analyst snapshots land once daily — hold 6h at the edge.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=21600, stale-while-revalidate=86400"
     return _query("""
         WITH latest AS (
             SELECT DISTINCT ON (symbol)

@@ -22,7 +22,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from dotenv import load_dotenv
 
 from admin_auth import require_admin_token
@@ -570,8 +570,12 @@ def get_ranked(
     min_llm_score: int = Query(60, ge=0, le=100),
     hours: int = Query(24, ge=1, le=168),
     limit: int = Query(50, ge=1, le=500),
+    response: Response = None,
 ):
     """LLM-ranked feed for the morning screen."""
+    # Populated periodically by the LLM ranking job — a 5-min edge cache is plenty.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=300, stale-while-revalidate=900"
     return _query(
         """
         SELECT id, published_at, ticker, symbol, company_name, headline, url,

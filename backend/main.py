@@ -135,7 +135,11 @@ def sitemap_xml():
 
 
 @app.get("/api/search")
-def search(q: str = Query(..., min_length=1)):
+def search(q: str = Query(..., min_length=1), response: Response = None):
+    # The universe only changes on the quarterly index refresh — hold a day at the
+    # edge so repeat type-ahead queries don't re-invoke the function.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
     return query(
         """
         SELECT symbol, name, sector, industry, exchange, country
@@ -1103,7 +1107,11 @@ def help_doc(slug: str = "user-manual"):
 
 
 @app.get("/api/filters")
-def filters():
+def filters(response: Response = None):
+    # Sector/country lists only change on the quarterly index refresh — hold a day
+    # at the edge. Called by the screener on every page load.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
     sectors = query(
         "SELECT DISTINCT sector FROM company_metadata WHERE sector IS NOT NULL ORDER BY sector"
     )

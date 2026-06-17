@@ -963,9 +963,12 @@ def _rebuild_fear_greed_history():
 
 
 @router.get("/fear-greed/history")
-def fear_greed_history():
+def fear_greed_history(response: Response):
     """Rolling-year daily UK vs US Fear & Greed. Reads the persisted table; if it
     is empty (first run before the cron has populated it), lazily rebuilds once."""
+    # Daily series rebuilt by the cron — hold 1h at the edge so at most one request
+    # per hour can hit the (expensive) lazy-rebuild fallback.
+    response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
     def read():
         rows = _db_query(
             "SELECT date, uk_score, us_score, vix FROM fear_greed_history"
@@ -1047,7 +1050,10 @@ def sidebar(response: Response):
 
 
 @router.get("/rotation")
-def rotation():
+def rotation(response: Response):
+    # Live intraday signal, but the in-process cache already tolerates 15-min
+    # staleness — edge-cache it so cold starts don't re-run the yfinance pipeline.
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
     return _cached("rotation", _compute_rotation)
 
 
@@ -1155,7 +1161,9 @@ def _compute_breadth(prices=None):
 
 
 @router.get("/breadth")
-def breadth():
+def breadth(response: Response):
+    # Live intraday, 15-min edge cache (matches the in-process cache staleness).
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
     return _cached("breadth", _compute_breadth)
 
 
@@ -1216,7 +1224,9 @@ def _compute_cross_asset():
 
 
 @router.get("/cross-asset")
-def cross_asset():
+def cross_asset(response: Response):
+    # Live intraday, 15-min edge cache (matches the in-process cache staleness).
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
     return _cached("cross_asset", _compute_cross_asset)
 
 
@@ -1253,17 +1263,23 @@ def _fetch_uk_macro():
 
 
 @router.get("/uk-macro")
-def uk_macro():
+def uk_macro(response: Response):
+    # ONS CPI/GDP — changes monthly at most. Hold a day at the edge.
+    response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
     return _cached("uk_macro", _fetch_uk_macro)
 
 
 @router.get("/gilt-yields")
-def gilt_yields():
+def gilt_yields(response: Response):
+    # BoE yields update daily; the miss path fetches + parses an Excel file. Hold 1h.
+    response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
     return _cached("gilt_yields", _fetch_boe_gilt_yields)
 
 
 @router.get("/fear-greed")
-def fear_greed():
+def fear_greed(response: Response):
+    # Live intraday, 15-min edge cache (matches the in-process cache staleness).
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
     return _cached("fear_greed", _compute_fear_greed)
 
 
@@ -1316,5 +1332,7 @@ def _compute_signals():
 
 
 @router.get("/signals")
-def signals():
+def signals(response: Response):
+    # = rotation + breadth; live intraday, 15-min edge cache.
+    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
     return _cached("signals", _compute_signals)
