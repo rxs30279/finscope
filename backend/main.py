@@ -18,6 +18,7 @@ from news import router as news_router
 from subscribers import router as subscribers_router
 from feedback import router as feedback_router
 from email_rns_digest import main as run_digest
+from sectors import to_icb, to_gics
 
 load_dotenv()
 
@@ -798,14 +799,17 @@ def screener(
 
     wheres = ["1=1"]
     params = []
+    # Filters arrive as ICB names (what the UI shows); the DB stores raw GICS, so
+    # map back before matching. See backend/sectors.py.
     if sector:
-        wheres.append("m.sector = %s")
-        params.append(sector)
+        wheres.append("m.sector = ANY(%s)")
+        params.append(to_gics(sector))
     if exclude_sectors:
         excluded = [s.strip() for s in exclude_sectors.split(",") if s.strip()]
         if excluded:
+            gics_excluded = [g for s in excluded for g in to_gics(s)]
             wheres.append("m.sector <> ALL(%s)")
-            params.append(excluded)
+            params.append(gics_excluded)
     if country:
         wheres.append("m.country = %s")
         params.append(country)
@@ -879,6 +883,10 @@ def screener(
     for r in results:
         r["quality_score"] = _quality_score(r)
     _attach_pegy(results)
+    # Surface ICB labels so the table matches the sidebar/heatmap. Done last so
+    # scoring above still sees the raw GICS sector it was built against.
+    for r in results:
+        r["sector"] = to_icb(r["sector"])
     _screener_cache[cache_key] = (results, now)
     return results
 
@@ -1118,8 +1126,11 @@ def filters(response: Response = None):
     countries = query(
         "SELECT DISTINCT country FROM company_metadata WHERE country IS NOT NULL ORDER BY country"
     )
+    # Map GICS → ICB for display, then dedupe/sort (two GICS names could collapse
+    # to one ICB name). The screener maps the selection back to GICS on filter.
+    icb_sectors = sorted({to_icb(r["sector"]) for r in sectors})
     return {
-        "sectors": [r["sector"] for r in sectors],
+        "sectors": icb_sectors,
         "countries": [r["country"] for r in countries],
     }
 
