@@ -1170,7 +1170,31 @@ def sector_constituents(response: Response):
 
 _heatmap_cache: dict = {}
 _HEATMAP_TTL = 900  # 15 minutes — price history refreshes once/day
-_HEATMAP_LIVE_TTL = 60  # live mode: near-real-time, refreshed each minute
+_HEATMAP_LIVE_TTL = 60  # live mode, market open: near-real-time, refreshed each minute
+# Live mode while the LSE is closed: the "live" figure is just the last completed
+# session's close-to-close move, which is static until the next session. So the
+# expensive full-universe yfinance scrape only needs to run rarely — cache it
+# long instead of re-scraping every 60s, which is what made the closed-market
+# heatmap slow to load.
+_HEATMAP_LIVE_CLOSED_TTL = 1800  # 30 minutes
+
+
+def _lse_open(now=None):
+    """True if the LSE is in a regular trading session right now (Mon–Fri,
+    08:00–16:30 London). Holidays aren't excluded: misjudging a holiday as
+    "open" only forgoes the aggressive closed-market cache (the data is static
+    anyway), so it degrades to the old 60s behaviour rather than serving wrong
+    data. Mirrors isLseOpen() in frontend HeatmapTab.js."""
+    from datetime import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+        now = now or _dt.now(ZoneInfo("Europe/London"))
+    except Exception:
+        now = now or _dt.utcnow()  # London ≈ UTC; close enough for the gate
+    if now.weekday() >= 5:  # Sat/Sun
+        return False
+    mins = now.hour * 60 + now.minute
+    return 8 * 60 <= mins <= 16 * 60 + 30
 
 
 def _live_moves(symbols):
@@ -1223,10 +1247,20 @@ def heatmap(response: Response, ftse_index: Optional[str] = None, live: bool = F
     """
     import time
 
-    ttl = _HEATMAP_LIVE_TTL if live else _HEATMAP_TTL
-    s_maxage = 60 if live else 900
+    # While the market is open, live data moves minute-to-minute (60s). Once
+    # closed, the live figure settles to the last session's move and is static
+    # until the next session, so cache it long and let the edge serve it stale —
+    # this is what keeps the closed-market heatmap from re-scraping yfinance on
+    # every load.
+    if live:
+        if _lse_open():
+            ttl, s_maxage, swr = _HEATMAP_LIVE_TTL, 60, 3600
+        else:
+            ttl, s_maxage, swr = _HEATMAP_LIVE_CLOSED_TTL, _HEATMAP_LIVE_CLOSED_TTL, 86400
+    else:
+        ttl, s_maxage, swr = _HEATMAP_TTL, 900, 3600
     response.headers["Cache-Control"] = (
-        f"public, s-maxage={s_maxage}, stale-while-revalidate=3600"
+        f"public, s-maxage={s_maxage}, stale-while-revalidate={swr}"
     )
 
     cache_key = (ftse_index or "all", live)
