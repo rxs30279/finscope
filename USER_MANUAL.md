@@ -1,6 +1,6 @@
 # Alpha Move AI — UK Stock Screener — User Manual
 
-**Edition:** June 2026  
+**Edition:** June 2026 (revised 20 June 2026)  
 **Audience:** Investors new to financial analysis  
 **Purpose:** A plain-English guide to understanding what you are seeing and how to use these tools to find UK companies with the **greatest chance of upside** and the **smallest downside risk**.
 
@@ -113,7 +113,7 @@ When you open Alpha Move AI you see:
 - **Main content area** — changes depending on which page you are on.
 - **Search bar** — type a company name or ticker symbol to jump straight to its detail page.
 
-> **Direct links to companies:** When you open a company page, the URL updates to include the ticker (e.g. `…#company/AZN.L`). You can bookmark or share that link to land directly on that company. The browser **Back** button takes you back to wherever you came from (screener, watchlist, RNS feed, etc.).
+> **Direct links to companies:** When you open a company page, the URL updates to include the ticker (e.g. `…/company?symbol=AZN.L`). You can bookmark or share that link to land directly on that company. The browser **Back** button takes you back to wherever you came from (screener, watchlist, RNS feed, etc.) — and the Screener remembers the filters, sort and view you had set, so you return to exactly the shortlist you left.
 
 ---
 
@@ -136,7 +136,7 @@ The Screener is the heart of the application. It displays a table of UK stocks w
 | **P/B** | **Price-to-Book ratio** — share price divided by the company's net asset value per share. P/B < 1 means you are buying £1 of assets for less than £1. | Useful for asset-heavy sectors like banks and property |
 | **ROE** | **Return on Equity** — net profit as a percentage of shareholders' equity. Measures how efficiently management uses your money. 15%+ is generally considered good. | Higher is better; look for consistency over several years |
 | **Rev Growth** | Year-on-year revenue growth percentage | Positive and growing is ideal |
-| **D/E** | **Debt-to-Equity ratio** — total debt divided by shareholders' equity. A D/E of 1.0 means the company has £1 of debt for every £1 of equity. High D/E increases risk, especially when interest rates are high. | Lower is safer; context matters (utilities typically carry more debt) |
+| **D/E** | **Debt-to-Equity ratio** — total debt divided by shareholders' equity. A D/E of 1.0 means the company has £1 of debt for every £1 of equity. A genuinely debt-free company shows **0** (not a blank). High D/E increases risk, especially when interest rates are high. | Lower is safer; context matters (utilities typically carry more debt) |
 | **PEGY** | **Price/Earnings divided by (Growth + Yield)**. A simple "value-for-money" check. See Section 3.5. | Below 1 = potentially great value; 1–2 = fair; above 2 = expensive for the growth |
 | **Momentum** | A score from 1–10 measuring price trend strength. See Section 3.2. | Higher score = stronger upward trend |
 | **Quality** | A score from 0–10 measuring the consistency and level of returns. See Section 3.2. | Higher is better |
@@ -328,6 +328,8 @@ The app detects a financial by its sector name (anything containing "financ", "b
 ### 3.3 Using the Filters
 
 The filter panel (above the screener table) lets you narrow the universe. Filters can be combined.
+
+> **Your screen is remembered.** The filters, the column you sorted by, and whether you are in Fundamentals or Analyst view are all **persisted in your browser**. If you click into a company and press Back — or simply close the tab and return later — the Screener reloads with exactly the same shortlist you had set up, rather than resetting to defaults.
 
 #### Basic Filters
 
@@ -536,6 +538,10 @@ Shows five years of annual income statement data in chart form:
 
 **What to look for:** All five lines ideally trending upward over 5 years. A company where revenue grows but net income and FCF do not is potentially a value trap — revenue growth is not translating into shareholder value.
 
+**The "Earnings & Revenue" waterfall**
+
+Above the trend charts, a **waterfall chart** breaks down the most recent financial year, showing how the top line becomes the bottom line step by step: **Revenue → Cost of Revenue → Gross Profit → Other Expenses → Earnings**. Each floating bar starts where the previous one finished, so you can see at a glance how much of every £1 of sales is eaten by the cost of goods and by overheads before it lands as profit. A company that keeps a large share of its revenue all the way down to Earnings is highly profitable; one where the bars collapse quickly is operating on thin margins.
+
 ---
 
 ### 4.4 Valuation Tab
@@ -597,11 +603,12 @@ The Company News tab pulls together everything written about the company over th
 **Three sections on this tab:**
 
 1. **AI Summary — Last 60 Days** *(top of page, purple panel)*
-   - Press the **✦ Generate summary** button and DeepSeek (an AI model) will read every regulatory announcement and press article from the last 60 days, then produce:
+   - When a summary has been produced for the company, DeepSeek (an AI model) has read every regulatory announcement and press article from the last 60 days and condensed them into:
      - **Summary paragraph:** the top-level story
      - **Key themes:** 2–4 bulleted angles (e.g. "Margin pressure from input costs", "Successful product launch in Asia")
      - **Watch Next:** the one or two events that will determine whether the story continues or breaks
-   - Click **↻ Regenerate** if new news has come in since the last summary.
+   - The panel is stamped with the date the summary was generated and the underlying item counts. If no summary has been produced yet, the panel says so.
+   - **Note:** generating and refreshing summaries is an on-demand operation reserved for the site administrators (each run makes a paid AI call), so you will see the most recent summary on record rather than a "Generate" button.
 
 2. **Regulatory (RNS) feed** *(orange header)*
    - The official Stock Exchange announcements the company has filed (results, M&A, director dealings, contract wins, capital raises, etc.).
@@ -613,7 +620,7 @@ The Company News tab pulls together everything written about the company over th
 
 3. **Press / Google News feed** *(orange header)*
    - Articles from the wider press (FT, Reuters, Bloomberg, broker notes covered in the press, etc.) sourced from Google News.
-   - Cached for 24 hours per company; click **↻ Refresh news** at the top to force a fresh fetch.
+   - Cached for 24 hours per company and refreshed automatically, so the feed stays current without any action on your part. (A manual "↻ Refresh news" control exists but is reserved for site administrators.)
 
 **Why the news tab matters for upside / downside:**
 
@@ -833,7 +840,7 @@ The challenge is that there are hundreds of RNS releases every trading day, most
 
 ### 8.2 The Two-Layer Pipeline
 
-When you press **↻ Refresh + AI rank**, the app runs three stages in sequence (you can watch the live stage indicator on the button):
+Behind the scenes the app runs a three-stage pipeline that keeps the feed populated and ranked:
 
 | Stage | What it does |
 |---|---|
@@ -841,7 +848,7 @@ When you press **↻ Refresh + AI rank**, the app runs three stages in sequence 
 | **Summaries** | Fetches the AI-generated summary for each announcement from Investegate. |
 | **Rank** | Sends each Tier A and Tier B item to **DeepSeek** (an AI model) for ranking, scoring, and a "what to do about it" recommendation. |
 
-The pipeline takes 1–3 minutes per refresh. It also runs automatically in the background several times per UK trading day (every 15 minutes during the morning RNS window), so the feed is usually fresh.
+This pipeline runs **automatically in the background** several times per UK trading day (roughly every 15 minutes during the morning RNS window), so the feed is kept fresh for you with no action required — there is no button to press. You simply open the page and read the latest ranked items.
 
 #### The Tier system
 
@@ -1145,7 +1152,7 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 
 5. **Catalyst check** *(RNS News + Company News tab)*
    - For each survivor, open the company page → **News tab**.
-   - Press **✦ Generate AI summary**. Read it.
+   - Read the **AI summary** if one is shown, then scan the regulatory feed yourself.
    - Look at the recent RNS. Are there:
      - Positive Tier A or B items in the past 30 days? (BULLISH stack)
      - Negative profit warnings or going-concern flags? (DROP IT)

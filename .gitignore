@@ -12,6 +12,7 @@ node_modules/
 build/
 .next/
 .env.local
+*.tsbuildinfo
 
 # Logs
 *.log
@@ -41,6 +42,10 @@ Thumbs.db
 *.pdf
 *.xlsx
 
+# Generated HTML edition of the user manual (built from USER_MANUAL.md by
+# build_manual_html.py; an artifact, not a source — don't track it)
+Alpha_Move_AI_User_Manual.html
+
 # Manual screenshots — source images for the user manual, kept local only
-# (they're embedded into Alpha_Move_AI_User_Manual.docx by build_manual.py)
+# (they're embedded into Alpha_Move_AI_User_Manual.pdf by build_manual_html.py)
 manual_assets/shots/
