@@ -169,3 +169,36 @@ export const saveChartPrefs = (prefs: ChartPrefs): void => {
     window.localStorage.setItem(CHART_PREFS_KEY, JSON.stringify(prefs));
   } catch {}
 };
+
+// Screener filter/sort/view state. Persisted so a filter set survives leaving the
+// screener (e.g. to inspect a company) and coming back — without it the route
+// unmounts and React state resets to the empty defaults on every return visit.
+export const SCREENER_STATE_KEY = "stock_screener_screener_state_v1";
+
+export interface ScreenerState {
+  filters: Record<string, string>;
+  selectModes: Record<string, string>;
+  scoreFilters: Record<string, string>;
+  tableView: string;
+  sortCol: string | null;
+  sortDir: "asc" | "desc";
+  showAdvanced: boolean;
+}
+
+export const loadScreenerState = (): Partial<ScreenerState> => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(SCREENER_STATE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveScreenerState = (state: ScreenerState): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SCREENER_STATE_KEY, JSON.stringify(state));
+  } catch {}
+};

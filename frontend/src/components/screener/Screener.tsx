@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { API } from "@/lib/api";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
+import { loadScreenerState, saveScreenerState } from "@/lib/storage";
 import HybridSelect from "@/components/company/HybridSelect";
 import SectorDropdown from "./SectorDropdown";
 import StarButton from "./StarButton";
@@ -44,6 +45,27 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   const [tableView, setTableView] = useState("fundamentals");
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Hydrate persisted filters/sort/view on mount (in an effect, not a lazy
+  // initializer, so SSR and first client render agree). `hydrated` then gates the
+  // save effect so the empty defaults don't overwrite saved state before load.
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const s = loadScreenerState();
+    if (s.filters) setFilters((f) => ({ ...f, ...s.filters }));
+    if (s.selectModes) setSelectModes((m) => ({ ...m, ...s.selectModes }));
+    if (s.scoreFilters) setScoreFilters((sf) => ({ ...sf, ...s.scoreFilters }));
+    if (s.tableView) setTableView(s.tableView);
+    if (s.sortCol !== undefined) setSortCol(s.sortCol);
+    if (s.sortDir) setSortDir(s.sortDir);
+    if (s.showAdvanced) setShowAdvanced(s.showAdvanced);
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveScreenerState({ filters, selectModes, scoreFilters, tableView, sortCol, sortDir, showAdvanced });
+  }, [hydrated, filters, selectModes, scoreFilters, tableView, sortCol, sortDir, showAdvanced]);
 
   useEffect(() => {
     fetch(`${API}/filters`).then((r) => r.json()).then(setFilterOpts);

@@ -14,6 +14,24 @@ import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
 
+// The waterfall's category labels ("Cost of Revenue", "Other Expenses", …) are
+// too wide to sit horizontally on mobile without overlapping. Rather than rotate
+// them, wrap multi-word labels onto two lines (split at the midpoint word) so
+// they stay horizontal. A custom tick is needed because Recharts ticks are
+// single-line by default.
+const WrapTick = ({ x, y, payload }: any) => {
+  const words = String(payload?.value ?? "").split(" ");
+  const mid = Math.ceil(words.length / 2);
+  const lines = words.length <= 1 ? words : [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
+  return (
+    <text x={x} y={y} textAnchor="middle" fill="#cbd5e1" fontSize={11} fontFamily="monospace">
+      {lines.map((ln, i) => (
+        <tspan key={i} x={x} dy={12}>{ln}</tspan>
+      ))}
+    </text>
+  );
+};
+
 interface Props {
   symbol: string;
   onBack: () => void;
@@ -86,6 +104,11 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
   const hasQuarterlyRevenue = qChart.some((r: any) => r.revenue != null);
   const hasDebtEq = annualChart.some((r: any) => r.debt_eq != null);
 
+  // A line/area with a single plottable point draws no segment and so renders as
+  // nothing. Show a marker dot only in that case; multi-point series stay dot-free.
+  const singleDot = (key: string, fill: string) =>
+    annualChart.filter((d: any) => d[key] != null).length === 1 ? { r: 4, fill } : false;
+
   // Latest-year income-statement waterfall: Revenue → Cost of Revenue →
   // Gross Profit → Other Expenses → Earnings. Cost of Revenue and Other
   // Expenses are the reconciling bridges (revenue−gross profit, gross
@@ -101,11 +124,11 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
     const earnings = latestAnnual.net_income;
     if (revenue == null || grossProfit == null || earnings == null) return null;
     return [
-      { name: "Revenue", range: [0, revenue], amount: revenue, fill: "#2495e0" },
-      { name: "Cost of Revenue", range: [grossProfit, revenue], amount: revenue - grossProfit, fill: "#833131" },
-      { name: "Gross Profit", range: [0, grossProfit], amount: grossProfit, fill: "#2ecc87" },
-      { name: "Other Expenses", range: [earnings, grossProfit], amount: grossProfit - earnings, fill: "#833131" },
-      { name: "Earnings", range: [0, earnings], amount: earnings, fill: "#3fd9c2" },
+      { name: "Revenue", range: [0, revenue], amount: revenue, fill: "#6366f1" },
+      { name: "Cost of Revenue", range: [grossProfit, revenue], amount: revenue - grossProfit, fill: "#ef4444" },
+      { name: "Gross Profit", range: [0, grossProfit], amount: grossProfit, fill: "#10b981" },
+      { name: "Other Expenses", range: [earnings, grossProfit], amount: grossProfit - earnings, fill: "#ef4444" },
+      { name: "Earnings", range: [0, earnings], amount: earnings, fill: "#22d3ee" },
     ];
   })();
 
@@ -214,9 +237,9 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                 <XAxis dataKey="year" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
                 <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
-                <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#gR)" strokeWidth={2} name="Revenue" />
-                <Area type="monotone" dataKey="ebitda" stroke="#10b981" fill="url(#gE)" strokeWidth={2} name="EBITDA" />
-                <Line type="monotone" dataKey="fcf" stroke="#f59e0b" strokeWidth={2} dot={false} name="FCF" />
+                <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#gR)" strokeWidth={2} dot={singleDot("revenue", "#6366f1")} name="Revenue" />
+                <Area type="monotone" dataKey="ebitda" stroke="#10b981" fill="url(#gE)" strokeWidth={2} dot={singleDot("ebitda", "#10b981")} name="EBITDA" />
+                <Line type="monotone" dataKey="fcf" stroke="#f59e0b" strokeWidth={2} dot={singleDot("fcf", "#f59e0b")} name="FCF" />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -240,7 +263,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
                   <Tooltip formatter={(v: any) => sym + v?.toFixed(2)} contentStyle={S.tooltip} />
                   <ReferenceLine y={0} stroke="#334155" />
-                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4, fill: "#6366f1" }} name="EPS" />
+                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={singleDot("eps", "#6366f1")} name="EPS" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -250,7 +273,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               <h3 style={S.cardTitle}>{`Earnings & Revenue (FY ${latestAnnual.period_end_date?.slice(0, 4)})`}</h3>
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={waterfall} margin={{ top: 24, right: 10, bottom: 5, left: 4 }} barCategoryGap="12%">
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#cbd5e1" }} interval={0} tickLine={false} axisLine={{ stroke: "#334155" }} />
+                  <XAxis dataKey="name" tick={isMobile ? <WrapTick /> : { fontSize: 12, fill: "#cbd5e1" }} interval={0} tickLine={false} axisLine={{ stroke: "#334155" }} {...(isMobile ? { height: 48 } : {})} />
                   <YAxis hide />
                   <Tooltip
                     cursor={{ fill: "#ffffff08" }}
@@ -266,7 +289,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                       content={(props: any) => {
                         const { x, y, width, value } = props;
                         return (
-                          <text x={x} y={y - 6} textAnchor="start" fill="#e5e7eb" fontSize={12} fontFamily="monospace">
+                          <text x={x + width / 2} y={y - 6} textAnchor="middle" fill="#e5e7eb" fontSize={12} fontFamily="monospace">
                             {fmt(value, "currency", fcur)}
                           </text>
                         );
@@ -316,7 +339,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
                   <Tooltip contentStyle={S.tooltip} />
                   <ReferenceLine y={0} stroke="#334155" />
-                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 3 }} name="EPS" />
+                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={singleDot("eps", "#6366f1")} name="EPS" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -327,9 +350,9 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" />
                   <Tooltip formatter={(v: any) => `${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
                   <ReferenceLine y={0} stroke="#334155" />
-                  <Line type="monotone" dataKey="roe" stroke="#6366f1" strokeWidth={2} dot={false} name="ROE" />
-                  <Line type="monotone" dataKey="roic" stroke="#10b981" strokeWidth={2} dot={false} name="ROIC" />
-                  <Line type="monotone" dataKey="roa" stroke="#f59e0b" strokeWidth={2} dot={false} name="ROA" />
+                  <Line type="monotone" dataKey="roe" stroke="#6366f1" strokeWidth={2} dot={singleDot("roe", "#6366f1")} name="ROE" />
+                  <Line type="monotone" dataKey="roic" stroke="#10b981" strokeWidth={2} dot={singleDot("roic", "#10b981")} name="ROIC" />
+                  <Line type="monotone" dataKey="roa" stroke="#f59e0b" strokeWidth={2} dot={singleDot("roa", "#f59e0b")} name="ROA" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -374,7 +397,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                     </defs>
                     <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
                     <Tooltip contentStyle={S.tooltip} />
-                    <Area type="monotone" dataKey="debt_eq" stroke="#ef4444" fill="url(#gD)" strokeWidth={2} dot={{ r: 3, fill: "#ef4444" }} name="D/E" />
+                    <Area type="monotone" dataKey="debt_eq" stroke="#ef4444" fill="url(#gD)" strokeWidth={2} dot={singleDot("debt_eq", "#ef4444")} name="D/E" />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
@@ -390,7 +413,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
                   <Tooltip contentStyle={S.tooltip} />
                   <ReferenceLine y={1} stroke="#f59e0b" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="curr_ratio" stroke="#10b981" strokeWidth={2.5} dot={{ r: 3 }} name="Current Ratio" />
+                  <Line type="monotone" dataKey="curr_ratio" stroke="#10b981" strokeWidth={2.5} dot={singleDot("curr_ratio", "#10b981")} name="Current Ratio" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -412,9 +435,9 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                 <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" />
                 <Tooltip formatter={(v: any) => `${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
                 <ReferenceLine y={0} stroke="#334155" />
-                <Line type="monotone" dataKey="gross_margin" stroke="#6366f1" strokeWidth={2} dot={false} name="Gross Margin" />
-                <Line type="monotone" dataKey="op_margin" stroke="#10b981" strokeWidth={2} dot={false} name="Op. Margin" />
-                <Line type="monotone" dataKey="net_margin" stroke="#f59e0b" strokeWidth={2} dot={false} name="Net Margin" />
+                <Line type="monotone" dataKey="gross_margin" stroke="#6366f1" strokeWidth={2} dot={singleDot("gross_margin", "#6366f1")} name="Gross Margin" />
+                <Line type="monotone" dataKey="op_margin" stroke="#10b981" strokeWidth={2} dot={singleDot("op_margin", "#10b981")} name="Op. Margin" />
+                <Line type="monotone" dataKey="net_margin" stroke="#f59e0b" strokeWidth={2} dot={singleDot("net_margin", "#f59e0b")} name="Net Margin" />
               </LineChart>
             </ResponsiveContainer>
           </div>

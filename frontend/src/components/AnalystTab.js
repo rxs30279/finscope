@@ -211,7 +211,7 @@ export default function AnalystTab({ symbol }) {
                 formatter={v => [`${v?.toFixed(1)}%`, 'Buy%']}
                 contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
               />
-              <Line type="monotone" dataKey="buy_pct" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} name="Buy%" />
+              <Line type="monotone" dataKey="buy_pct" stroke="#10b981" strokeWidth={2} dot={false} name="Buy%" />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -231,8 +231,8 @@ export default function AnalystTab({ symbol }) {
                 contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
               />
               <Legend wrapperStyle={{ fontSize: 10, fontFamily: 'monospace' }} />
-              <Line type="monotone" dataKey="target" stroke="#f97316" strokeWidth={2} dot={{ r: 3 }} name="Mean Target" connectNulls />
-              <Line type="monotone" dataKey="price" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} name="Price" connectNulls />
+              <Line type="monotone" dataKey="target" stroke="#f97316" strokeWidth={2} dot={false} name="Mean Target" connectNulls />
+              <Line type="monotone" dataKey="price" stroke="#6366f1" strokeWidth={2} dot={false} name="Price" connectNulls />
             </LineChart>
           </ResponsiveContainer>
         </div>
