@@ -154,9 +154,9 @@ def search(q: str = Query(..., min_length=1), response: Response = None):
 @app.get("/api/company")
 def company(symbol: str = Query(...), response: Response = None):
     # Company metadata changes only on the quarterly index refresh — safe to hold
-    # at the edge for an hour so repeat profile views don't re-invoke the function.
+    # at the edge for a day so repeat profile views don't re-invoke the function.
     if response is not None:
-        response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
+        response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
     rows = query("SELECT * FROM company_metadata WHERE symbol = %s", (symbol,))
     if not rows:
         raise HTTPException(404, "Not found")
@@ -166,10 +166,10 @@ def company(symbol: str = Query(...), response: Response = None):
 @app.get("/api/snapshot")
 def snapshot(symbol: str = Query(...), response: Response = None):
     # Does a price_history scan + risk computation per call; the underlying data
-    # only changes daily, so edge-caching removes both the DB read and the CPU
-    # on every repeat view.
+    # only changes daily, so hold it a full day at the edge to remove both the DB
+    # read and the CPU on every repeat view within the day.
     if response is not None:
-        response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
+        response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
     rows = query(
         """
         SELECT t.*, m.sector

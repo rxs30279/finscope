@@ -460,12 +460,14 @@ def get_prices(symbol: str, response: Response):
     Cached on Vercel's edge CDN: the series only changes once/day (the nightly
     prices cron), so without this every chart view read the full history straight
     out of Supabase — the single biggest driver of DB egress as user count grows.
-    Fresh 1h, serve stale up to a day while revalidating. The intraday live price
-    is overlaid client-side from the separate /quotes endpoint, so caching the
-    historical series here doesn't staleness-block the latest tick.
+    Held 24h to match the daily refresh cadence (the universe is ~500 symbols, so
+    this caps the worst-case full-universe egress at ~once/day rather than
+    ~once/hour); serve stale up to a further day while revalidating. The intraday
+    live price is overlaid client-side from the separate /quotes endpoint, so
+    caching the historical series here doesn't staleness-block the latest tick.
     """
     response.headers["Cache-Control"] = (
-        "public, s-maxage=3600, stale-while-revalidate=86400"
+        "public, s-maxage=86400, stale-while-revalidate=86400"
     )
     rows = query(
         "SELECT date, open, high, low, close, volume FROM price_history"
