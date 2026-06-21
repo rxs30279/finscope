@@ -793,10 +793,11 @@ def compute_and_store_scores():
 # So everything outside that safe subset gets no estimate (the UI shows "no
 # comparable basis") rather than a misleading number.
 #
-# Peers are TRUE peers only: same yfinance `industry`, no sector fallback. A
-# sector-wide median (e.g. all 80 Industrials) isn't a peer group — it lumped a
-# lighting maker in with the whole sector — so a thin industry (<MIN_PEERS) gets
-# no estimate rather than a diluted one.
+# Peers are TRUE peers only: same yfinance `industry` (with over-split industries
+# merged into analytical groups, see _INDUSTRY_GROUPS / _peer_group), no sector
+# fallback. A sector-wide median (e.g. all 80 Industrials) isn't a peer group — it
+# lumped a lighting maker in with the whole sector — so a thin group (<MIN_PEERS)
+# gets no estimate rather than a diluted one.
 
 MIN_PEERS = 3  # genuine industry peers required (a 3-name median still resists one outlier)
 MAX_NET_DEBT_TO_MKT_CAP = 1.0  # leverage cap → equity-bridge amplification <= ~2x
@@ -805,6 +806,67 @@ SANITY_MAX_ABS_UPSIDE = 150.0  # final backstop (percent) against data glitches
 # in company_metadata.sector (see backend/sectors.py); _is_financial also catches
 # bank/insurance naming as a belt-and-braces.
 _EXCLUDED_SECTORS = {"Financial Services", "Real Estate"}
+
+# yfinance over-splits some industries, stranding true peers below MIN_PEERS
+# (e.g. AZN + GSK alone in "Drug Manufacturers - General"; SHEL + BP alone in
+# "Oil & Gas Integrated"). Merge the over-split ones into a single analytical peer
+# group. Keys are raw yfinance industries; anything unlisted passes through as-is.
+_INDUSTRY_GROUPS = {
+    "Drug Manufacturers - General": "Pharmaceuticals",
+    "Drug Manufacturers - Specialty & Generic": "Pharmaceuticals",
+    "Oil & Gas Integrated": "Oil & Gas",
+    "Oil & Gas E&P": "Oil & Gas",
+    "Oil & Gas Equipment & Services": "Oil & Gas",
+    "Oil & Gas Refining & Marketing": "Oil & Gas",
+    "Gold": "Metals & Mining",
+    "Other Industrial Metals & Mining": "Metals & Mining",
+    "Copper": "Metals & Mining",
+    "Other Precious Metals & Mining": "Metals & Mining",
+    "Steel": "Metals & Mining",
+    "Leisure": "Travel & Leisure",
+    "Travel Services": "Travel & Leisure",
+    "Lodging": "Travel & Leisure",
+    "Resorts & Casinos": "Travel & Leisure",
+    "Gambling": "Travel & Leisure",
+    "Marine Shipping": "Transportation",
+    "Airlines": "Transportation",
+    "Railroads": "Transportation",
+    "Medical Devices": "Medical Devices & Supplies",
+    "Medical Instruments & Supplies": "Medical Devices & Supplies",
+    "Medical Distribution": "Medical Devices & Supplies",
+    "Computer Hardware": "Tech Hardware",
+    "Electronic Components": "Tech Hardware",
+    "Communication Equipment": "Tech Hardware",
+    "Electronics & Computer Distribution": "Tech Hardware",
+    "Auto & Truck Dealerships": "Automotive",
+    "Auto Parts": "Automotive",
+    "Auto Manufacturers": "Automotive",
+    "Grocery Stores": "Food Retail & Distribution",
+    "Discount Stores": "Food Retail & Distribution",
+    "Food Distribution": "Food Retail & Distribution",
+    "Beverages - Non-Alcoholic": "Beverages",
+    "Beverages - Brewers": "Beverages",
+    "Beverages - Wineries & Distilleries": "Beverages",
+}
+
+# Per-symbol overrides for companies yfinance mis-tags into the wrong industry, so
+# they're valued against their real peers rather than an unrelated group.
+_SYMBOL_GROUPS = {
+    "GAW.L": "Specialty Retail",                  # hobby manufacturer/retailer, tagged "Leisure"
+    "VSVS.L": "Specialty Industrial Machinery",   # steel-industry supplier, tagged "Steel" (not a miner)
+    "BNZL.L": "Industrial Distribution",          # B2B distributor, tagged "Food Distribution"
+    "DCC.L": "Industrial Distribution",           # distribution/support-services group, tagged Oil & Gas
+}
+
+
+def _peer_group(symbol, industry):
+    """Canonical peer group for a company: a per-symbol override if any, else the
+    merged industry group, else the raw industry. None when industry is unknown."""
+    if symbol in _SYMBOL_GROUPS:
+        return _SYMBOL_GROUPS[symbol]
+    if not industry:
+        return None
+    return _INDUSTRY_GROUPS.get(industry, industry)
 
 
 def _valuation_eligible(r, _f):
@@ -896,13 +958,15 @@ def compute_and_store_valuations():
     def _f(x):
         return float(x) if x is not None else None
 
-    def _peer_values(self_sym, industry):
-        """Valid (>0) EV/EBITDA values for active members of the same industry."""
-        if not industry:
+    def _peer_values(self_sym, group):
+        """Valid (>0) EV/EBITDA values for active members of the same peer group."""
+        if not group:
             return []
         vals = []
         for o in universe:
-            if o["symbol"] == self_sym or o.get("industry") != industry:
+            if o["symbol"] == self_sym:
+                continue
+            if _peer_group(o["symbol"], o.get("industry")) != group:
                 continue
             v = _f(o.get("ev_to_ebitda"))
             if v is not None and v > 0:
@@ -921,7 +985,7 @@ def compute_and_store_valuations():
                              "insufficient", 0, None, None, False))
             continue
 
-        peer_vals = _peer_values(sym, r.get("industry"))
+        peer_vals = _peer_values(sym, _peer_group(sym, r.get("industry")))
         basis = "industry"
         if len(peer_vals) < MIN_PEERS:
             rows_out.append((sym, None, cur_price_r, None, "EV/EBITDA",

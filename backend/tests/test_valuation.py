@@ -1,7 +1,7 @@
 import sys, os, pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import (
-    _valuation_eligible, _peer_median, _fair_value_upside,
+    _valuation_eligible, _peer_median, _fair_value_upside, _peer_group,
     MAX_NET_DEBT_TO_MKT_CAP,
 )
 
@@ -54,6 +54,24 @@ def test_eligible_at_leverage_cap():
 
 def test_excluded_missing_ev_ebitda():
     assert _valuation_eligible(_ok_row(ev_to_ebitda=None), _f) is None
+
+
+# ── _peer_group (industry merges + per-symbol overrides) ────────────────────────
+
+def test_peer_group_merges_oversplit_industry():
+    # AZN and GSK sit in different-but-related drug industries; both -> Pharmaceuticals.
+    assert _peer_group("AZN.L", "Drug Manufacturers - General") == "Pharmaceuticals"
+    assert _peer_group("XYZ.L", "Drug Manufacturers - Specialty & Generic") == "Pharmaceuticals"
+
+def test_peer_group_passthrough_for_unmapped_industry():
+    assert _peer_group("ABC.L", "Specialty Retail") == "Specialty Retail"
+
+def test_peer_group_symbol_override_wins():
+    # yfinance tags Bunzl "Food Distribution"; override routes it to its real group.
+    assert _peer_group("BNZL.L", "Food Distribution") == "Industrial Distribution"
+
+def test_peer_group_none_industry():
+    assert _peer_group("ABC.L", None) is None
 
 
 # ── _peer_median ────────────────────────────────────────────────────────────────

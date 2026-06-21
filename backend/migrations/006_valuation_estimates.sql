@@ -6,10 +6,11 @@
 -- run showed a plain peer-median is only defensible for profitable, non-financial,
 -- moderately-geared companies; financials/REITs (book/NAV-valued), unprofitable
 -- and highly-levered names produce nonsense and so get no estimate. Peers are
--- true peers only — the same yfinance industry, no sector fallback — and only when
--- at least MIN_PEERS valid peers exist; otherwise no fair value is stored (the UI
--- shows "no comparable basis"). peer_basis is therefore 'industry' or
--- 'insufficient'. See compute_and_store_valuations.
+-- true peers only — the same yfinance industry (with over-split industries merged
+-- into analytical groups, e.g. AZN+GSK+Hikma -> Pharmaceuticals), no sector
+-- fallback — and only when at least MIN_PEERS valid peers exist; otherwise no fair
+-- value is stored (the UI shows "no comparable basis"). peer_basis is therefore
+-- 'industry' or 'insufficient'. See compute_and_store_valuations / _peer_group.
 --
 -- It fills this once daily (right after the price refresh, alongside
 -- screener_scores), and /api/valuation serves a single row per company. The upside
