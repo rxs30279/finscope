@@ -32,6 +32,55 @@ const WrapTick = ({ x, y, payload }: any) => {
   );
 };
 
+// Company logo badge. Pulls the logo from logo.dev keyed by ticker (LSE tickers
+// keep the ".L" suffix, which is exactly the format logo.dev expects). We pass
+// fallback=404 so a miss fires the img onError and we drop back to the original
+// purple ticker-initials badge. Needs NEXT_PUBLIC_LOGODEV_TOKEN (a publishable
+// pk_ key); with no token set we skip the fetch and just show the initials.
+function LogoBadge({ symbol, paysDividend }: { symbol: string; paysDividend: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const label = symbol.replace(".L", "").slice(0, 4);
+  const token = process.env.NEXT_PUBLIC_LOGODEV_TOKEN;
+  // logo.dev bakes each brand's own background into the PNG (its theme param
+  // doesn't strip it). We let the logo fill the chip edge-to-edge with no padding
+  // so its background reaches the rounded corners; the chip itself is transparent
+  // so any letterboxing blends into the page rather than showing a white ring.
+  // Misses (fallback=404) drop to the purple initials.
+  const logoUrl = token
+    ? `https://img.logo.dev/ticker/${encodeURIComponent(symbol)}?token=${token}&size=120&format=png&retina=true&fallback=404`
+    : null;
+  const showLogo = !!logoUrl && !failed;
+
+  const base = {
+    width: 64, height: 64, marginTop: 9, borderRadius: 12, flexShrink: 0,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    overflow: "hidden", textDecoration: "none",
+    cursor: paysDividend ? "pointer" : "default",
+  } as const;
+  const wrapStyle = showLogo
+    ? { ...base, background: "transparent" }
+    : { ...base, background: "#6366f1", color: "#fff", fontFamily: "DM Serif Display,serif", fontSize: 13, fontWeight: 700 };
+
+  const inner = showLogo ? (
+    <img
+      src={logoUrl as string}
+      alt={label}
+      onError={() => setFailed(true)}
+      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+    />
+  ) : (
+    label
+  );
+
+  return paysDividend ? (
+    <a href={dividendDataUrl(symbol)} target="_blank" rel="noopener noreferrer" title="View on Dividend Data" style={wrapStyle as any}>
+      {inner}
+    </a>
+  ) : (
+    <div style={wrapStyle as any}>{inner}</div>
+  );
+}
+
 interface Props {
   symbol: string;
   onBack: () => void;
@@ -142,13 +191,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
         <div>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 10 }}>
-            {(() => {
-              const badgeStyle = { background: "#6366f1", color: "#fff", borderRadius: 10, width: 50, height: 50, marginTop: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "DM Serif Display,serif", fontSize: 13, fontWeight: 700, textDecoration: "none", cursor: paysDividend ? "pointer" : "default" };
-              const label = symbol.replace(".L", "").slice(0, 4);
-              return paysDividend ? (
-                <a href={dividendDataUrl(symbol)} target="_blank" rel="noopener noreferrer" title="View on Dividend Data" style={badgeStyle as any}>{label}</a>
-              ) : <div style={badgeStyle}>{label}</div>;
-            })()}
+            <LogoBadge symbol={symbol} paysDividend={paysDividend} />
             <div>
               <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
               <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
