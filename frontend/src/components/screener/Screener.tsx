@@ -105,13 +105,26 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
   const update = (k: string, v: string) => setFilters((f) => ({ ...f, [k]: v }));
   const updateMany = (patch: Partial<typeof EMPTY_FILTERS>) => setFilters((f) => ({ ...f, ...patch }));
+  // `sector` and `exclude_sectors` are both comma-separated lists so multiple
+  // sectors can be included/excluded. A sector can't be in both lists at once.
+  const includedSectors = filters.sector ? filters.sector.split(",").filter(Boolean) : [];
   const excludedSectors = filters.exclude_sectors ? filters.exclude_sectors.split(",").filter(Boolean) : [];
+  const toggleIncludeSector = (s: string) => {
+    const set = new Set(includedSectors);
+    const nowIncluded = !set.has(s);
+    if (nowIncluded) set.add(s); else set.delete(s);
+    const patch: any = { sector: Array.from(set).join(",") };
+    // Including a sector lifts any exclusion on it.
+    if (nowIncluded && excludedSectors.includes(s)) patch.exclude_sectors = excludedSectors.filter((x) => x !== s).join(",");
+    updateMany(patch);
+  };
   const toggleExcludeSector = (s: string) => {
     const set = new Set(excludedSectors);
     const wasExcluded = set.has(s);
     if (wasExcluded) set.delete(s); else set.add(s);
     const patch: any = { exclude_sectors: Array.from(set).join(",") };
-    if (!wasExcluded && filters.sector === s) patch.sector = "";
+    // Excluding a sector removes it from the include list.
+    if (!wasExcluded && includedSectors.includes(s)) patch.sector = includedSectors.filter((x) => x !== s).join(",");
     updateMany(patch);
   };
   const handleSelectMode = (key: string, mode: string) => {
@@ -128,7 +141,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   const displayed = results.filter((r) => {
     // Fundamental filters — applied client-side (mirrors backend screener() WHERE clause).
     const f = filters;
-    if (f.sector && r.sector !== f.sector) return false;
+    if (includedSectors.length && !includedSectors.includes(r.sector)) return false;
     if (f.exclude_sectors && excludedSectors.includes(r.sector)) return false;
     if (f.ftse_index) {
       if (f.ftse_index === "FTSE 350") { if (r.ftse_index !== "FTSE 100" && r.ftse_index !== "FTSE 250") return false; }
@@ -171,16 +184,18 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
   return (
     <div>
-      <h2 style={{ fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9", marginTop: 0, marginBottom: 4 }}>UK Stock Screener</h2>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-        <div style={{ fontSize: 13, color: "#64748b" }}>{`${filters.ftse_index || "All indices"}${filters.sector ? ` · ${filters.sector}` : ""}`}</div>
-        <div style={{ background: "#334155", color: "#cbd5e1", borderRadius: 20, padding: "2px 12px", fontSize: 13, fontWeight: 600 }}>
-          {displayed.length !== results.length ? `${displayed.length} / ${results.length}` : displayed.length} companies
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
+          <h2 style={{ fontFamily: "DM Serif Display,serif", fontSize: 23, color: "#f1f5f9", margin: 0, letterSpacing: "-0.01em" }}>UK Stock Screener</h2>
+          <span style={{ fontSize: 13, color: "#64748b", whiteSpace: "nowrap" }}>{`${filters.ftse_index || "All indices"}${includedSectors.length === 1 ? ` · ${includedSectors[0]}` : includedSectors.length > 1 ? ` · ${includedSectors.length} sectors` : ""}`}</span>
         </div>
+        <span style={{ flexShrink: 0, background: "rgba(249,115,22,0.1)", color: "#fb923c", border: "1px solid rgba(249,115,22,0.28)", borderRadius: 100, padding: "3px 11px", fontSize: 12, fontWeight: 600 }}>
+          {displayed.length !== results.length ? `${displayed.length} / ${results.length}` : displayed.length} companies
+        </span>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
-        <SectorDropdown sectors={filterOpts.sectors} value={filters.sector} excluded={excludedSectors} onSelect={(v) => update("sector", v)} onToggleExclude={toggleExcludeSector} />
+        <SectorDropdown sectors={filterOpts.sectors} selected={includedSectors} excluded={excludedSectors} onToggleInclude={toggleIncludeSector} onClear={() => update("sector", "")} onToggleExclude={toggleExcludeSector} />
         <select style={selStyle(!!filters.ftse_index)} value={filters.ftse_index} onChange={(e) => update("ftse_index", e.target.value)}>
           <option value="">FTSE Market</option>
           <option value="FTSE 100">FTSE 100</option>

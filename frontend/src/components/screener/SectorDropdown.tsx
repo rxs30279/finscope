@@ -5,13 +5,14 @@ import { S } from "@/lib/theme";
 
 interface Props {
   sectors: string[];
-  value: string;
+  selected: string[];
   excluded: string[];
-  onSelect: (v: string) => void;
+  onToggleInclude: (s: string) => void;
+  onClear: () => void;
   onToggleExclude: (s: string) => void;
 }
 
-export default function SectorDropdown({ sectors, value, excluded, onSelect, onToggleExclude }: Props) {
+export default function SectorDropdown({ sectors, selected, excluded, onToggleInclude, onClear, onToggleExclude }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -23,8 +24,11 @@ export default function SectorDropdown({ sectors, value, excluded, onSelect, onT
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const label = value ? value : excluded.length ? `All Sectors (−${excluded.length})` : "All Sectors";
-  const active = !!value || excluded.length > 0;
+  const label =
+    selected.length === 1 ? selected[0] :
+    selected.length > 1 ? `${selected.length} sectors` :
+    excluded.length ? `All Sectors (−${excluded.length})` : "All Sectors";
+  const active = selected.length > 0 || excluded.length > 0;
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
@@ -34,18 +38,19 @@ export default function SectorDropdown({ sectors, value, excluded, onSelect, onT
       </button>
       {open && (
         <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, background: "#141414", border: "1px solid #2a2a2a", borderRadius: 4, minWidth: 260, zIndex: 200, boxShadow: "0 8px 24px rgba(0,0,0,0.8)", maxHeight: 360, overflowY: "auto" }}>
-          <div onClick={() => { onSelect(""); setOpen(false); }} style={{ padding: "8px 12px", cursor: "pointer", fontFamily: "monospace", fontSize: 12, color: value === "" ? "#f97316" : "#cbd5e1", borderBottom: "1px solid #1f1f1f" }}>
+          <div onClick={() => onClear()} style={{ padding: "8px 12px", cursor: "pointer", fontFamily: "monospace", fontSize: 12, color: selected.length === 0 ? "#f97316" : "#cbd5e1", borderBottom: "1px solid #1f1f1f" }}>
             All Sectors
           </div>
           {sectors.map((s) => {
             const isExcluded = excluded.includes(s);
-            const isSelected = value === s;
+            const isSelected = selected.includes(s);
             return (
               <div key={s} style={{ display: "flex", alignItems: "stretch", borderBottom: "1px solid #1f1f1f" }}>
                 <div
-                  onClick={() => { if (!isExcluded) { onSelect(s); setOpen(false); } }}
-                  style={{ flex: 1, padding: "8px 8px 8px 12px", cursor: isExcluded ? "not-allowed" : "pointer", fontFamily: "monospace", fontSize: 12, color: isSelected ? "#f97316" : isExcluded ? "#555" : "#cbd5e1", textDecoration: isExcluded ? "line-through" : "none" }}
+                  onClick={() => { if (!isExcluded) onToggleInclude(s); }}
+                  style={{ flex: 1, padding: "8px 8px 8px 12px", cursor: isExcluded ? "not-allowed" : "pointer", fontFamily: "monospace", fontSize: 12, color: isSelected ? "#f97316" : isExcluded ? "#555" : "#cbd5e1", textDecoration: isExcluded ? "line-through" : "none", display: "flex", alignItems: "center", gap: 8 }}
                 >
+                  <span style={{ width: 11, display: "inline-block", color: "#f97316" }}>{isSelected ? "✓" : ""}</span>
                   {s}
                 </div>
                 <button
