@@ -328,8 +328,15 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                         {r.symbol.replace(".L", "")}
                       </span>
                     </td>
-                    <td style={{ ...S.td, color: "#f1f5f9", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }} title={r.name}>{r.name}</td>
-                    <td style={{ ...S.td, color: "#64748b", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }} title={r.sector}>{SECTOR_ABBR[r.sector] || r.sector}</td>
+                    {/* maxWidth lives on an inner div, not the td: in the auto-layout
+                        fundamentals table a td's max-width is ignored, so a long name
+                        would stretch the whole column. The div is respected and truncates. */}
+                    <td style={{ ...S.td, color: "#f1f5f9" }} title={r.name}>
+                      <div style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
+                    </td>
+                    <td style={{ ...S.td, color: "#64748b" }} title={r.sector}>
+                      <div style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>{SECTOR_ABBR[r.sector] || r.sector}</div>
+                    </td>
                     <td style={{ ...S.td, color: "#64748b" }}>{r.ftse_index?.replace("FTSE ", "")}</td>
                     <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.market_cap, "currency", r.financial_currency)}</td>
                     {tableView === "fundamentals" ? (
