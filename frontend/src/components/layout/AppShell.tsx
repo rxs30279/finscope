@@ -26,7 +26,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const isMobile = useIsMobile();
   const isNarrow = useIsNarrowDesktop();
   const isAdmin = useIsAdmin();
-  const { refreshKey, refresh, setHighlightSymbol } = useRefresh();
+  const { refreshKey, refresh, setHighlightSymbol, screenMatches } = useRefresh();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(isNarrow);
@@ -287,15 +287,32 @@ export default function AppShell({ children }: { children: ReactNode }) {
             />
             {showSearch && searchResults.length > 0 && (
               <div style={{ ...S.dropdown, width: isMobile ? 280 : 420, right: isMobile ? -60 : 0 }}>
-                {searchResults.map((r: any) => (
-                  <div key={r.symbol} onClick={() => highlightInScreener(r.symbol)} style={S.dropdownItem}>
-                    <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#818cf8", minWidth: 70 }}>
-                      {r.symbol.replace(".L", "")}
-                    </span>
-                    <span style={{ color: "#94a3b8", fontSize: 13 }}>{r.name}</span>
-                    <span style={{ marginLeft: "auto", fontSize: 11, color: "#64748b" }}>{r.exchange}</span>
-                  </div>
-                ))}
+                {searchResults.map((r: any) => {
+                  // Screened-out = the screener has a known passing set and this
+                  // symbol isn't in it. Dim the row and label it so the user knows
+                  // clicking won't land on a row (their filters hide it).
+                  const screenedOut = screenMatches != null && !screenMatches.has(r.symbol);
+                  return (
+                    <div
+                      key={r.symbol}
+                      onClick={() => highlightInScreener(r.symbol)}
+                      title={screenedOut ? "Hidden by your current screener filters" : undefined}
+                      style={{ ...S.dropdownItem, opacity: screenedOut ? 0.5 : 1 }}
+                    >
+                      <span style={{ fontFamily: "monospace", fontWeight: 700, color: screenedOut ? "#64748b" : "#818cf8", minWidth: 70 }}>
+                        {r.symbol.replace(".L", "")}
+                      </span>
+                      <span style={{ color: "#94a3b8", fontSize: 13 }}>{r.name}</span>
+                      {screenedOut ? (
+                        <span style={{ marginLeft: "auto", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: 0.5, color: "#f59e0b", border: "1px solid #4a3a1a", background: "#1a1400", padding: "1px 6px", borderRadius: 2, whiteSpace: "nowrap" }}>
+                          Filtered out
+                        </span>
+                      ) : (
+                        <span style={{ marginLeft: "auto", fontSize: 11, color: "#64748b" }}>{r.exchange}</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

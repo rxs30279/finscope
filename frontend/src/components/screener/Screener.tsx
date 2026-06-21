@@ -5,6 +5,7 @@ import { API } from "@/lib/api";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
 import { loadScreenerState, saveScreenerState } from "@/lib/storage";
+import { useRefresh } from "@/app/providers";
 import HybridSelect from "@/components/company/HybridSelect";
 import SectorDropdown from "./SectorDropdown";
 import StarButton from "./StarButton";
@@ -94,6 +95,11 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   // table's actual top offset sizes it to exactly fill the rest of the viewport.
   const scrollRef = useRef<HTMLDivElement>(null);
   const [tableMaxH, setTableMaxH] = useState("calc(100vh - 245px)");
+  // Publish the set of symbols passing the current filters so the nav search can
+  // flag a result that's been screened out (clicking it would otherwise scroll to
+  // a row that isn't there). `matchKeyRef` dedupes so we only push on real change.
+  const { setScreenMatches } = useRefresh();
+  const matchKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     const s = loadScreenerState();
@@ -223,6 +229,20 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     if (sf.max_risk && (r.risk_score == null || r.risk_score > +sf.max_risk)) return false;
     if (sf.max_pegy && (r.pegy == null || r.pegy > +sf.max_pegy)) return false;
     return true;
+  });
+
+  // Push the passing-symbol set to the shared context whenever it changes. Keyed
+  // on the joined symbols and guarded by a ref so we only setState on a genuine
+  // change — `displayed` is a fresh array each render, so an unguarded update
+  // would loop (the context update re-renders this component). Skip while the
+  // universe is still loading so we don't briefly flag every result as excluded.
+  useEffect(() => {
+    if (loading || results.length === 0) return;
+    const syms = displayed.map((r) => r.symbol);
+    const key = syms.join("|");
+    if (key === matchKeyRef.current) return;
+    matchKeyRef.current = key;
+    setScreenMatches(new Set(syms));
   });
 
   const hasActiveFilters = Object.values(filters).some((v) => v !== "") || Object.values(scoreFilters).some((v) => v !== "");

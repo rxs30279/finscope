@@ -146,6 +146,11 @@ interface RefreshContextValue {
   refresh: () => void;
   highlightSymbol: string | null;
   setHighlightSymbol: (sym: string | null) => void;
+  // Symbols that pass the screener's current filters, published by the Screener
+  // so the nav search can flag results that have been screened out. `null` means
+  // "unknown" (screener not visited yet this session) — flag nothing in that case.
+  screenMatches: Set<string> | null;
+  setScreenMatches: (s: Set<string> | null) => void;
 }
 
 const RefreshContext = createContext<RefreshContextValue | null>(null);
@@ -159,9 +164,10 @@ export function useRefresh(): RefreshContextValue {
 export function RefreshProvider({ children }: { children: ReactNode }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [highlightSymbol, setHighlightSymbol] = useState<string | null>(null);
+  const [screenMatches, setScreenMatches] = useState<Set<string> | null>(null);
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
   return (
-    <RefreshContext.Provider value={{ refreshKey, refresh, highlightSymbol, setHighlightSymbol }}>
+    <RefreshContext.Provider value={{ refreshKey, refresh, highlightSymbol, setHighlightSymbol, screenMatches, setScreenMatches }}>
       {children}
     </RefreshContext.Provider>
   );
