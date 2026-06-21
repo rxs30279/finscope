@@ -11,11 +11,20 @@ import {
 import type { ReactNode } from "react";
 import {
   DEFAULT_LIST_ID,
+  DEFAULT_LIST_NAME,
   genListId,
   loadWatchlists,
   saveWatchlists,
   type WatchlistsData,
 } from "@/lib/storage";
+
+// SSR-deterministic default — matches loadWatchlists() when there's no window,
+// so the server HTML and the client's first render agree before localStorage
+// is read in an effect (see WatchlistProvider).
+const EMPTY_WATCHLISTS: WatchlistsData = {
+  lists: [{ id: DEFAULT_LIST_ID, name: DEFAULT_LIST_NAME }],
+  members: { [DEFAULT_LIST_ID]: [] },
+};
 
 interface WatchlistContextValue {
   watchlists: WatchlistsData;
@@ -37,13 +46,22 @@ export function useWatchlist(): WatchlistContextValue {
 }
 
 export function WatchlistProvider({ children }: { children: React.ReactNode }) {
-  const [watchlists, setWatchlists] = useState<WatchlistsData>(() =>
-    loadWatchlists(),
-  );
+  // Start from the empty default (matches SSR) and load the real localStorage
+  // data only after mount. Reading localStorage in the useState initializer
+  // would make the first client render diverge from the server-rendered HTML,
+  // which is exactly the watchlist-page hydration mismatch. `hydrated` then gates
+  // the save effect so the empty default isn't written back over real data.
+  const [watchlists, setWatchlists] = useState<WatchlistsData>(EMPTY_WATCHLISTS);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    saveWatchlists(watchlists);
-  }, [watchlists]);
+    setWatchlists(loadWatchlists());
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (hydrated) saveWatchlists(watchlists);
+  }, [hydrated, watchlists]);
 
   const defaultMembers = useMemo(
     () => new Set(watchlists.members[DEFAULT_LIST_ID] || []),

@@ -163,9 +163,8 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
               style={{ ...rowStyle, cursor:'pointer' }}
               title="Show companies in this sector"
             >
-              <span style={{ display:'flex', alignItems:'center', gap:3, maxWidth:120, overflow:'hidden' }}>
-                <span style={{ color: isOpen ? '#94a3b8' : '#444', fontSize:7, flexShrink:0 }}>{isOpen ? '▾' : '▸'}</span>
-                <span style={{ ...nameStyle, color: isOpen ? '#cbd5e1' : nameStyle.color, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>
+              <span style={{ maxWidth:120, overflow:'hidden' }}>
+                <span style={{ ...nameStyle, color: isOpen ? '#cbd5e1' : nameStyle.color, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', display:'block' }}>{s.name}</span>
               </span>
               <PctBadge value={s.pct_change} />
             </div>
