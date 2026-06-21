@@ -55,7 +55,7 @@ SECTOR_TICKERS = {
     "Industrials": [
         "RR.L",
         "BA.L",
-        "AHT.L",
+        "SMIN.L",  # Smiths Group — replaced AHT.L (Ashtead delisted from LSE, moved primary listing to the US)
         "IMI.L",
         "WEIR.L",
         "RTO.L",
