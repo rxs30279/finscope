@@ -21,6 +21,29 @@ const FUND_COLS = [
   ["D/E", true, "debt_to_equity"], ["PEGY", true, "pegy"], ["Mom", true, "momentum_score"],
   ["Qual", true, "quality_score"], ["Value", true, "piotroski_score"], ["Risk", true, "risk_score"],
 ];
+// Full column names, shown as a hover tooltip on the abbreviated headers.
+const COL_TITLES: Record<string, string> = {
+  symbol: "Ticker symbol",
+  name: "Company name",
+  sector: "ICB sector",
+  ftse_index: "FTSE index membership",
+  market_cap: "Market capitalisation",
+  price_to_earnings: "Price-to-earnings ratio",
+  price_to_book: "Price-to-book ratio",
+  roe: "Return on equity",
+  revenue_growth: "Revenue growth (year-on-year)",
+  debt_to_equity: "Debt-to-equity ratio",
+  pegy: "Price/earnings-to-growth-and-yield ratio",
+  momentum_score: "Momentum score (0–10)",
+  quality_score: "Quality score (0–10)",
+  piotroski_score: "Value score (Piotroski F-score, 0–10)",
+  risk_score: "Risk score (0–10, lower is safer)",
+  consensus: "Analyst consensus rating",
+  upside_pct: "Upside to mean analyst price target",
+  buy_pct: "Percentage of analysts rating Buy",
+  total_analysts: "Number of covering analysts",
+  revision_score: "Earnings estimate revision score",
+};
 // Composite-score columns — rendered as graded pills and visually grouped.
 // Pinned to one equal width so the columns stay even regardless of header text.
 const SCORE_KEYS = new Set(["momentum_score", "quality_score", "piotroski_score", "risk_score"]);
@@ -33,11 +56,13 @@ const SECTOR_ABBR: Record<string, string> = {
   "Consumer Discretionary": "Consmr Discr",
   "Consumer Staples": "Consmr Stapl",
 };
+// Analyst view has few columns, so we use a fixed table layout with explicit
+// header widths to keep them evenly spaced; Name (no width) absorbs the slack.
 const ANALYST_COLS = [
-  ["Symbol", false, "symbol"], ["Name", false, "name"], ["Sector", false, "sector"],
-  ["Index", false, "ftse_index"], ["Mkt Cap", true, "market_cap"], ["Consensus", false, "consensus"],
-  ["Upside", true, "upside_pct"], ["Buy%", true, "buy_pct"], ["# Analysts", true, "total_analysts"],
-  ["Rev Score", true, "revision_score"],
+  ["Symbol", false, "symbol", 110], ["Name", false, "name"], ["Sector", false, "sector", 130],
+  ["Index", false, "ftse_index", 90], ["Mkt Cap", true, "market_cap", 110], ["Consensus", false, "consensus", 100],
+  ["Upside", true, "upside_pct", 95], ["Buy%", true, "buy_pct", 85], ["# Analysts", true, "total_analysts", 100],
+  ["Rev Score", true, "revision_score", 100],
 ];
 
 interface Props {
@@ -266,13 +291,13 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
       {loading ? <div style={S.loading}>Screening…</div> : (
         <div style={{ overflow: "auto", maxHeight: "calc(100vh - 245px)", scrollbarGutter: "stable", scrollSnapType: "y proximity", scrollPaddingTop: 29 }}>
-          <table style={{ ...S.table, minWidth: tableView === "analysts" ? 700 : 900 }}>
+          <table style={{ ...S.table, minWidth: tableView === "analysts" ? 700 : 900, ...(tableView === "analysts" ? { tableLayout: "fixed" as const } : {}) }}>
             <thead>
               <tr>
-                {(tableView === "fundamentals" ? FUND_COLS : ANALYST_COLS).map(([h, num, key]: any) => {
+                {(tableView === "fundamentals" ? FUND_COLS : ANALYST_COLS).map(([h, num, key, width]: any) => {
                   const isScore = SCORE_KEYS.has(key);
                   return (
-                    <th key={h} onClick={() => handleSort(key)} style={{ ...S.th, textAlign: isScore ? "center" : num ? "right" : "left", cursor: "pointer", userSelect: "none", color: sortCol === key ? "#fb923c" : "#f97316", ...(isScore ? { width: SCORE_COL_WIDTH } : {}), ...(key === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
+                    <th key={h} onClick={() => handleSort(key)} title={COL_TITLES[key] || h} style={{ ...S.th, textAlign: isScore ? "center" : num ? "right" : "left", cursor: "pointer", userSelect: "none", color: sortCol === key ? "#fb923c" : "#f97316", ...(isScore ? { width: SCORE_COL_WIDTH } : {}), ...(width ? { width } : {}), ...(key === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
                       {h}{sortCol === key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
                     </th>
                   );
