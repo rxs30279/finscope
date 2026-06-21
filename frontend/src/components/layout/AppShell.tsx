@@ -92,6 +92,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
     [router, setHighlightSymbol],
   );
 
+  // The marketing landing at "/" is a full-bleed page with its own nav and
+  // footer — it opts out of the app chrome (top nav, sidebar, search).
+  if (pathname === "/") return <>{children}</>;
+
   return (
     <div style={{ minHeight: "100vh", background: "#0a0a0a", fontFamily: "monospace" }}>
       {/* Nav */}
