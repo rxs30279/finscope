@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { API } from "@/lib/api";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
@@ -87,6 +87,13 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   // initializer, so SSR and first client render agree). `hydrated` then gates the
   // save effect so the empty defaults don't overwrite saved state before load.
   const [hydrated, setHydrated] = useState(false);
+  // Scroll container height is measured rather than a fixed `100vh - 245px`
+  // guess: the filter controls wrap onto several rows on mobile, so the header
+  // above the table is much taller there. A fixed offset overflows the viewport
+  // and scrolls the whole page (pushing the title off-screen). Measuring the
+  // table's actual top offset sizes it to exactly fill the rest of the viewport.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [tableMaxH, setTableMaxH] = useState("calc(100vh - 245px)");
 
   useEffect(() => {
     const s = loadScreenerState();
@@ -109,6 +116,23 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     fetch(`${API}/filters`).then((r) => r.json()).then(setFilterOpts);
     runScreener();
   }, []);
+
+  // Size the table's scroll area to fill the viewport below it, so the page
+  // itself never scrolls and the header stays put. `getBoundingClientRect().top`
+  // is the live distance from the viewport top; we recompute whenever the header
+  // height can change (advanced panel, excluded chips, loading) and on resize/
+  // orientation change (which is what re-wraps the filters on mobile).
+  useEffect(() => {
+    const compute = () => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      setTableMaxH(`${Math.max(220, Math.round(window.innerHeight - top - 16))}px`);
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, [loading, showAdvanced, filters.exclude_sectors, tableView]);
 
   // Scroll the searched row into view. Deferred to a rAF loop rather than run
   // inline: when the search arrives via router.push("/screener") from another
@@ -302,7 +326,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
       </div>
 
       {loading ? <div style={S.loading}>Screening…</div> : (
-        <div style={{ overflow: "auto", maxHeight: "calc(100vh - 245px)", scrollbarGutter: "stable", scrollSnapType: "y proximity", scrollPaddingTop: 29 }}>
+        <div ref={scrollRef} style={{ overflow: "auto", maxHeight: tableMaxH, scrollbarGutter: "stable", scrollSnapType: "y proximity", scrollPaddingTop: 29 }}>
           <table style={{ ...S.table, minWidth: tableView === "analysts" ? 700 : 900, ...(tableView === "analysts" ? { tableLayout: "fixed" as const } : {}) }}>
             <thead>
               <tr>
