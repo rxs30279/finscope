@@ -139,6 +139,15 @@ export const S: Record<string, CSSProperties> = {
     outline: "none",
     fontFamily: "monospace",
   },
+  // Accent overrides spread onto a filter control when it has a value set, so
+  // active filters stand out from empty ones (matches the Advanced button).
+  // Uses the `border` shorthand (not borderColor) to match S.select — mixing
+  // shorthand/non-shorthand triggers a React warning when the style toggles off.
+  selectActive: {
+    border: "1px solid #f97316",
+    color: "#fb923c",
+    background: "#1f1200",
+  },
   table: {
     width: "100%",
     borderCollapse: "separate" as const,

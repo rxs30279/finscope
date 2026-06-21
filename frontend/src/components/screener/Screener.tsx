@@ -8,6 +8,7 @@ import { loadScreenerState, saveScreenerState } from "@/lib/storage";
 import HybridSelect from "@/components/company/HybridSelect";
 import SectorDropdown from "./SectorDropdown";
 import StarButton from "./StarButton";
+import ScorePill from "./ScorePill";
 
 const EMPTY_FILTERS = { sector: "", exclude_sectors: "", ftse_index: "", min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "", consensus: "", min_upside_pct: "" };
 const EMPTY_MODES = { min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "" };
@@ -16,10 +17,22 @@ const EMPTY_SCORE_FILTERS = { min_momentum: "", min_quality: "", min_piotroski: 
 const FUND_COLS = [
   ["Symbol", false, "symbol"], ["Name", false, "name"], ["Sector", false, "sector"],
   ["Index", false, "ftse_index"], ["Mkt Cap", true, "market_cap"], ["P/E", true, "price_to_earnings"],
-  ["P/B", true, "price_to_book"], ["ROE", true, "roe"], ["Rev Growth", true, "revenue_growth"],
-  ["D/E", true, "debt_to_equity"], ["PEGY", true, "pegy"], ["Momentum", true, "momentum_score"],
-  ["Quality", true, "quality_score"], ["Value", true, "piotroski_score"], ["Risk", true, "risk_score"],
+  ["P/B", true, "price_to_book"], ["ROE", true, "roe"], ["Rev Grwth", true, "revenue_growth"],
+  ["D/E", true, "debt_to_equity"], ["PEGY", true, "pegy"], ["Mom", true, "momentum_score"],
+  ["Qual", true, "quality_score"], ["Value", true, "piotroski_score"], ["Risk", true, "risk_score"],
 ];
+// Composite-score columns — rendered as graded pills and visually grouped.
+// Pinned to one equal width so the columns stay even regardless of header text.
+const SCORE_KEYS = new Set(["momentum_score", "quality_score", "piotroski_score", "risk_score"]);
+const SCORE_COL_WIDTH = 72;
+
+// Display-only shortenings for the widest ICB sector names (full name kept in
+// the cell's title tooltip). Sectors not listed render unchanged.
+const SECTOR_ABBR: Record<string, string> = {
+  "Telecommunications": "Telcomms",
+  "Consumer Discretionary": "Consmr Discr",
+  "Consumer Staples": "Consmr Stapl",
+};
 const ANALYST_COLS = [
   ["Symbol", false, "symbol"], ["Name", false, "name"], ["Sector", false, "sector"],
   ["Index", false, "ftse_index"], ["Mkt Cap", true, "market_cap"], ["Consensus", false, "consensus"],
@@ -139,6 +152,8 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   });
 
   const hasActiveFilters = Object.values(filters).some((v) => v !== "") || Object.values(scoreFilters).some((v) => v !== "");
+  // Accent a filter control when it has a value, so active filters are obvious.
+  const selStyle = (active: boolean) => (active ? { ...S.select, ...S.selectActive } : S.select);
   const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_piotroski || scoreFilters.max_risk || scoreFilters.max_pegy;
 
   const handleSort = (key: string) => {
@@ -166,7 +181,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
         <SectorDropdown sectors={filterOpts.sectors} value={filters.sector} excluded={excludedSectors} onSelect={(v) => update("sector", v)} onToggleExclude={toggleExcludeSector} />
-        <select style={S.select} value={filters.ftse_index} onChange={(e) => update("ftse_index", e.target.value)}>
+        <select style={selStyle(!!filters.ftse_index)} value={filters.ftse_index} onChange={(e) => update("ftse_index", e.target.value)}>
           <option value="">FTSE Market</option>
           <option value="FTSE 100">FTSE 100</option>
           <option value="FTSE 250">FTSE 250</option>
@@ -174,7 +189,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           <option value="FTSE SmallCap">FTSE SmallCap</option>
           <option value="FTSE AIM 100">AIM 100</option>
         </select>
-        <HybridSelect selectMode={selectModes.min_market_cap} onSelectChange={(mode) => handleSelectMode("min_market_cap", mode)} onCustomCommit={(v) => handleCustomCommit("min_market_cap", v, (n) => Math.round(n * 1e9))} placeholder="£B" inputWidth={70}>
+        <HybridSelect active={!!filters.min_market_cap} selectMode={selectModes.min_market_cap} onSelectChange={(mode) => handleSelectMode("min_market_cap", mode)} onCustomCommit={(v) => handleCustomCommit("min_market_cap", v, (n) => Math.round(n * 1e9))} placeholder="£B" inputWidth={70}>
           <option value="">Any Market Cap</option>
           <option value="1000000000">£1B+</option>
           <option value="10000000000">£10B+</option>
@@ -191,24 +206,24 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
       {showAdvanced && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           {[["min_momentum", "Momentum", [["4","Mom ≥ 4"],["6","Mom ≥ 6"],["8","Mom ≥ 8"]]],["min_quality","Quality",[["4","Quality ≥ 4"],["6","Quality ≥ 6"],["8","Quality ≥ 8"]]],["min_piotroski","Value",[["4","Value ≥ 4"],["6","Value ≥ 6"],["8","Value ≥ 8"]]],["max_risk","Risk",[["3","Risk ≤ 3"],["5","Risk ≤ 5"],["7","Risk ≤ 7"]]],["max_pegy","PEGY",[["1","PEGY ≤ 1"],["1.5","PEGY ≤ 1.5"],["2","PEGY ≤ 2"]]]].map(([k, label, opts]: any) => (
-            <select key={k} style={S.select} value={(scoreFilters as any)[k]} onChange={(e) => updateScore(k, e.target.value)}>
+            <select key={k} style={selStyle(!!(scoreFilters as any)[k])} value={(scoreFilters as any)[k]} onChange={(e) => updateScore(k, e.target.value)}>
               <option value="">{label}</option>
               {opts.map(([v, l]: any) => <option key={v} value={v}>{l}</option>)}
             </select>
           ))}
-          <HybridSelect selectMode={selectModes.max_pe} onSelectChange={(mode) => handleSelectMode("max_pe", mode)} onCustomCommit={(v) => handleCustomCommit("max_pe", v, (n) => n)} placeholder="P/E" inputWidth={65}>
+          <HybridSelect active={!!filters.max_pe} selectMode={selectModes.max_pe} onSelectChange={(mode) => handleSelectMode("max_pe", mode)} onCustomCommit={(v) => handleCustomCommit("max_pe", v, (n) => n)} placeholder="P/E" inputWidth={65}>
             <option value="">Any P/E</option><option value="15">P/E &lt; 15</option><option value="25">P/E &lt; 25</option><option value="40">P/E &lt; 40</option>
           </HybridSelect>
-          <HybridSelect selectMode={selectModes.min_roe} onSelectChange={(mode) => handleSelectMode("min_roe", mode)} onCustomCommit={(v) => handleCustomCommit("min_roe", v, (n) => n / 100)} placeholder="ROE %" inputWidth={75}>
+          <HybridSelect active={!!filters.min_roe} selectMode={selectModes.min_roe} onSelectChange={(mode) => handleSelectMode("min_roe", mode)} onCustomCommit={(v) => handleCustomCommit("min_roe", v, (n) => n / 100)} placeholder="ROE %" inputWidth={75}>
             <option value="">Any ROE</option><option value="0.1">ROE &gt; 10%</option><option value="0.15">ROE &gt; 15%</option><option value="0.2">ROE &gt; 20%</option>
           </HybridSelect>
-          <HybridSelect selectMode={selectModes.min_revenue_growth} onSelectChange={(mode) => handleSelectMode("min_revenue_growth", mode)} onCustomCommit={(v) => handleCustomCommit("min_revenue_growth", v, (n) => n / 100)} placeholder="Growth %" inputWidth={85}>
+          <HybridSelect active={!!filters.min_revenue_growth} selectMode={selectModes.min_revenue_growth} onSelectChange={(mode) => handleSelectMode("min_revenue_growth", mode)} onCustomCommit={(v) => handleCustomCommit("min_revenue_growth", v, (n) => n / 100)} placeholder="Growth %" inputWidth={85}>
             <option value="">Any Rev Growth</option><option value="0.05">Rev Growth &gt; 5%</option><option value="0.1">Rev Growth &gt; 10%</option><option value="0.2">Rev Growth &gt; 20%</option>
           </HybridSelect>
-          <select style={S.select} value={filters.consensus} onChange={(e) => update("consensus", e.target.value)}>
+          <select style={selStyle(!!filters.consensus)} value={filters.consensus} onChange={(e) => update("consensus", e.target.value)}>
             <option value="">All Consensus</option><option value="Buy">Buy</option><option value="Hold">Hold</option><option value="Sell">Sell</option>
           </select>
-          <select style={S.select} value={filters.min_upside_pct} onChange={(e) => update("min_upside_pct", e.target.value)}>
+          <select style={selStyle(!!filters.min_upside_pct)} value={filters.min_upside_pct} onChange={(e) => update("min_upside_pct", e.target.value)}>
             <option value="">Any Upside</option><option value="5">Upside &gt; 5%</option><option value="10">Upside &gt; 10%</option><option value="20">Upside &gt; 20%</option>
           </select>
         </div>
@@ -239,11 +254,14 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           <table style={{ ...S.table, minWidth: tableView === "analysts" ? 700 : 900 }}>
             <thead>
               <tr>
-                {(tableView === "fundamentals" ? FUND_COLS : ANALYST_COLS).map(([h, num, key]: any) => (
-                  <th key={h} onClick={() => handleSort(key)} style={{ ...S.th, textAlign: num ? "right" : "left", cursor: "pointer", userSelect: "none", color: sortCol === key ? "#fb923c" : "#f97316" }}>
-                    {h}{sortCol === key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
-                  </th>
-                ))}
+                {(tableView === "fundamentals" ? FUND_COLS : ANALYST_COLS).map(([h, num, key]: any) => {
+                  const isScore = SCORE_KEYS.has(key);
+                  return (
+                    <th key={h} onClick={() => handleSort(key)} style={{ ...S.th, textAlign: isScore ? "center" : num ? "right" : "left", cursor: "pointer", userSelect: "none", color: sortCol === key ? "#fb923c" : "#f97316", ...(isScore ? { width: SCORE_COL_WIDTH } : {}), ...(key === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
+                      {h}{sortCol === key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -258,22 +276,23 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                         {r.symbol.replace(".L", "")}
                       </span>
                     </td>
-                    <td style={S.td}>{r.name?.slice(0, 26)}</td>
-                    <td style={{ ...S.td, color: "#64748b" }}>{r.sector?.slice(0, 18)}</td>
+                    <td style={{ ...S.td, color: "#f1f5f9", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }} title={r.name}>{r.name}</td>
+                    <td style={{ ...S.td, color: "#64748b", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }} title={r.sector}>{SECTOR_ABBR[r.sector] || r.sector}</td>
                     <td style={{ ...S.td, color: "#64748b" }}>{r.ftse_index?.replace("FTSE ", "")}</td>
-                    <td style={S.tdNum}>{fmt(r.market_cap, "currency", r.financial_currency)}</td>
+                    <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.market_cap, "currency", r.financial_currency)}</td>
                     {tableView === "fundamentals" ? (
                       <>
                         <td style={{ ...S.tdNum, color: r.price_to_earnings < 15 ? "#10b981" : r.price_to_earnings > 40 ? "#ef4444" : "#ccc" }}>{fmt(r.price_to_earnings, "ratio")}</td>
-                        <td style={S.tdNum}>{fmt(r.price_to_book, "ratio")}</td>
+                        <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.price_to_book, "ratio")}</td>
                         <td style={{ ...S.tdNum, color: gc(r.roe) }}>{fmt(r.roe, "pct")}</td>
                         <td style={{ ...S.tdNum, color: gc(r.revenue_growth) }}>{fmt(r.revenue_growth, "pct")}</td>
                         <td style={{ ...S.tdNum, color: r.debt_to_equity > 2 ? "#ef4444" : "#ccc" }}>{fmt(r.debt_to_equity, "ratio")}</td>
                         <td style={{ ...S.tdNum, color: r.pegy == null ? "#444" : r.pegy < 1 ? "#10b981" : r.pegy <= 2 ? "#f59e0b" : "#ef4444" }}>{r.pegy ?? "—"}</td>
-                        {[["momentum_score",7,4],["quality_score",7,4],["piotroski_score",7,4]].map(([k,hi,mid]: any) => (
-                          <td key={k} style={{ ...S.tdNum, color: r[k] == null ? "#444" : r[k] >= hi ? "#10b981" : r[k] >= mid ? "#f59e0b" : "#ef4444", fontWeight: 700 }}>{r[k] ?? "—"}</td>
+                        {[["momentum_score", false], ["quality_score", false], ["piotroski_score", false], ["risk_score", true]].map(([k, invert]: any) => (
+                          <td key={k} style={{ ...S.tdNum, textAlign: "center", width: SCORE_COL_WIDTH, ...(k === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
+                            <ScorePill value={r[k]} invert={invert} />
+                          </td>
                         ))}
-                        <td style={{ ...S.tdNum, color: r.risk_score == null ? "#444" : r.risk_score <= 3 ? "#10b981" : r.risk_score <= 6 ? "#f59e0b" : "#ef4444", fontWeight: 700 }}>{r.risk_score ?? "—"}</td>
                       </>
                     ) : (
                       <>

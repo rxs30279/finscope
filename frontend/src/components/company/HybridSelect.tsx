@@ -10,6 +10,7 @@ interface Props {
   children: React.ReactNode;
   placeholder?: string;
   inputWidth?: number;
+  active?: boolean;
 }
 
 export default function HybridSelect({
@@ -19,6 +20,7 @@ export default function HybridSelect({
   children,
   placeholder,
   inputWidth = 80,
+  active = false,
 }: Props) {
   const [draft, setDraft] = useState("");
   const isCustom = selectMode === "custom";
@@ -31,7 +33,7 @@ export default function HybridSelect({
   return (
     <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
       <select
-        style={S.select}
+        style={{ ...S.select, ...(active ? S.selectActive : {}) }}
         value={selectMode}
         onChange={(e) => {
           setDraft("");

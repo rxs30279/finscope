@@ -24,10 +24,11 @@ export default function SectorDropdown({ sectors, value, excluded, onSelect, onT
   }, []);
 
   const label = value ? value : excluded.length ? `All Sectors (−${excluded.length})` : "All Sectors";
+  const active = !!value || excluded.length > 0;
 
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button onClick={() => setOpen((o) => !o)} style={{ ...S.select, minWidth: 170, textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+      <button onClick={() => setOpen((o) => !o)} style={{ ...S.select, ...(active ? S.selectActive : {}), minWidth: 170, textAlign: "left", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
         <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
       </button>
