@@ -131,6 +131,34 @@ function PriceTargetRange({ row }) {
   );
 }
 
+// Shared sub-section header + stat row so every block in the Estimates panel
+// has the same rhythm.
+const subHeadStyle = {
+  fontSize: 10, color: '#555', fontFamily: 'monospace',
+  textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8,
+};
+function StatRow({ label, value, color = '#e5e5e5' }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+      padding: '5px 0', borderBottom: '1px solid #1a1a1a',
+      fontSize: 12, fontFamily: 'monospace',
+    }}>
+      <span style={{ color: '#666' }}>{label}</span>
+      <span style={{ color }}>{value}</span>
+    </div>
+  );
+}
+function RevisionPair({ up, down }) {
+  return (
+    <span>
+      <span style={{ color: '#10b981' }}>↑{up ?? 0}</span>
+      {'   '}
+      <span style={{ color: '#ef4444' }}>↓{down ?? 0}</span>
+    </span>
+  );
+}
+
 export default function AnalystTab({ symbol }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -198,10 +226,21 @@ export default function AnalystTab({ symbol }) {
         <PriceTargetRange row={latest} />
       </div>
 
+      {/* Panels 3 + 3b: trend charts side by side (stack on mobile) */}
+      {(trendData.length >= 2 || hasTargetTrend) && (
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 16, marginBottom: 16 }}>
       {/* Panel 3: Consensus trend (only if ≥2 snapshots) */}
       {trendData.length >= 2 && (
-        <div style={cardStyle}>
-          <p style={titleStyle}>Consensus Trend — % Bullish</p>
+        <div style={{ ...cardStyle, flex: 1, minWidth: 0, marginBottom: 0 }}>
+          <p style={titleStyle}>
+            Consensus Trend — % Bullish
+            <span
+              role="img"
+              aria-label="What this shows"
+              title="Share of covering analysts with a Buy (or Strong Buy) rating, tracked over time. A rising line means sentiment is improving. Uses a coverage-adjusted Buy% so thinly-covered names aren't over-weighted."
+              style={{ marginLeft: 6, color: '#667', cursor: 'help', userSelect: 'none' }}
+            >ⓘ</span>
+          </p>
           <ResponsiveContainer width="100%" height={160}>
             <LineChart data={trendData} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e1e1e" />
@@ -209,7 +248,10 @@ export default function AnalystTab({ symbol }) {
               <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} unit="%" />
               <Tooltip
                 formatter={v => [`${v?.toFixed(1)}%`, 'Buy%']}
+                labelFormatter={fmtTickDate}
                 contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
+                labelStyle={{ color: '#e5e5e5' }}
+                itemStyle={{ color: '#10b981' }}
               />
               <Line type="monotone" dataKey="buy_pct" stroke="#10b981" strokeWidth={2} dot={false} name="Buy%" />
             </LineChart>
@@ -219,7 +261,7 @@ export default function AnalystTab({ symbol }) {
 
       {/* Panel 3b: Price target vs price trend (only if ≥2 snapshots with targets) */}
       {hasTargetTrend && (
-        <div style={cardStyle}>
+        <div style={{ ...cardStyle, flex: 1, minWidth: 0, marginBottom: 0 }}>
           <p style={titleStyle}>Mean Target vs Price</p>
           <ResponsiveContainer width="100%" height={160}>
             <LineChart data={targetTrend} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
@@ -228,7 +270,9 @@ export default function AnalystTab({ symbol }) {
               <YAxis domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} unit="p" />
               <Tooltip
                 formatter={(v, name) => [v != null ? `${v.toFixed(0)}p` : '—', name]}
+                labelFormatter={fmtTickDate}
                 contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
+                labelStyle={{ color: '#e5e5e5' }}
               />
               <Legend wrapperStyle={{ fontSize: 10, fontFamily: 'monospace' }} />
               <Line type="monotone" dataKey="target" stroke="#f97316" strokeWidth={2} dot={false} name="Mean Target" connectNulls />
@@ -237,71 +281,52 @@ export default function AnalystTab({ symbol }) {
           </ResponsiveContainer>
         </div>
       )}
+      </div>
+      )}
 
-      {/* Panel 4: Estimates & revisions */}
-      <div style={cardStyle}>
-        <p style={titleStyle}>Estimates & Revisions</p>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 20 }}>
-          <div>
-            <div style={{ fontSize: 10, color: '#555', marginBottom: 10, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>EPS Estimates</div>
-            {[
-              ['Current Year', latest.eps_est_current_yr],
-              ['Next Year',    latest.eps_est_next_yr],
-              ['Current Q',    latest.eps_est_current_q],
-              ['Next Q',       latest.eps_est_next_q],
-            ].map(([label, val]) => (
-              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #1a1a1a', fontSize: 12, fontFamily: 'monospace' }}>
-                <span style={{ color: '#666' }}>{label}</span>
-                <span style={{ color: '#e5e5e5' }}>{val != null ? val.toFixed(2) : '—'}</span>
-              </div>
-            ))}
-            <div style={{ fontSize: 10, color: '#555', margin: '16px 0 10px', fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>Revenue Estimates</div>
-            {[
-              ['Current Year', latest.rev_est_current_yr],
-              ['Next Year',    latest.rev_est_next_yr],
-            ].map(([label, val]) => (
-              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #1a1a1a', fontSize: 12, fontFamily: 'monospace' }}>
-                <span style={{ color: '#666' }}>{label}</span>
-                <span style={{ color: '#e5e5e5' }}>{val != null ? fmt(val, 'currency') : '—'}</span>
-              </div>
-            ))}
-          </div>
-          <div>
-            <div style={{ fontSize: 10, color: '#555', marginBottom: 10, fontFamily: 'monospace', textTransform: 'uppercase', letterSpacing: 1 }}>Estimate Revisions (30d)</div>
-            <div style={{ display: 'flex', gap: 20, marginBottom: 12 }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 22, fontWeight: 700, color: '#10b981', fontFamily: 'monospace' }}>
-                  ↑{latest.revisions_up_30d ?? '—'}
-                </div>
-                <div style={{ fontSize: 10, color: '#444' }}>Up</div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 22, fontWeight: 700, color: '#ef4444', fontFamily: 'monospace' }}>
-                  ↓{latest.revisions_down_30d ?? '—'}
-                </div>
-                <div style={{ fontSize: 10, color: '#444' }}>Down</div>
-              </div>
-            </div>
-            {(latest.revisions_up_7d != null || latest.revisions_down_7d != null) && (
-              <div style={{ fontSize: 11, color: '#666', fontFamily: 'monospace', marginBottom: 12 }}>
-                Last 7d:{' '}
-                <span style={{ color: '#10b981' }}>↑{latest.revisions_up_7d ?? 0}</span>
-                {'  '}
-                <span style={{ color: '#ef4444' }}>↓{latest.revisions_down_7d ?? 0}</span>
-              </div>
-            )}
-            {[
-              ['Current Year EPS Growth', latest.eps_growth_current_yr],
-              ['Next Year EPS Growth',    latest.eps_growth_next_yr],
-            ].map(([label, val]) => (
-              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #1a1a1a', fontSize: 12, fontFamily: 'monospace' }}>
-                <span style={{ color: '#666' }}>{label}</span>
-                <span style={{ color: val >= 0 ? '#10b981' : '#ef4444' }}>
-                  {val != null ? `${(val * 100).toFixed(1)}%` : '—'}
-                </span>
-              </div>
-            ))}
-          </div>
+      {/* Panel 4: Estimates & revisions — two cards side by side (stack on mobile) */}
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 16 }}>
+        {/* Card A: everything EPS */}
+        <div style={{ ...cardStyle, flex: 1, minWidth: 0, marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
+          <p style={titleStyle}>EPS Forecasts</p>
+          <div style={subHeadStyle}>Estimates</div>
+          {[
+            ['Current Year', latest.eps_est_current_yr],
+            ['Next Year',    latest.eps_est_next_yr],
+            ['Current Q',    latest.eps_est_current_q],
+            ['Next Q',       latest.eps_est_next_q],
+          ].map(([label, val]) => (
+            <StatRow key={label} label={label} value={val != null ? val.toFixed(2) : '—'} />
+          ))}
+
+          <div style={{ ...subHeadStyle, marginTop: 'auto', paddingTop: 16 }}>Growth</div>
+          {[
+            ['Current Year', latest.eps_growth_current_yr],
+            ['Next Year',    latest.eps_growth_next_yr],
+          ].map(([label, val]) => (
+            <StatRow
+              key={label}
+              label={label}
+              value={val != null ? `${(val * 100).toFixed(1)}%` : '—'}
+              color={val == null ? '#e5e5e5' : val >= 0 ? '#10b981' : '#ef4444'}
+            />
+          ))}
+        </div>
+
+        {/* Card B: revenue + revision activity */}
+        <div style={{ ...cardStyle, flex: 1, minWidth: 0, marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
+          <p style={titleStyle}>Revenue & Revisions</p>
+          <div style={subHeadStyle}>Estimates</div>
+          {[
+            ['Current Year', latest.rev_est_current_yr],
+            ['Next Year',    latest.rev_est_next_yr],
+          ].map(([label, val]) => (
+            <StatRow key={label} label={label} value={val != null ? fmt(val, 'currency') : '—'} />
+          ))}
+
+          <div style={{ ...subHeadStyle, marginTop: 'auto', paddingTop: 16 }}>Revisions</div>
+          <StatRow label="Last 30 days" value={<RevisionPair up={latest.revisions_up_30d} down={latest.revisions_down_30d} />} />
+          <StatRow label="Last 7 days"  value={<RevisionPair up={latest.revisions_up_7d}  down={latest.revisions_down_7d} />} />
         </div>
       </div>
     </div>
