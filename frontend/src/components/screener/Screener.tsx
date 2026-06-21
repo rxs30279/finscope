@@ -110,11 +110,23 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     runScreener();
   }, []);
 
+  // Scroll the searched row into view. Deferred to a rAF loop rather than run
+  // inline: when the search arrives via router.push("/screener") from another
+  // page, Next's App Router resets the new route's scroll to top *after* this
+  // effect runs, which would cancel an inline scrollIntoView (the prod-only
+  // "search doesn't scroll" bug — masked locally by dev timing). Retrying a few
+  // frames also covers the row not being laid out yet on the first frame.
   useEffect(() => {
-    if (highlightSymbol) {
+    if (!highlightSymbol) return;
+    let raf = 0;
+    let tries = 0;
+    const tick = () => {
       const el = document.getElementById("row-" + highlightSymbol);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
+      if (tries++ < 30) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [highlightSymbol, results]);
 
   // Fetch the full universe once. All filtering is done client-side (below), so
