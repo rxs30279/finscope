@@ -141,9 +141,9 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 10 }}>
             {(() => {
-              const badgeStyle = { background: "#6366f1", color: "#fff", borderRadius: 10, width: 50, height: 50, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "DM Serif Display,serif", fontSize: 13, fontWeight: 700, textDecoration: "none", cursor: paysDividend ? "pointer" : "default" };
+              const badgeStyle = { background: "#6366f1", color: "#fff", borderRadius: 10, width: 50, height: 50, marginTop: 5, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "DM Serif Display,serif", fontSize: 13, fontWeight: 700, textDecoration: "none", cursor: paysDividend ? "pointer" : "default" };
               const label = symbol.replace(".L", "").slice(0, 4);
               return paysDividend ? (
                 <a href={dividendDataUrl(symbol)} target="_blank" rel="noopener noreferrer" title="View on Dividend Data" style={badgeStyle as any}>{label}</a>
@@ -331,18 +331,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               <MetricCard key={l} label={l} value={fmt(v, t)} />
             ))}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
-            <div style={S.card}>
-              <h3 style={S.cardTitle}>EPS History</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip contentStyle={S.tooltip} />
-                  <ReferenceLine y={0} stroke="#334155" />
-                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={singleDot("eps", "#6366f1")} name="EPS" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
             <div style={S.card}>
               <h3 style={S.cardTitle}>Return on Capital (%)</h3>
               <ResponsiveContainer width="100%" height={220}>
