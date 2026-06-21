@@ -362,15 +362,9 @@ export default function FearGreedTab({ refreshKey }) {
       </div>
       )}
 
-      {/* ── History chart ───────────────────────────────────────────────────── */}
-      <FearGreedHistoryChart history={history} loading={historyLoading} />
-
-      {/* ── US VIX — its own panel below ────────────────────────────────────── */}
-      <VixHistoryChart history={history} loading={historyLoading} />
-
       {/* ── Component breakdown — collapsed behind a toggle ──────────────────── */}
       {fg && (
-        <div style={{ marginTop:20 }}>
+        <div style={{ marginBottom:20 }}>
           <button
             onClick={() => setShowComponents(s => !s)}
             style={{
@@ -437,6 +431,12 @@ export default function FearGreedTab({ refreshKey }) {
           )}
         </div>
       )}
+
+      {/* ── History chart ───────────────────────────────────────────────────── */}
+      <FearGreedHistoryChart history={history} loading={historyLoading} />
+
+      {/* ── US VIX — its own panel below ────────────────────────────────────── */}
+      <VixHistoryChart history={history} loading={historyLoading} />
     </div>
   );
 }
