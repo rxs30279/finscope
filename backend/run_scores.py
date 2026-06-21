@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
-from main import compute_and_store_scores
+from main import compute_and_store_scores, compute_and_store_valuations
 
 
 def main() -> int:
@@ -27,9 +27,17 @@ def main() -> int:
     try:
         result = compute_and_store_scores()
         print(f"[scores] rebuilt — {result}")
-        return 0
     except Exception as e:
         print(f"[scores] rebuild FAILED — {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return 1
+
+    try:
+        vals = compute_and_store_valuations()
+        print(f"[scores] valuation estimates rebuilt — {vals}")
+        return 0
+    except Exception as e:
+        print(f"[scores] valuation rebuild FAILED — {type(e).__name__}: {e}")
         traceback.print_exc()
         return 1
 

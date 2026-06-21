@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 from prices import refresh_prices
-from main import compute_and_store_scores
+from main import compute_and_store_scores, compute_and_store_valuations
 from market import _rebuild_fear_greed_history
 
 
@@ -46,6 +46,16 @@ def main() -> int:
         print(f"[prices] screener score rebuild FAILED — {type(e).__name__}: {e}")
         traceback.print_exc()
         return 1
+
+    # Peer-relative fair values (Valuation tab). Reads peers' fresh multiples, so
+    # rebuild after prices land. Non-fatal: a failure is reported but the prices
+    # and scores above are already committed and this self-heals next run.
+    try:
+        vals = compute_and_store_valuations()
+        print(f"[prices] valuation estimates rebuilt — {vals}")
+    except Exception as e:
+        print(f"[prices] valuation rebuild FAILED (non-fatal) — {type(e).__name__}: {e}")
+        traceback.print_exc()
 
     # Rebuild the Fear & Greed daily history (UK reconstruction + US CNN backfill).
     # Auxiliary display data, so a failure here is logged but does not fail the run

@@ -9,6 +9,7 @@ import psycopg2.pool
 from typing import Optional
 from dotenv import load_dotenv
 import os
+import statistics
 from market import router as market_router
 from prices import router as prices_router, _attach_momentum, _trailing_streak
 from analysts import router as analysts_router
@@ -219,6 +220,23 @@ def quarterly(symbol: str = Query(...), response: Response = None):
     """,
         (symbol,),
     )
+
+
+@app.get("/api/valuation")
+def valuation(symbol: str = Query(...), response: Response = None):
+    # Peer-relative fair value, precomputed daily into valuation_estimates by
+    # compute_and_store_valuations(). Holds 6h at the edge like the other
+    # daily-refreshed per-company endpoints. Returns an 'insufficient' shape
+    # (rather than 404) when the company has no row yet, so the UI can render its
+    # "not enough comparable peers" state without special-casing.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=21600, stale-while-revalidate=86400"
+    rows = query(
+        "SELECT * FROM valuation_estimates WHERE symbol = %s", (symbol,)
+    )
+    if not rows:
+        return {"symbol": symbol, "peer_basis": "insufficient", "fair_value": None}
+    return rows[0]
 
 
 def _piotroski_score(row):
@@ -755,6 +773,207 @@ def compute_and_store_scores():
         )
         conn.commit()
         return {"symbols": len(universe), "stored": len(rows)}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
+# ── Peer-relative fair value ────────────────────────────────────────────────
+#
+# Deliberately narrow and EV/EBITDA-only. A dry run showed a plain peer-median is
+# only defensible for profitable, non-financial, moderately-geared companies:
+#   - financials/REITs trade on book/NAV, not EBITDA — and a high-ROE insurer next
+#     to a low-ROE bank reads as wildly overvalued under a shared P/B median;
+#   - P/S across firms with different margins is meaningless (distributor vs
+#     software in the same sector);
+#   - the EV→equity bridge amplifies a small multiple gap into a huge equity swing
+#     once leverage is high (FirstGroup, EnQuest read +600–800%).
+# So everything outside that safe subset gets no estimate (the UI shows "no
+# comparable basis") rather than a misleading number.
+#
+# Peers are TRUE peers only: same yfinance `industry`, no sector fallback. A
+# sector-wide median (e.g. all 80 Industrials) isn't a peer group — it lumped a
+# lighting maker in with the whole sector — so a thin industry (<MIN_PEERS) gets
+# no estimate rather than a diluted one.
+
+MIN_PEERS = 3  # genuine industry peers required (a 3-name median still resists one outlier)
+MAX_NET_DEBT_TO_MKT_CAP = 1.0  # leverage cap → equity-bridge amplification <= ~2x
+SANITY_MAX_ABS_UPSIDE = 150.0  # final backstop (percent) against data glitches
+# Sectors with no meaningful EV/EBITDA (book/NAV-valued). Raw GICS names as stored
+# in company_metadata.sector (see backend/sectors.py); _is_financial also catches
+# bank/insurance naming as a belt-and-braces.
+_EXCLUDED_SECTORS = {"Financial Services", "Real Estate"}
+
+
+def _valuation_eligible(r, _f):
+    """Return the company's own EV/EBITDA when it's a defensible fair-value fit,
+    else None.
+
+    Restricted to profitable, non-financial, moderately-geared companies — the
+    only group where a single peer-median EV/EBITDA is trustworthy (see the block
+    comment above). Financials/REITs, loss-makers and highly-levered names return
+    None and get no estimate.
+    """
+    sector = r.get("sector") or ""
+    if sector in _EXCLUDED_SECTORS or _is_financial(r):
+        return None
+    ni = _f(r.get("net_income"))
+    ebitda = _f(r.get("ebitda"))
+    if ni is None or ni <= 0 or ebitda is None or ebitda <= 0:
+        return None
+    mkt = _f(r.get("market_cap"))
+    if mkt is None or mkt <= 0:
+        return None
+    net_debt = _f(r.get("net_debt"))
+    if net_debt is not None and net_debt > MAX_NET_DEBT_TO_MKT_CAP * mkt:
+        return None
+    ev_ebitda = _f(r.get("ev_to_ebitda"))
+    if ev_ebitda is None or ev_ebitda <= 0:
+        return None
+    return ev_ebitda
+
+
+def _peer_median(vals):
+    """Median peer multiple. Median (not mean) so a single extreme peer — common
+    in thin UK industries — can't swing the fair value."""
+    return statistics.median(vals)
+
+
+def _fair_value_upside(peer_median, r, _f):
+    """Currency-safe fractional upside (fair_value / current_price - 1) via the
+    EV/EBITDA equity bridge.
+
+    fair_equity = peer_median * EBITDA - net_debt, compared to market_cap. EBITDA,
+    net_debt and market_cap share one reporting currency, so the ratio is
+    dimensionless — no FX needed (mirrors the ratio trick in _forward_pe). Returns
+    None when inputs are unusable.
+    """
+    ebitda = _f(r.get("ebitda"))
+    net_debt = _f(r.get("net_debt"))
+    market_cap = _f(r.get("market_cap"))
+    if ebitda is None or net_debt is None or not market_cap or market_cap <= 0:
+        return None
+    fair_equity = peer_median * ebitda - net_debt
+    return fair_equity / market_cap - 1
+
+
+def compute_and_store_valuations():
+    """Recompute peer-relative fair value for the whole universe into
+    valuation_estimates.
+
+    Fair value = peer-median EV/EBITDA applied via the equity bridge, for the
+    narrow subset where that is defensible (see _valuation_eligible). Peers are
+    true peers only — the same yfinance industry, no sector fallback — and only
+    when at least MIN_PEERS valid peers exist; otherwise no fair value is stored
+    (peer_basis 'insufficient') rather than a sector-wide median masquerading as a
+    peer group. A final SANITY_MAX_ABS_UPSIDE backstop suppresses glitch extremes.
+
+    Currency-safe without FX: the upside is a ratio of same-currency quantities
+    (EBITDA/net_debt/market_cap share one reporting currency per company), mapped
+    onto the GBp quote price only for the displayed fair value. Run daily after the
+    price refresh. Returns a summary.
+    """
+    universe = query(
+        """
+        SELECT m.symbol, m.sector, m.industry,
+               t.ev_to_ebitda, t.ebitda, t.net_debt, t.market_cap, t.net_income,
+               COALESCE(p.latest_close, t.period_end_price) AS current_price
+        FROM ttm_financials t
+        JOIN company_metadata m ON m.symbol = t.company_symbol
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol) symbol, close AS latest_close
+            FROM price_history
+            ORDER BY symbol, date DESC
+        ) p ON p.symbol = m.symbol
+        WHERE m.is_active
+        """
+    )
+    if not universe:
+        return {"symbols": 0, "stored": 0}
+
+    def _f(x):
+        return float(x) if x is not None else None
+
+    def _peer_values(self_sym, industry):
+        """Valid (>0) EV/EBITDA values for active members of the same industry."""
+        if not industry:
+            return []
+        vals = []
+        for o in universe:
+            if o["symbol"] == self_sym or o.get("industry") != industry:
+                continue
+            v = _f(o.get("ev_to_ebitda"))
+            if v is not None and v > 0:
+                vals.append(v)
+        return vals
+
+    rows_out = []
+    for r in universe:
+        sym = r["symbol"]
+        cur_price = _f(r.get("current_price"))
+        cur_price_r = round(cur_price, 2) if cur_price is not None else None
+
+        own_mult = _valuation_eligible(r, _f)
+        if own_mult is None:
+            rows_out.append((sym, None, cur_price_r, None, None,
+                             "insufficient", 0, None, None, False))
+            continue
+
+        peer_vals = _peer_values(sym, r.get("industry"))
+        basis = "industry"
+        if len(peer_vals) < MIN_PEERS:
+            rows_out.append((sym, None, cur_price_r, None, "EV/EBITDA",
+                             "insufficient", len(peer_vals), None,
+                             round(own_mult, 3), False))
+            continue
+
+        peer_median = _peer_median(peer_vals)
+        upside = _fair_value_upside(peer_median, r, _f)
+
+        fair_value = None
+        upside_pct = None
+        if upside is not None and cur_price is not None and cur_price > 0:
+            fv = cur_price * (1 + upside)
+            # Guard: no meaningful equity value, or a glitch-sized swing.
+            if fv > 0 and abs(upside * 100) <= SANITY_MAX_ABS_UPSIDE:
+                fair_value = round(fv, 2)
+                upside_pct = round(upside * 100, 1)
+        rows_out.append((sym, fair_value, cur_price_r, upside_pct, "EV/EBITDA",
+                         basis, len(peer_vals), round(peer_median, 3),
+                         round(own_mult, 3), False))
+
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO valuation_estimates"
+            " (symbol, fair_value, current_price, upside_pct, multiple_used,"
+            "  peer_basis, peer_count, peer_median_multiple, own_multiple, caution,"
+            "  computed_at)"
+            " VALUES %s"
+            " ON CONFLICT (symbol) DO UPDATE SET"
+            "   fair_value           = EXCLUDED.fair_value,"
+            "   current_price        = EXCLUDED.current_price,"
+            "   upside_pct           = EXCLUDED.upside_pct,"
+            "   multiple_used        = EXCLUDED.multiple_used,"
+            "   peer_basis           = EXCLUDED.peer_basis,"
+            "   peer_count           = EXCLUDED.peer_count,"
+            "   peer_median_multiple = EXCLUDED.peer_median_multiple,"
+            "   own_multiple         = EXCLUDED.own_multiple,"
+            "   caution              = EXCLUDED.caution,"
+            "   computed_at          = now()",
+            rows_out,
+            template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())",
+            page_size=1000,
+        )
+        conn.commit()
+        stored = sum(1 for x in rows_out if x[1] is not None)
+        return {"symbols": len(universe), "stored": stored, "rows": len(rows_out)}
     except Exception:
         conn.rollback()
         raise

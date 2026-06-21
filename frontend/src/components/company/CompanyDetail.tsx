@@ -10,6 +10,7 @@ import { fmt, gc, currSym, dividendDataUrl } from "@/lib/format";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { S } from "@/lib/theme";
 import MetricCard from "./MetricCard";
+import FairValueCard from "./FairValueCard";
 import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
@@ -92,6 +93,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
   const [snap, setSnap] = useState<any>(null);
   const [annual, setAnnual] = useState<any[]>([]);
   const [quarterly, setQuarterly] = useState<any[]>([]);
+  const [valuation, setValuation] = useState<any>(null);
   const [tab, setTab] = useState(initialTab || "chart");
   const [loading, setLoading] = useState(true);
   const isMobile = useIsMobile();
@@ -106,11 +108,13 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
       fetch(`${API}/snapshot?symbol=${enc}`).then((r) => r.json()),
       fetch(`${API}/annual?symbol=${enc}`).then((r) => r.json()),
       fetch(`${API}/quarterly?symbol=${enc}`).then((r) => r.json()),
+      fetch(`${API}/valuation?symbol=${enc}`).then((r) => r.json()).catch(() => null),
     ])
-      .then(([m, s, a, q]) => {
+      .then(([m, s, a, q, v]) => {
         setMeta(m); setSnap(s);
         setAnnual(Array.isArray(a) ? a : []);
         setQuarterly(Array.isArray(q) ? q : []);
+        setValuation(v && !v.detail ? v : null);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -265,52 +269,6 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
 
       {tab === "financials" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <div style={S.card}>
-            <h3 style={S.cardTitle}>{`Revenue, EBITDA & FCF (Annual ${sym}B)`}</h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <ComposedChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                <defs>
-                  <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} /><stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gE" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
-                <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#gR)" strokeWidth={2} dot={singleDot("revenue", "#6366f1")} name="Revenue" />
-                <Area type="monotone" dataKey="ebitda" stroke="#10b981" fill="url(#gE)" strokeWidth={2} dot={singleDot("ebitda", "#10b981")} name="EBITDA" />
-                <Line type="monotone" dataKey="fcf" stroke="#f59e0b" strokeWidth={2} dot={singleDot("fcf", "#f59e0b")} name="FCF" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile || !hasQuarterlyRevenue ? "1fr" : "1fr 1fr", gap: 20 }}>
-            {hasQuarterlyRevenue && (
-              <div style={S.card}>
-                <h3 style={S.cardTitle}>{`Quarterly Revenue (${sym}B)`}</h3>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={qChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                    <XAxis dataKey="q" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
-                    <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Revenue" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-            <div style={S.card}>
-              <h3 style={S.cardTitle}>EPS Diluted (Annual)</h3>
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: any) => sym + v?.toFixed(2)} contentStyle={S.tooltip} />
-                  <ReferenceLine y={0} stroke="#334155" />
-                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={singleDot("eps", "#6366f1")} name="EPS" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
           {waterfall && (
             <div style={S.card}>
               <h3 style={S.cardTitle}>{`Earnings & Revenue (FY ${latestAnnual.period_end_date?.slice(0, 4)})`}</h3>
@@ -339,6 +297,52 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
                       }}
                     />
                   </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
+            <div style={S.card}>
+              <h3 style={S.cardTitle}>{`Revenue, EBITDA & FCF (Annual ${sym}B)`}</h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+                  <defs>
+                    <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} /><stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gE" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
+                  <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#gR)" strokeWidth={2} dot={singleDot("revenue", "#6366f1")} name="Revenue" />
+                  <Area type="monotone" dataKey="ebitda" stroke="#10b981" fill="url(#gE)" strokeWidth={2} dot={singleDot("ebitda", "#10b981")} name="EBITDA" />
+                  <Line type="monotone" dataKey="fcf" stroke="#f59e0b" strokeWidth={2} dot={singleDot("fcf", "#f59e0b")} name="FCF" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={S.card}>
+              <h3 style={S.cardTitle}>EPS Diluted (Annual)</h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+                  <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v: any) => sym + v?.toFixed(2)} contentStyle={S.tooltip} />
+                  <ReferenceLine y={0} stroke="#334155" />
+                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={singleDot("eps", "#6366f1")} name="EPS" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          {hasQuarterlyRevenue && (
+            <div style={S.card}>
+              <h3 style={S.cardTitle}>{`Quarterly Revenue (${sym}B)`}</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={qChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+                  <XAxis dataKey="q" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
+                  <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Revenue" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -374,6 +378,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               <MetricCard key={l} label={l} value={fmt(v, t)} />
             ))}
           </div>
+          <FairValueCard val={valuation} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
             <div style={S.card}>
               <h3 style={S.cardTitle}>Return on Capital (%)</h3>
