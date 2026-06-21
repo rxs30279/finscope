@@ -10,6 +10,7 @@ import { fmt, gc, currSym, dividendDataUrl } from "@/lib/format";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { S } from "@/lib/theme";
 import MetricCard from "./MetricCard";
+import InfoDot from "@/components/InfoDot";
 import FairValueCard from "./FairValueCard";
 import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
@@ -444,7 +445,13 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
               )}
             </div>
             <div style={S.card}>
-              <h3 style={S.cardTitle}>Current Ratio History</h3>
+              <h3 style={{ ...S.cardTitle, display: "flex", alignItems: "center", gap: 7 }}>
+                Current Ratio History
+                <InfoDot
+                  size={15}
+                  text="Current ratio = current assets ÷ current liabilities. It gauges short-term liquidity: whether a company can cover the bills due within a year from assets it can turn to cash in that time. Above 1 (the dashed line) means current assets exceed current liabilities — generally healthy. Below 1 can signal a liquidity squeeze, while a very high ratio may mean cash or inventory is sitting idle."
+                />
+              </h3>
               <ResponsiveContainer width="100%" height={210}>
                 <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />

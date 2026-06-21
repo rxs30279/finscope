@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { API, adminHeaders } from "@/lib/api";
 import { useIsMobile, useIsNarrowDesktop } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
+import { HoverTip } from "@/components/InfoDot";
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
@@ -363,34 +364,40 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
                   <th
                     style={{ ...colStyle('signal'), textAlign: 'right' }}
                     onClick={() => toggleSort('signal')}
-                    title="Composite bullish signal: coverage-adjusted Buy% + upside + revision momentum (drives Top Bullish/Bearish)"
                   >
-                    Signal {sortKey === 'signal' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    <HoverTip text="Composite bullish signal: coverage-adjusted Buy% + upside + revision momentum (drives Top Bullish/Bearish)">
+                      Signal {sortKey === 'signal' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    </HoverTip>
                   </th>
                   <th
                     style={{ ...colStyle('buy_pct'), textAlign: 'right' }}
                     onClick={() => toggleSort('buy_pct')}
-                    title={
-                      "Buy% (adj) — the share of covering analysts rating the stock a Buy, " +
-                      "adjusted for how many analysts actually cover it.\n\n" +
-                      "Raw Buy% is unreliable when coverage is thin (one bullish analyst = 100%), " +
-                      "so it's shrunk toward a neutral 50% prior with weight k=5: " +
-                      "adj = (rawBuy% × analysts + 50 × 5) / (analysts + 5).\n\n" +
-                      "Effect — the fewer the analysts, the more it's pulled toward 50%:\n" +
-                      "• 1 analyst at 100% Buy → ~58%\n" +
-                      "• 5 analysts at 100% Buy → ~75%\n" +
-                      "• 10 analysts at 100% Buy → ~83%\n" +
-                      "• well-covered names stay close to their raw Buy%.\n\n" +
-                      "Hover a row's value to see its raw Buy% and analyst count."
-                    }
                   >
-                    Buy% (adj) {sortKey === 'buy_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    <HoverTip
+                      text={
+                        "Buy% (adj) — the share of covering analysts rating the stock a Buy, " +
+                        "adjusted for how many analysts actually cover it.\n\n" +
+                        "Raw Buy% is unreliable when coverage is thin (one bullish analyst = 100%), " +
+                        "so it's shrunk toward a neutral 50% prior with weight k=5: " +
+                        "adj = (rawBuy% × analysts + 50 × 5) / (analysts + 5).\n\n" +
+                        "Effect — the fewer the analysts, the more it's pulled toward 50%:\n" +
+                        "• 1 analyst at 100% Buy → ~58%\n" +
+                        "• 5 analysts at 100% Buy → ~75%\n" +
+                        "• 10 analysts at 100% Buy → ~83%\n" +
+                        "• well-covered names stay close to their raw Buy%.\n\n" +
+                        "Hover a row's value to see its raw Buy% and analyst count."
+                      }
+                    >
+                      Buy% (adj) {sortKey === 'buy_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    </HoverTip>
                   </th>
                   <th style={{ ...colStyle('upside_pct'), textAlign: 'right' }} onClick={() => toggleSort('upside_pct')}>
                     Upside {sortKey === 'upside_pct' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
                   </th>
-                  <th style={{ ...colStyle('price_target_mean'), textAlign: 'right' }} onClick={() => toggleSort('price_target_mean')} title="Mean analyst price target">
-                    Target {sortKey === 'price_target_mean' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                  <th style={{ ...colStyle('price_target_mean'), textAlign: 'right' }} onClick={() => toggleSort('price_target_mean')}>
+                    <HoverTip text="Mean analyst price target">
+                      Target {sortKey === 'price_target_mean' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+                    </HoverTip>
                   </th>
                   {!isNarrowDesktop && (
                     <th style={{ ...colStyle('revision_score'), textAlign: 'right' }} onClick={() => toggleSort('revision_score')}>

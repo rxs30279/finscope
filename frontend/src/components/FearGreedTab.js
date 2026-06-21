@@ -5,6 +5,7 @@ import {
   Tooltip, ResponsiveContainer, ReferenceArea, ReferenceLine
 } from 'recharts';
 import { API } from "@/lib/api";
+import { fmtUKDate } from "@/lib/format";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 
 const RANGE_DAYS = { '1M': 31, '3M': 92, '6M': 183, '1Y': 366 };
@@ -113,7 +114,7 @@ function FearGreedHistoryChart({ history, loading }) {
     return [...new Set(out)];
   }, [filtered]);
 
-  const pillBase = { border:'1px solid #2a2a2a', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', background:'none' };
+  const pillBase = { borderWidth:1, borderStyle:'solid', borderColor:'#2a2a2a', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', background:'none' };
   const pillActive = { ...pillBase, background:'#3730a3', color:'#e0e7ff', borderColor:'#4338ca' };
   const pillInactive = { ...pillBase, color:'#555' };
 
@@ -181,8 +182,9 @@ function FearGreedHistoryChart({ history, loading }) {
             <YAxis yAxisId="left" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} width={40} tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
             <Tooltip
               contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:10, fontFamily:'monospace' }}
+              labelStyle={{ color:'#e5e5e5' }}
               formatter={(v, name) => [v != null ? `${Math.round(v)}${mode === 'pct' ? ' %ile' : ''}` : '—', name]}
-              labelFormatter={l => l}
+              labelFormatter={fmtUKDate}
             />
             {show.uk && <Line yAxisId="left" type="monotone" dataKey="uk" name="UK" stroke={UK_COLOR} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />}
             {show.us && <Line yAxisId="left" type="monotone" dataKey="us" name="US (CNN)" stroke={US_COLOR} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />}
@@ -219,7 +221,7 @@ function VixHistoryChart({ history, loading }) {
     return [...new Set(out)];
   }, [filtered]);
 
-  const pillBase = { border:'1px solid #2a2a2a', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', background:'none' };
+  const pillBase = { borderWidth:1, borderStyle:'solid', borderColor:'#2a2a2a', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', background:'none' };
   const pillActive = { ...pillBase, background:'#3730a3', color:'#e0e7ff', borderColor:'#4338ca' };
   const pillInactive = { ...pillBase, color:'#555' };
 
@@ -262,8 +264,9 @@ function VixHistoryChart({ history, loading }) {
             <YAxis domain={['auto', 'auto']} width={40} tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
             <Tooltip
               contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:10, fontFamily:'monospace' }}
+              labelStyle={{ color:'#e5e5e5' }}
               formatter={(v) => [v != null ? v.toFixed(2) : '—', 'US VIX']}
-              labelFormatter={l => l}
+              labelFormatter={fmtUKDate}
             />
             <Line type="monotone" dataKey="vix" name="US VIX" stroke={VIX_COLOR} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
           </LineChart>
@@ -347,14 +350,18 @@ export default function FearGreedTab({ refreshKey }) {
           </div>
         </div>
 
-        {/* Colour-banded progress bar (the gauge graphic) */}
-        <div style={{ position:'relative', height:10, borderRadius:5, background:'#1a1a1a', overflow:'hidden' }}>
-          <div style={{ position:'absolute', left:'0%',  width:'25%', height:'100%', background:'#ef4444', opacity:0.9 }}/>
-          <div style={{ position:'absolute', left:'25%', width:'20%', height:'100%', background:'#f97316', opacity:0.9 }}/>
-          <div style={{ position:'absolute', left:'45%', width:'10%', height:'100%', background:'#9ca3af', opacity:0.9 }}/>
-          <div style={{ position:'absolute', left:'55%', width:'20%', height:'100%', background:'#f59e0b', opacity:0.9 }}/>
-          <div style={{ position:'absolute', left:'75%', width:'25%', height:'100%', background:'#10b981', opacity:0.9 }}/>
-          <div style={{ position:'absolute', left:`${fg.score}%`, transform:'translateX(-50%)', top:-3, width:4, height:16, background:'white', borderRadius:2, boxShadow:'0 0 4px rgba(0,0,0,0.8)' }}/>
+        {/* Colour-banded progress bar (the gauge graphic). Outer wrapper is not
+            clipped so the current-reading marker can stand proud of the bar. */}
+        <div style={{ position:'relative', height:10 }}>
+          <div style={{ position:'absolute', inset:0, borderRadius:5, background:'#1a1a1a', overflow:'hidden' }}>
+            <div style={{ position:'absolute', left:'0%',  width:'25%', height:'100%', background:'#ef4444', opacity:0.9 }}/>
+            <div style={{ position:'absolute', left:'25%', width:'20%', height:'100%', background:'#f97316', opacity:0.9 }}/>
+            <div style={{ position:'absolute', left:'45%', width:'10%', height:'100%', background:'#9ca3af', opacity:0.9 }}/>
+            <div style={{ position:'absolute', left:'55%', width:'20%', height:'100%', background:'#f59e0b', opacity:0.9 }}/>
+            <div style={{ position:'absolute', left:'75%', width:'25%', height:'100%', background:'#10b981', opacity:0.9 }}/>
+          </div>
+          {/* Current reading — a bold outlined marker that overhangs the bar */}
+          <div style={{ position:'absolute', left:`${fg.score}%`, top:'50%', transform:'translate(-50%,-50%)', zIndex:2, width:6, height:22, background:'#fff', border:'2px solid #0b0b0b', borderRadius:3, boxShadow:'0 0 7px rgba(0,0,0,0.95)' }}/>
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', color:'#555', fontSize:8, fontFamily:'monospace', marginTop:5, textTransform:'uppercase', letterSpacing:'0.5px' }}>
           <span>Extreme Fear</span><span>Neutral</span><span>Extreme Greed</span>

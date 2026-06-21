@@ -24,6 +24,13 @@ export const fmt = (
   return v.toLocaleString();
 };
 
+// British date format (dd/mm/yyyy) for chart tooltip labels. Falls back to the
+// raw value if it isn't a parseable date.
+export const fmtUKDate = (d: string | number | Date): string => {
+  const dt = new Date(d);
+  return isNaN(dt.getTime()) ? String(d) : dt.toLocaleDateString("en-GB");
+};
+
 export const gc = (v: number | null | undefined): string => {
   if (v === null || v === undefined) return "#94a3b8";
   return v >= 0 ? "#10b981" : "#ef4444";

@@ -14,7 +14,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { API } from "@/lib/api";
-import { currSym } from "@/lib/format";
+import { currSym, fmtUKDate } from "@/lib/format";
 import { loadChartPrefs, saveChartPrefs } from "@/lib/storage";
 import { S } from "@/lib/theme";
 
@@ -167,8 +167,7 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
     return mon;
   };
 
-  const labelFormatter = (dateStr: string) =>
-    new Date(dateStr).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const labelFormatter = (dateStr: string) => fmtUKDate(dateStr);
 
   const fmtAxisPrice = (v: number) =>
     v == null ? "" : Number(v).toLocaleString("en-GB", { maximumFractionDigits: 2 });

@@ -5,8 +5,9 @@ import {
   Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { API } from "@/lib/api";
-import { fmt } from "@/lib/format";
+import { fmt, fmtUKDate } from "@/lib/format";
 import { useIsMobile } from "@/hooks/useMediaQuery";
+import InfoDot from "@/components/InfoDot";
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
@@ -232,14 +233,9 @@ export default function AnalystTab({ symbol }) {
       {/* Panel 3: Consensus trend (only if ≥2 snapshots) */}
       {trendData.length >= 2 && (
         <div style={{ ...cardStyle, flex: 1, minWidth: 0, marginBottom: 0 }}>
-          <p style={titleStyle}>
+          <p style={{ ...titleStyle, display: 'flex', alignItems: 'center', gap: 6 }}>
             Consensus Trend — % Bullish
-            <span
-              role="img"
-              aria-label="What this shows"
-              title="Share of covering analysts with a Buy (or Strong Buy) rating, tracked over time. A rising line means sentiment is improving. Uses a coverage-adjusted Buy% so thinly-covered names aren't over-weighted."
-              style={{ marginLeft: 6, color: '#667', cursor: 'help', userSelect: 'none' }}
-            >ⓘ</span>
+            <InfoDot text="Share of covering analysts with a Buy (or Strong Buy) rating, tracked over time. A rising line means sentiment is improving. Uses a coverage-adjusted Buy% so thinly-covered names aren't over-weighted." />
           </p>
           <ResponsiveContainer width="100%" height={160}>
             <LineChart data={trendData} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
@@ -248,7 +244,7 @@ export default function AnalystTab({ symbol }) {
               <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} unit="%" />
               <Tooltip
                 formatter={v => [`${v?.toFixed(1)}%`, 'Buy%']}
-                labelFormatter={fmtTickDate}
+                labelFormatter={fmtUKDate}
                 contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
                 labelStyle={{ color: '#e5e5e5' }}
                 itemStyle={{ color: '#10b981' }}
@@ -270,7 +266,7 @@ export default function AnalystTab({ symbol }) {
               <YAxis domain={['auto', 'auto']} tick={{ fontSize: 10, fill: '#555', fontFamily: 'monospace' }} unit="p" />
               <Tooltip
                 formatter={(v, name) => [v != null ? `${v.toFixed(0)}p` : '—', name]}
-                labelFormatter={fmtTickDate}
+                labelFormatter={fmtUKDate}
                 contentStyle={{ background: '#141414', border: '1px solid #2a2a2a', borderRadius: 2, fontFamily: 'monospace', fontSize: 11 }}
                 labelStyle={{ color: '#e5e5e5' }}
               />

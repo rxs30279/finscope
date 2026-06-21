@@ -190,6 +190,7 @@ function GiltSnapshotChart({ snapshot, fill = false }) {
             />
             <Tooltip
               contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:11, fontFamily:'monospace' }}
+              labelStyle={{ color:'#e5e5e5' }}
               formatter={v => [`${v.toFixed(2)}%`, 'Yield']}
             />
             <Line type="monotone" dataKey="yield" stroke={curveColor} strokeWidth={2} dot={{ r:4, fill:curveColor }} />
@@ -264,12 +265,17 @@ export default function CrossAssetTab({ refreshKey }) {
             : <MacroCard label="CPI (YoY)" item={macro.cpi} />}
         </div>
         <div style={{ display:'flex', flexDirection:'column', marginTop: isMobile ? 24 : 0 }}>
-          <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
-            UK Gilt Yield Curve
-          </div>
           {giltData ? (
-            <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16, flex:1, minHeight: isMobile ? 230 : 0 }}>
-              <GiltSnapshotChart snapshot={giltData.snapshot} fill={!isMobile} />
+            <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16, flex:1, minHeight: isMobile ? 230 : 0, display:'flex', flexDirection:'column' }}>
+              <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
+                UK Gilt Yield Curve
+              </div>
+              <div style={{ flex:1, minHeight:0 }}>
+                <GiltSnapshotChart snapshot={giltData.snapshot} fill={!isMobile} />
+              </div>
+              <div style={{ color:'#555', fontSize:8, textTransform:'uppercase', letterSpacing:'0.5px', marginTop:8, textAlign:'right' }}>
+                Data supplied by Bank of England
+              </div>
             </div>
           ) : (
             <div style={{ ...skelStyle, flex:1, minHeight: isMobile ? 230 : 0 }} />

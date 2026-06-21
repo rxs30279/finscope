@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { API } from "@/lib/api";
 import { useIsMobile } from "@/hooks/useMediaQuery";
+import InfoDot from "@/components/InfoDot";
 
 // Shared badge palette for both the Signal Log and the RS table's Signal column,
 // so the two can't drift apart. BUY/AVOID are common to both; ALERT/INFO are
@@ -61,7 +62,7 @@ function SectorHeatmap({ sectors, isMobile }) {
         const isBottom = rank >= bottomFrom;
         const bg    = isTop ? `rgba(16,185,129,${0.08 + (4-rank)*0.04})` : isBottom ? `rgba(239,68,68,${0.05 + (rank-bottomFrom)*0.03})` : '#101010';
         const border= isTop ? '#10b981' : isBottom ? '#ef4444' : '#222';
-        const color = isTop ? '#10b981' : isBottom ? '#ef4444' : '#555';
+        const color = isTop ? '#10b981' : isBottom ? '#ef4444' : '#94a3b8';
         return (
           <div key={s.sector} style={{ background:bg, border:`1px solid ${border}`, borderRadius:2, padding:'8px 6px', textAlign:'center' }}>
             <div style={{ color, fontSize:9, fontWeight:700 }}>#{rank}</div>
@@ -77,7 +78,6 @@ function SectorHeatmap({ sectors, isMobile }) {
 function RSTable({ sectors }) {
   if (!sectors?.length) return null;
   return (
-    <>
     <table style={{ width:'100%', minWidth:460, borderCollapse:'collapse', fontSize:11, fontFamily:'monospace' }}>
       <thead>
         <tr style={{ borderBottom:'1px solid #2a2a2a' }}>
@@ -103,11 +103,6 @@ function RSTable({ sectors }) {
         ))}
       </tbody>
     </table>
-    <div style={{ color:'#64748b', fontSize:9, fontFamily:'monospace', marginTop:8, lineHeight:1.5 }}>
-      RS Score = the basket's return over the past 3 months (63 trading days) relative to the All-Share; &gt;1 means it outperformed.<br/>
-      Breadth = % of each sector's basket trading above its 50-day MA, measured over the curated sector baskets (not the full FTSE 100).
-    </div>
-    </>
   );
 }
 
@@ -151,16 +146,25 @@ export default function RotationTab({ refreshKey }) {
       <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Sector Rotation</h2>
       <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap:16, marginBottom:16 }}>
         <div style={card}>
-          <div style={title}>Sector Heatmap — RS Rank</div>
+          <div style={{ ...title, display:'flex', alignItems:'center', gap:6 }}>
+            Sector Heatmap — RS Rank
+            <InfoDot text="Sectors ranked by relative strength (RS) — each basket's 3-month return versus the FTSE All-Share. #1 is the strongest. The top four are highlighted green, the bottom four red; mid-table sectors are neutral." />
+          </div>
           <SectorHeatmap sectors={rotation} isMobile={isMobile} />
         </div>
         <div style={card}>
-          <div style={title}>Signal Log</div>
+          <div style={{ ...title, display:'flex', alignItems:'center', gap:6 }}>
+            Signal Log
+            <InfoDot text={"A snapshot of today's notable sector conditions (computed on one read, not a time-ordered history).\n\nBUY — sector RS above 1.05 and rising vs 10 days ago (outperforming and strengthening).\nAVOID — RS below 0.95 and falling (underperforming and weakening).\nALERT — overall FTSE 100 breadth crossed a threshold (>65% bullish, <40% bearish).\nNEUTRAL — no active signal."} />
+          </div>
           <SignalLog signals={signals} />
         </div>
       </div>
       <div style={card}>
-        <div style={title}>RS Ranking Table</div>
+        <div style={{ ...title, display:'flex', alignItems:'center', gap:6 }}>
+          RS Ranking Table
+          <InfoDot text={"RS Score — the sector basket's return over the past 3 months (63 trading days) relative to the All-Share; above 1 means it outperformed.\nTrend — whether RS is rising or falling versus 10 trading days ago.\nBreadth — % of the sector's basket trading above its 50-day MA (curated baskets, not the full FTSE 100).\nSignal — BUY (RS >1.05 & rising), AVOID (RS <0.95 & falling), or NEUTRAL."} />
+        </div>
         <div style={{ overflowX:'auto' }}>
           <RSTable sectors={rotation} />
         </div>
