@@ -154,7 +154,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <Link
           href="/"
           style={{
-            fontFamily: '"Inter", sans-serif',
+            fontFamily: "var(--font-inter), sans-serif",
             fontSize: isMobile ? 10 : 12,
             fontWeight: 700,
             color: "#f97316",

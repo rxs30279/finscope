@@ -1,25 +1,27 @@
 /* ── Typography (Bloomberg-style humanist sans system) ──
-   The app sets fonts inline rather than via classes, so we wire the loaded
-   webfonts up centrally here instead of editing every call site:
+   Inter and Mulish are self-hosted via next/font (see app/layout.tsx), which
+   exposes them as the CSS variables --font-inter / --font-mulish on <html>.
+   The app sets fonts inline rather than via classes, so we wire those variables
+   up centrally here instead of editing every call site:
      1. body            → Inter (base for all proportional text).
      2. inline `monospace` → Inter. The app root and the whole data grid use
         the `monospace` keyword inline; remapping it makes Inter the data face.
         `!important` is required to beat the (non-important) inline declarations,
         and tabular-nums keeps numeric columns aligned without a mono font.
-     3. inline `DM Serif Display` → Work Sans (headlines). The inline literals
+     3. inline `DM Serif Display` → Mulish (headlines). The inline literals
         still read "DM Serif Display"; this rule is the single source of truth
         for the display font — swap the value to restyle every heading at once. */
 body {
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
 }
 
 [style*="monospace"] {
-  font-family: "Inter", system-ui, -apple-system, sans-serif !important;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif !important;
   font-variant-numeric: tabular-nums;
 }
 
 [style*="DM Serif Display"] {
-  font-family: "Mulish", "Inter", system-ui, sans-serif !important;
+  font-family: var(--font-mulish), var(--font-inter), system-ui, sans-serif !important;
   font-weight: 800 !important;
   letter-spacing: -0.01em;
 }
@@ -212,7 +214,7 @@ aside::-webkit-scrollbar {
   justify-content: space-between;
   align-items: center;
   padding: 3px 0;
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
   font-variant-numeric: tabular-nums;
   font-size: 11px;
 }

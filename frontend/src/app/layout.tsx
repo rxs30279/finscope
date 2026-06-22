@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Inter, Mulish } from "next/font/google";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
@@ -6,6 +7,21 @@ import "./globals.css";
 import { WatchlistProvider, RefreshProvider } from "./providers";
 import AppShell from "@/components/layout/AppShell";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
+
+// Self-hosted at build time (no runtime Google Fonts fetch, no FOUT). Both are
+// variable fonts, so the full weight range is available — globals.css wires
+// these CSS variables to the inline `monospace` (Inter) and `DM Serif Display`
+// (Mulish) keyword placeholders used throughout the app.
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-inter",
+});
+const mulish = Mulish({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-mulish",
+});
 
 export const viewport: Viewport = {
   themeColor: "#0d1117",
@@ -58,14 +74,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${inter.variable} ${mulish.variable}`}>
       <head>
-        {/* Google Fonts */}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Mulish:wght@500;600;700;800&display=swap"
-          rel="stylesheet"
-        />
         {/* Google Analytics 4 */}
         <Script
           src="https://www.googletagmanager.com/gtag/js?id=G-4D7NSXL95B"

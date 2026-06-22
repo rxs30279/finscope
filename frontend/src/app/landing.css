@@ -2,8 +2,9 @@
    Marketing landing page (route "/").
 
    Everything here is scoped under `.am-landing` so it can't leak into the app
-   chrome, which styles itself inline. Fonts (Inter / Mulish) are loaded once in
-   the root layout, so this file only owns layout, colour and motion.
+   chrome, which styles itself inline. Fonts (Inter / Mulish) are self-hosted via
+   next/font in the root layout and exposed as --font-inter / --font-mulish, so
+   this file only owns layout, colour and motion.
    ────────────────────────────────────────────────────────────────────────── */
 .am-landing {
   --bg: #0d1117;
@@ -19,7 +20,7 @@
   min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
-  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter), "Segoe UI", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
