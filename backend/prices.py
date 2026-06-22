@@ -492,7 +492,8 @@ def get_prices(symbol: str, response: Response):
 # ── Trending (consecutive up / down day streaks) ──────────────────────────────
 
 _trending_cache: dict = {}
-_TRENDING_TTL = 900  # 15 min — price history only refreshes once/day
+_TRENDING_TTL = 86400  # 24h safety net — keyed on latest price date below,
+                       # so it really stays warm until new prices land.
 
 
 def _trailing_streak(closes):
@@ -532,7 +533,12 @@ def trending(response: Response, min_streak: int = 3, limit: int = 40):
     response.headers["Cache-Control"] = (
         "public, s-maxage=900, stale-while-revalidate=3600"
     )
-    cache_key = (min_streak, limit)
+    # Key the cache on the latest price date so it stays warm until new prices
+    # land (the daily prices cron) instead of expiring every few minutes and
+    # recomputing the identical answer. The 24h TTL is just a safety net.
+    latest_rows = query("SELECT MAX(date) AS d FROM price_history")
+    latest_date = latest_rows[0]["d"] if latest_rows else None
+    cache_key = (min_streak, limit, latest_date)
     now = time.time()
     cached = _trending_cache.get(cache_key)
     if cached and now - cached[1] < _TRENDING_TTL:
@@ -605,6 +611,9 @@ def trending(response: Response, min_streak: int = 3, limit: int = 40):
     fallers.sort(key=lambda x: (x["streak"], -(x["pct"] or 0)), reverse=True)
 
     result = {"risers": risers[:limit], "fallers": fallers[:limit]}
+    # Drop entries from previous dates so the cache doesn't grow one row/day.
+    for k in [k for k in _trending_cache if k[2] != latest_date]:
+        del _trending_cache[k]
     _trending_cache[cache_key] = (result, now)
     return result
 
