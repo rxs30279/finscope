@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
 import { API } from "@/lib/api";
+import PageHeader from "@/components/layout/PageHeader";
 
 // ── Colour scale ──────────────────────────────────────────────────────────────
 // finviz-style red→grey→green ramp, clamped at ±3% daily move. No data → neutral.
@@ -262,28 +263,10 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: 12,
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <h2
-            style={{
-              fontFamily: "DM Serif Display,serif",
-              fontSize: 22,
-              color: "#f1f5f9",
-              margin: 0,
-            }}
-          >
-            Market Heatmap
-          </h2>
-          <div style={{ color: "#64748b", fontSize: 11, marginTop: 3 }}>
+      <PageHeader
+        title="Market Heatmap"
+        subtitle={
+          <>
             Tiles sized by market cap, grouped by ICB sector, coloured by{" "}
             {dataIsLive && marketOpen
               ? "today's move so far"
@@ -305,9 +288,10 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
                 </span>
               )
             )}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+          </>
+        }
+        right={
+          <>
           {marketOpen ? (
             <button
               onClick={() => setLive((v) => !v)}
@@ -389,8 +373,9 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
               </button>
             );
           })}
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* Legend */}
       <div

@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useIsMobile, useIsTablet } from "@/hooks/useMediaQuery";
 import { API } from "@/lib/api";
+import PageHeader from "@/components/layout/PageHeader";
 
 const TIER_COLORS = {
   A: { bg: "#1f1200", color: "#f97316", label: "Tier A" },
@@ -596,36 +597,10 @@ export default function RnsTab({ refreshKey, onSelect }) {
   return (
     <div>
       {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: isMobile ? "column" : "row",
-          justifyContent: "space-between",
-          alignItems: isMobile ? "stretch" : "center",
-          gap: isMobile ? 8 : 0,
-          marginBottom: 20,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            flexDirection: isMobile ? "column" : "row",
-            alignItems: isMobile ? "flex-start" : "baseline",
-            gap: isMobile ? 4 : 16,
-          }}
-        >
-          <h2
-            style={{
-              fontFamily: "monospace",
-              fontSize: isMobile ? 12 : 14,
-              color: "#f97316",
-              textTransform: "uppercase",
-              letterSpacing: 2,
-              margin: 0,
-            }}
-          >
-            RNS Daily News Screener
-          </h2>
+      <PageHeader
+        title="RNS Daily News Screener"
+        subtitle="London Stock Exchange regulatory announcements, filtered and AI-ranked by significance."
+        right={
           <span
             style={{
               fontSize: 10,
@@ -667,8 +642,8 @@ export default function RnsTab({ refreshKey, onSelect }) {
               Subscribe →
             </a>
           </span>
-        </div>
-      </div>
+        }
+      />
 
       {/* Controls */}
       <div

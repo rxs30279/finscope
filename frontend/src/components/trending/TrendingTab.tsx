@@ -7,6 +7,7 @@ import { S } from "@/lib/theme";
 import TrendingList from "./TrendingList";
 import TrendingProfile from "./TrendingProfile";
 import NewsTab from "@/components/NewsTab";
+import PageHeader from "@/components/layout/PageHeader";
 
 interface Props {
   onSelect: (symbol: string) => void;
@@ -38,14 +39,10 @@ export default function TrendingTab({ onSelect }: Props) {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>
-          Trending <span style={{ color: "#64748b" }}>— Risers and Fallers</span>
-        </h1>
-        <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
-          Stocks on a run of 3 or more consecutive up or down days, ranked by streak length.
-        </div>
-      </div>
+      <PageHeader
+        title={<>Trending <span style={{ color: "#64748b" }}>— Risers and Fallers</span></>}
+        subtitle="Stocks on a run of 3 or more consecutive up or down days, ranked by streak length."
+      />
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(210px,1fr) minmax(210px,1fr) minmax(360px,1.5fr)", gap: 16, alignItems: "start" }}>
         <TrendingList title="Risers" accent="#10b981" up items={risers} selected={sel} onSelect={setSel} height={colH} />
         <TrendingList title="Fallers" accent="#ef4444" up={false} items={fallers} selected={sel} onSelect={setSel} height={colH} />

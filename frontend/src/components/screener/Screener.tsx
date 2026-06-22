@@ -10,6 +10,7 @@ import HybridSelect from "@/components/company/HybridSelect";
 import SectorDropdown from "./SectorDropdown";
 import StarButton from "./StarButton";
 import ScorePill from "./ScorePill";
+import PageHeader from "@/components/layout/PageHeader";
 
 const EMPTY_FILTERS = { sector: "", exclude_sectors: "", ftse_index: "", min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "", consensus: "", min_upside_pct: "" };
 const EMPTY_MODES = { min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "" };
@@ -265,15 +266,16 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
-          <h2 style={{ fontFamily: "DM Serif Display,serif", fontSize: 23, color: "#f1f5f9", margin: 0, letterSpacing: "-0.01em" }}>UK Stock Screener</h2>
-          <span style={{ fontSize: 13, color: "#64748b", whiteSpace: "nowrap" }}>{`${filters.ftse_index || "All indices"}${includedSectors.length === 1 ? ` · ${includedSectors[0]}` : includedSectors.length > 1 ? ` · ${includedSectors.length} sectors` : ""}`}</span>
-        </div>
-        <span style={{ flexShrink: 0, background: "rgba(249,115,22,0.1)", color: "#fb923c", border: "1px solid rgba(249,115,22,0.28)", borderRadius: 100, padding: "3px 11px", fontSize: 12, fontWeight: 600 }}>
-          {displayed.length !== results.length ? `${displayed.length} / ${results.length}` : displayed.length} companies
-        </span>
-      </div>
+      <PageHeader
+        title="UK Stock Screener"
+        inlineSubtitle
+        subtitle={`${filters.ftse_index || "All indices"}${includedSectors.length === 1 ? ` · ${includedSectors[0]}` : includedSectors.length > 1 ? ` · ${includedSectors.length} sectors` : ""}`}
+        right={
+          <span style={{ flexShrink: 0, background: "rgba(249,115,22,0.1)", color: "#fb923c", border: "1px solid rgba(249,115,22,0.28)", borderRadius: 100, padding: "3px 11px", fontSize: 12, fontWeight: 600 }}>
+            {displayed.length !== results.length ? `${displayed.length} / ${results.length}` : displayed.length} companies
+          </span>
+        }
+      />
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
         <SectorDropdown sectors={filterOpts.sectors} selected={includedSectors} excluded={excludedSectors} onToggleInclude={toggleIncludeSector} onClear={() => update("sector", "")} onToggleExclude={toggleExcludeSector} />

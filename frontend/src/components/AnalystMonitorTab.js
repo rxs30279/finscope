@@ -4,6 +4,7 @@ import { API, adminHeaders } from "@/lib/api";
 import { useIsMobile, useIsNarrowDesktop } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { HoverTip } from "@/components/InfoDot";
+import PageHeader from "@/components/layout/PageHeader";
 
 const CONSENSUS_COLORS = {
   Buy:  { bg: '#0d3320', color: '#10b981' },
@@ -223,26 +224,27 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h2 style={{ fontFamily: 'monospace', fontSize: 14, color: '#f97316', textTransform: 'uppercase', letterSpacing: 2, margin: 0 }}>
-          Analyst Monitor
-        </h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {toast && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{toast}</span>}
-          {dataAsOf && (
-            <span style={{ fontSize: 10, color: '#555', fontFamily: 'monospace' }}>Data as of {dataAsOf}</span>
-          )}
-          {isAdmin && (
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              style={{ background: '#1a1a1a', color: refreshing ? '#444' : '#666', border: '1px solid #2a2a2a', padding: '4px 12px', borderRadius: 2, fontFamily: 'monospace', fontSize: 10, cursor: refreshing ? 'default' : 'pointer' }}
-            >
-              {refreshing ? '↻ Starting…' : '↻ Refresh'}
-            </button>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Analyst Consensus"
+        subtitle="Broker ratings, consensus changes, price-target upside and the latest upgrades and downgrades across UK shares."
+        right={
+          <>
+            {toast && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{toast}</span>}
+            {dataAsOf && (
+              <span style={{ fontSize: 10, color: '#555', fontFamily: 'monospace' }}>Data as of {dataAsOf}</span>
+            )}
+            {isAdmin && (
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                style={{ background: '#1a1a1a', color: refreshing ? '#444' : '#666', border: '1px solid #2a2a2a', padding: '4px 12px', borderRadius: 2, fontFamily: 'monospace', fontSize: 10, cursor: refreshing ? 'default' : 'pointer' }}
+              >
+                {refreshing ? '↻ Starting…' : '↻ Refresh'}
+              </button>
+            )}
+          </>
+        }
+      />
 
       {/* Signals board */}
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 24 }}>

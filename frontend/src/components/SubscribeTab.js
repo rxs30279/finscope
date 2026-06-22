@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { API } from "@/lib/api";
+import PageHeader from "@/components/layout/PageHeader";
 
 const LABEL = {
   color: "#f97316",
@@ -120,19 +121,10 @@ export default function SubscribeTab() {
 
   return (
     <div style={{ maxWidth: 640 }}>
-      <h2 style={{
-        margin: "0 0 4px",
-        fontFamily: "monospace",
-        color: "#f97316",
-        fontSize: 18,
-        letterSpacing: 2,
-        textTransform: "uppercase",
-      }}>
-        Daily RNS Digest
-      </h2>
-      <div style={{ color: "#666", fontSize: 12, fontFamily: "monospace", marginBottom: 24 }}>
-        AI-ranked UK RNS announcements · 07:30 GMT/BST · Mon–Fri
-      </div>
+      <PageHeader
+        title="Email Digest"
+        subtitle="A free weekday email of notable movers and the most significant RNS news · AI-ranked · 07:30 GMT/BST · Mon–Fri."
+      />
 
       <div style={CARD}>
         <div style={LABEL}>What you'll get</div>

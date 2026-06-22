@@ -5,6 +5,7 @@ import { loadTargets, saveTargets, DEFAULT_LIST_ID } from "@/lib/storage";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { lseStatus } from "@/lib/lse";
+import PageHeader from "@/components/layout/PageHeader";
 
 // Relative time for recent items ("2h", "3d"); a real date once past a week,
 // which reads better than "5w" for older news.
@@ -894,30 +895,17 @@ export default function WatchlistTab({
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          gap: 12,
-          marginBottom: 14,
-        }}
-      >
-        <h2
-          style={{
-            margin: 0,
-            fontFamily: "DM Serif Display,serif",
-            fontSize: 24,
-            color: "#f1f5f9",
-          }}
-        >
-          Watchlists
-        </h2>
-        <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
-          {symbols.length === 0
-            ? "no stocks in this list"
-            : `${symbols.length} in list${loading ? " · loading…" : ""}`}
-        </span>
-      </div>
+      <PageHeader
+        title="Watchlists"
+        subtitle="Track and compare the stocks you're following, with live prices and notes."
+        right={
+          <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
+            {symbols.length === 0
+              ? "no stocks in this list"
+              : `${symbols.length} in list${loading ? " · loading…" : ""}`}
+          </span>
+        }
+      />
 
       {/* List tabs + management + add-stock box */}
       <div
