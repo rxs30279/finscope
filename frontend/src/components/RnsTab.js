@@ -219,6 +219,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const [tierFilter, setTierFilter] = useState("all"); // all | A | B | C
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState("llm"); // 'llm' | 'time'
+  // Bumped by the manual refresh button to force a re-fetch (the backend
+  // ingests on a 15-min cron, so the data on screen can lag a few minutes).
+  const [manualRefresh, setManualRefresh] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -248,7 +251,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
           .catch(() => {});
       })
       .catch(() => setLoading(false));
-  }, [refreshKey, hours, minScore]);
+  }, [refreshKey, hours, minScore, manualRefresh]);
 
   const filtered = useMemo(() => {
     let r = rows;
@@ -385,7 +388,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
                   {r.ticker}
                   <span
                     style={{
-                      color: "#6366f1",
+                      color: "#818cf8",
                       marginLeft: 4,
                       fontWeight: 400,
                       fontSize: 10,
@@ -486,7 +489,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               {r.ticker}
               <span
                 style={{
-                  color: "#6366f1",
+                  color: "#818cf8",
                   marginLeft: 4,
                   fontWeight: 400,
                   fontSize: 10,
@@ -614,7 +617,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               gap: 14,
             }}
           >
-            <span>
+            <span style={{ display: "inline-flex", alignItems: "baseline", gap: 8 }}>
               Last updated:{" "}
               <span style={{ color: "#888" }}>{fmtAgo(lastUpdatedAt)}</span>
               {lastUpdatedAt && (
@@ -622,6 +625,26 @@ export default function RnsTab({ refreshKey, onSelect }) {
                   ({fmtTime(lastUpdatedAt)})
                 </span>
               )}
+              <button
+                type="button"
+                onClick={() => setManualRefresh((n) => n + 1)}
+                disabled={loading}
+                title="Refresh"
+                style={{
+                  background: "#0a0a0a",
+                  color: loading ? "#444" : "#f97316",
+                  border: "1px solid #2a2a2a",
+                  borderRadius: 2,
+                  padding: "2px 8px",
+                  fontFamily: "monospace",
+                  fontSize: 10,
+                  letterSpacing: 1,
+                  textTransform: "uppercase",
+                  cursor: loading ? "default" : "pointer",
+                }}
+              >
+                {loading ? "Refreshing…" : "↻ Refresh"}
+              </button>
             </span>
             <span style={{ color: "#444" }}>·</span>
             <span>

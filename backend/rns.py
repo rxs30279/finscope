@@ -1259,5 +1259,36 @@ def get_market_caps(
 
 @router.get("/pipeline/status")
 def pipeline_status():
-    """Return the status of the last pipeline run."""
-    return _pipeline_state
+    """Report ingest health derived from the DB.
+
+    The pipeline runs as a separate cron process (run_rns.py), not in this API
+    process, so there is no in-memory run state to report. Instead we surface
+    the freshest stored data — last fetch, last publish, and 24h counts — which
+    reflects pipeline health regardless of which process did the ingest.
+    """
+    rows = _query(
+        """
+        SELECT
+            MAX(fetched_at)                                            AS last_fetched_at,
+            MAX(published_at)                                          AS last_published_at,
+            COUNT(*) FILTER (WHERE published_at >= NOW() - INTERVAL '24 hours') AS count_24h,
+            COUNT(*) FILTER (
+                WHERE published_at >= NOW() - INTERVAL '24 hours' AND tier = 'A'
+            )                                                          AS tier_a_24h
+        FROM rns_announcements
+    """
+    )
+    stats = rows[0] if rows else {}
+    last_fetched = stats.get("last_fetched_at")
+    age_minutes = (
+        (datetime.now(_UK_TZ) - last_fetched).total_seconds() / 60
+        if last_fetched
+        else None
+    )
+    return {
+        "last_fetched_at": last_fetched,
+        "last_published_at": stats.get("last_published_at"),
+        "fetch_age_minutes": round(age_minutes, 1) if age_minutes is not None else None,
+        "count_24h": stats.get("count_24h", 0),
+        "tier_a_24h": stats.get("tier_a_24h", 0),
+    }
