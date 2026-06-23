@@ -126,6 +126,11 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
 
   const fcur = meta?.financial_currency || "GBP";
   const sym = currSym(fcur);
+  // Market cap / EV come from Yahoo's `info` and are denominated in the quote
+  // (trading) currency — GBP for LSE stocks — not the reporting currency that the
+  // financial statements use. Multinationals that file in USD (HSBC, Shell, BP…)
+  // otherwise show a $ on a GBP value. Mirrors the screener/trending fix.
+  const qcur = meta?.currency || fcur;
 
   const paysDividend =
     (snap?.dividend_yield ?? 0) > 0 ||
@@ -220,7 +225,9 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
           )}
         </div>
         <div style={{ textAlign: "right" }}>
-          {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8" }}>EV: {fmt(snap.enterprise_value, "currency", fcur)}</div>}
+          <div style={{ fontSize: 30, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
+          {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>EV: {fmt(snap.enterprise_value, "currency", qcur)}</div>}
         </div>
       </div>
 
@@ -233,7 +240,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
         ))}
       </div>
 
-      {tab === "chart" && <PriceChart symbol={symbol} fcur={fcur} />}
+      {tab === "chart" && <PriceChart symbol={symbol} fcur={qcur} />}
 
       {tab === "overview" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>

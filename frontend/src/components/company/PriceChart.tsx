@@ -59,8 +59,9 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   const sRSI = simple ? false : showRSI;
 
   // Reserved width for the Y axis (price labels). The candle overlay mirrors this
-  // as its plotLeft, so keep them sourced from one constant.
-  const Y_AXIS_W = 44;
+  // as its plotLeft, so keep them sourced from one constant. `simple` (Trending)
+  // uses a tighter layout; the full company view keeps the original width.
+  const Y_AXIS_W = simple ? 44 : 64;
 
   useEffect(() => {
     saveChartPrefs({ range, showMA20, showMA50, showVolume, showCandles, showMACD, showRSI });
@@ -222,9 +223,9 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   // Candle overlay: computed as an absolutely-positioned SVG so we own the coordinate
   // math entirely and don't depend on recharts' Customized/scale internals.
   const PRICE_H = 380;
-  // Top margin on the price chart — leaves headroom below the price overlay so the
-  // line/candles don't run into it. The candle overlay mirrors this as plotTop.
-  const PRICE_TOP = 36;
+  // Top margin on the price chart. In `simple` mode (Trending) the price is overlaid
+  // inside the plot, so we add headroom; the full company view keeps its original 5px.
+  const PRICE_TOP = simple ? 36 : 5;
   const candleOverlay = (() => {
     if (!sCandles || containerWidth <= 0 || !chartData.length) return null;
 
@@ -380,6 +381,19 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
     </div>
   );
 
+  const priceContent = shownPrice == null ? null : (
+    <>
+      <div style={{ fontFamily: "DM Serif Display,serif", fontSize: 28, color: "#f1f5f9", lineHeight: 1.1 }}>
+        {currSym(fcur)}{Number(fcur === "GBP" || fcur === "GBp" ? shownPrice / 100 : shownPrice).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+      </div>
+      {dayPct != null && (
+        <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 600, marginTop: 2, color: dayPct >= 0 ? "#22c55e" : "#ef4444" }}>
+          {dayPct >= 0 ? "+" : "−"}{Math.abs(dayPct).toFixed(2)}%
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 12 }}>
@@ -412,19 +426,15 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
             ))}
           </div>
         </div>
+        {!simple && priceContent != null && (
+          <div style={{ textAlign: "right", flexShrink: 0 }}>{priceContent}</div>
+        )}
       </div>
 
       <div ref={containerRef} style={{ position: "relative" }}>
-        {shownPrice != null && (
+        {simple && priceContent != null && (
           <div style={{ position: "absolute", top: PRICE_TOP - 10, right: 5, textAlign: "right", zIndex: 11, pointerEvents: "none", background: "rgba(15,15,15,0.65)", borderRadius: 6, padding: "4px 10px", backdropFilter: "blur(2px)" }}>
-            <div style={{ fontFamily: "DM Serif Display,serif", fontSize: 28, color: "#f1f5f9", lineHeight: 1.1 }}>
-              {currSym(fcur)}{Number(fcur === "GBP" ? shownPrice / 100 : shownPrice).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            {dayPct != null && (
-              <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 600, marginTop: 2, color: dayPct >= 0 ? "#22c55e" : "#ef4444" }}>
-                {dayPct >= 0 ? "+" : "−"}{Math.abs(dayPct).toFixed(2)}%
-              </div>
-            )}
+            {priceContent}
           </div>
         )}
         <ResponsiveContainer width="100%" height={380}>
