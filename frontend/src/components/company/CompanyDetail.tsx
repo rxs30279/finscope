@@ -220,9 +220,7 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
           )}
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 30, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", fcur)}</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
-          {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>EV: {fmt(snap.enterprise_value, "currency", fcur)}</div>}
+          {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8" }}>EV: {fmt(snap.enterprise_value, "currency", fcur)}</div>}
         </div>
       </div>
 

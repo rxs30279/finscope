@@ -36,6 +36,7 @@ export default function TrendingTab({ onSelect }: Props) {
   const risers = data?.risers || [];
   const fallers = data?.fallers || [];
   const colH = isMobile ? "auto" : "calc(100vh - 200px)";
+  const listH = isMobile ? "42vh" : colH;
 
   return (
     <div>
@@ -44,8 +45,8 @@ export default function TrendingTab({ onSelect }: Props) {
         subtitle="Stocks on a run of 3 or more consecutive up or down days, ranked by streak length."
       />
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(210px,1fr) minmax(210px,1fr) minmax(360px,1.5fr)", gap: 16, alignItems: "start" }}>
-        <TrendingList title="Risers" accent="#10b981" up items={risers} selected={sel} onSelect={setSel} height={colH} />
-        <TrendingList title="Fallers" accent="#ef4444" up={false} items={fallers} selected={sel} onSelect={setSel} height={colH} />
+        <TrendingList title="Risers" accent="#10b981" up items={risers} selected={sel} onSelect={setSel} height={listH} />
+        <TrendingList title="Fallers" accent="#ef4444" up={false} items={fallers} selected={sel} onSelect={setSel} height={listH} />
         <div>
           {sel ? (
             <div style={{ ...S.card, height: colH, overflowY: isMobile ? "visible" : "auto", minHeight: 0 }}>

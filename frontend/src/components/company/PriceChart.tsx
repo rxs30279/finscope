@@ -21,6 +21,7 @@ import { S } from "@/lib/theme";
 interface Props {
   symbol: string;
   fcur?: string;
+  simple?: boolean;
 }
 
 interface PriceRow {
@@ -32,7 +33,7 @@ interface PriceRow {
   volume: number;
 }
 
-export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
+export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Props) {
   const [priceData, setPriceData] = useState<PriceRow[]>([]);
   const [liveQuote, setLiveQuote] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,6 +47,20 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
   const [showRSI, setShowRSI] = useState(prefs.showRSI);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+
+  // In `simple` mode (Trending) force a plain line with volume only — no candles,
+  // MAs, MACD or RSI. These derive from state without mutating it, so the persisted
+  // prefs stay intact for the full company view.
+  const sCandles = simple ? false : showCandles;
+  const sMA20 = simple ? false : showMA20;
+  const sMA50 = simple ? false : showMA50;
+  const sVol = simple ? true : showVolume;
+  const sMACD = simple ? false : showMACD;
+  const sRSI = simple ? false : showRSI;
+
+  // Reserved width for the Y axis (price labels). The candle overlay mirrors this
+  // as its plotLeft, so keep them sourced from one constant.
+  const Y_AXIS_W = 44;
 
   useEffect(() => {
     saveChartPrefs({ range, showMA20, showMA50, showVolume, showCandles, showMACD, showRSI });
@@ -190,7 +205,7 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
   const UP = "#22c55e", DOWN = "#ef4444";
 
   const priceDomain = (() => {
-    if (!showCandles) return ["auto", "auto"] as ["auto", "auto"];
+    if (!sCandles) return ["auto", "auto"] as ["auto", "auto"];
     const lows = chartData.map((d) => d.low).filter((v) => v != null) as number[];
     const highs = chartData.map((d) => d.high).filter((v) => v != null) as number[];
     if (!lows.length || !highs.length) return ["auto", "auto"] as ["auto", "auto"];
@@ -207,14 +222,17 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
   // Candle overlay: computed as an absolutely-positioned SVG so we own the coordinate
   // math entirely and don't depend on recharts' Customized/scale internals.
   const PRICE_H = 380;
+  // Top margin on the price chart — leaves headroom below the price overlay so the
+  // line/candles don't run into it. The candle overlay mirrors this as plotTop.
+  const PRICE_TOP = 36;
   const candleOverlay = (() => {
-    if (!showCandles || containerWidth <= 0 || !chartData.length) return null;
+    if (!sCandles || containerWidth <= 0 || !chartData.length) return null;
 
     // Layout constants — mirror the chart's margin + axis exactly
-    const plotLeft = 64;                               // YAxis width={64}, margin.left=0
-    const plotTop = 5;                                 // margin.top
+    const plotLeft = Y_AXIS_W;                         // YAxis width, margin.left=0
+    const plotTop = PRICE_TOP;                          // margin.top
     const plotW = containerWidth - plotLeft - 10;      // margin.right=10
-    const xAxisH = showMACD || showRSI ? 4 : 30;
+    const xAxisH = sMACD || sRSI ? 4 : 30;
     const plotH = PRICE_H - plotTop - 5 - xAxisH;     // total - top - bottom - xAxis
 
     const n = chartData.length;
@@ -277,11 +295,11 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
     return (
       <div style={{ ...S.tooltip, padding: "6px 10px" }}>
         <div style={{ marginBottom: 4, color: "#cbd5e1" }}>{labelFormatter(d.date)}</div>
-        {showCandles ? [row("O", f(d.open)), row("H", f(d.high)), row("L", f(d.low)), row("C", f(d.close))]
+        {sCandles ? [row("O", f(d.open)), row("H", f(d.high)), row("L", f(d.low)), row("C", f(d.close))]
           : row("Close", f(d.close), "#818cf8")}
-        {showMA20 && d.ma20 != null && row("MA20", f(d.ma20), "#f59e0b")}
-        {showMA50 && d.ma50 != null && row("MA50", f(d.ma50), "#a855f7")}
-        {showVolume && d.volume != null && row("Vol", fmtVolume(d.volume), "#22d3ee")}
+        {sMA20 && d.ma20 != null && row("MA20", f(d.ma20), "#f59e0b")}
+        {sMA50 && d.ma50 != null && row("MA50", f(d.ma50), "#a855f7")}
+        {sVol && d.volume != null && row("Vol", fmtVolume(d.volume), "#22d3ee")}
       </div>
     );
   };
@@ -373,15 +391,17 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
               </button>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-            <button onClick={() => setShowCandles((v) => !v)} style={pill(showCandles, "#14532d", "#bbf7d0", "#166534")}>Candles</button>
-            <button onClick={() => setShowMA20((v) => !v)} style={pill(showMA20, "#78350f", "#fde68a", "#92400e")}>MA20</button>
-            <button onClick={() => setShowMA50((v) => !v)} style={pill(showMA50, "#4c1d95", "#ddd6fe", "#5b21b6")}>MA50</button>
-            <button onClick={() => setShowVolume((v) => !v)} style={pill(showVolume, "#155e75", "#cffafe", "#0e7490")}>Vol</button>
-            <button onClick={() => setShowMACD((v) => !v)} style={pill(showMACD, "#0c4a6e", "#bae6fd", "#075985")}>MACD</button>
-            <button onClick={() => setShowRSI((v) => !v)} style={pill(showRSI, "#581c87", "#e9d5ff", "#6b21a8")}>RSI</button>
-          </div>
-          <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontFamily: "monospace", fontSize: 12 }}>
+          {!simple && (
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <button onClick={() => setShowCandles((v) => !v)} style={pill(showCandles, "#14532d", "#bbf7d0", "#166534")}>Candles</button>
+              <button onClick={() => setShowMA20((v) => !v)} style={pill(showMA20, "#78350f", "#fde68a", "#92400e")}>MA20</button>
+              <button onClick={() => setShowMA50((v) => !v)} style={pill(showMA50, "#4c1d95", "#ddd6fe", "#5b21b6")}>MA50</button>
+              <button onClick={() => setShowVolume((v) => !v)} style={pill(showVolume, "#155e75", "#cffafe", "#0e7490")}>Vol</button>
+              <button onClick={() => setShowMACD((v) => !v)} style={pill(showMACD, "#0c4a6e", "#bae6fd", "#075985")}>MACD</button>
+              <button onClick={() => setShowRSI((v) => !v)} style={pill(showRSI, "#581c87", "#e9d5ff", "#6b21a8")}>RSI</button>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: simple ? 12 : 18, flexWrap: simple ? "nowrap" : "wrap", fontFamily: "monospace", fontSize: 12 }}>
             {perfStats.map(([label, v]) => (
               <span key={label} style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
                 <span style={{ color: "#64748b", textTransform: "uppercase", fontSize: 11, letterSpacing: 1 }}>{label}</span>
@@ -392,8 +412,11 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
             ))}
           </div>
         </div>
+      </div>
+
+      <div ref={containerRef} style={{ position: "relative" }}>
         {shownPrice != null && (
-          <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ position: "absolute", top: PRICE_TOP - 10, right: 5, textAlign: "right", zIndex: 11, pointerEvents: "none", background: "rgba(15,15,15,0.65)", borderRadius: 6, padding: "4px 10px", backdropFilter: "blur(2px)" }}>
             <div style={{ fontFamily: "DM Serif Display,serif", fontSize: 28, color: "#f1f5f9", lineHeight: 1.1 }}>
               {currSym(fcur)}{Number(fcur === "GBP" ? shownPrice / 100 : shownPrice).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
@@ -404,46 +427,43 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
             )}
           </div>
         )}
-      </div>
-
-      <div ref={containerRef} style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height={380}>
-          <ComposedChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+          <ComposedChart data={chartData} margin={{ top: PRICE_TOP, right: 10, bottom: 5, left: 0 }}>
             <defs>
               <linearGradient id="gPrice" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
                 <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <XAxis dataKey="date" tick={showMACD || showRSI ? false : { fontSize: 10 }} ticks={axisTicks} interval={0} tickFormatter={tickFormatter} height={showMACD || showRSI ? 4 : 30} />
-            <YAxis tick={{ fontSize: 10 }} domain={priceDomain} tickFormatter={fmtAxisPrice} width={64} />
-            {showVolume && <YAxis yAxisId="vol" orientation="right" hide domain={[0, (dataMax: number) => (dataMax || 0) * 4]} />}
+            <XAxis dataKey="date" tick={sMACD || sRSI ? false : { fontSize: 10 }} ticks={axisTicks} interval={0} tickFormatter={tickFormatter} height={sMACD || sRSI ? 4 : 30} />
+            <YAxis tick={{ fontSize: 10 }} domain={priceDomain} tickFormatter={fmtAxisPrice} width={Y_AXIS_W} />
+            {sVol && <YAxis yAxisId="vol" orientation="right" hide domain={[0, (dataMax: number) => (dataMax || 0) * 4]} />}
             <Tooltip content={<ChartTooltip />} />
-            {showVolume && (
+            {sVol && (
               <Bar yAxisId="vol" dataKey="volume" fill="#0e7490" opacity={0.5} name="Volume" isAnimationActive={false}>
                 {["1M", "3M", "6M"].includes(range) && chartData.map((d, i) => (
                   <Cell key={i} fill={d.open != null && d.close < d.open ? DOWN : UP} />
                 ))}
               </Bar>
             )}
-            {showCandles ? (
+            {sCandles ? (
               <Line type="monotone" dataKey="close" stroke="transparent" dot={false} name="OHLC" isAnimationActive={false} />
             ) : (
               <Area type="monotone" dataKey="close" stroke="#6366f1" fill="url(#gPrice)" strokeWidth={2} dot={false} name="Close" />
             )}
-            {showMA20 && <Line type="monotone" dataKey="ma20" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="MA20" connectNulls={false} />}
-            {showMA50 && <Line type="monotone" dataKey="ma50" stroke="#a855f7" strokeWidth={1.5} dot={false} name="MA50" connectNulls={false} />}
+            {sMA20 && <Line type="monotone" dataKey="ma20" stroke="#f59e0b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="MA20" connectNulls={false} />}
+            {sMA50 && <Line type="monotone" dataKey="ma50" stroke="#a855f7" strokeWidth={1.5} dot={false} name="MA50" connectNulls={false} />}
           </ComposedChart>
         </ResponsiveContainer>
         {candleOverlay}
       </div>
 
-      {showMACD && (
+      {sMACD && (
         <ResponsiveContainer width="100%" height={150}>
           <ComposedChart data={chartData} margin={{ top: 4, right: 10, bottom: 5, left: 0 }}>
             <text x={70} y={12} fill="#64748b" fontSize={11} fontFamily="monospace">MACD (12, 26, 9)</text>
-            <XAxis dataKey="date" tick={showRSI ? false : { fontSize: 10 }} ticks={axisTicks} interval={0} tickFormatter={tickFormatter} height={showRSI ? 4 : 30} />
-            <YAxis tick={{ fontSize: 10 }} tickFormatter={fmtAxisPrice} width={64} />
+            <XAxis dataKey="date" tick={sRSI ? false : { fontSize: 10 }} ticks={axisTicks} interval={0} tickFormatter={tickFormatter} height={sRSI ? 4 : 30} />
+            <YAxis tick={{ fontSize: 10 }} tickFormatter={fmtAxisPrice} width={Y_AXIS_W} />
             <Tooltip content={<MacdTooltip />} />
             <ReferenceLine y={0} stroke="#334155" />
             <Bar dataKey="hist" name="Hist" isAnimationActive={false}>
@@ -455,12 +475,12 @@ export default function PriceChart({ symbol, fcur = "GBP" }: Props) {
         </ResponsiveContainer>
       )}
 
-      {showRSI && (
+      {sRSI && (
         <ResponsiveContainer width="100%" height={130}>
           <ComposedChart data={chartData} margin={{ top: 4, right: 10, bottom: 5, left: 0 }}>
             <text x={70} y={12} fill="#64748b" fontSize={11} fontFamily="monospace">RSI (14)</text>
             <XAxis dataKey="date" tick={{ fontSize: 10 }} ticks={axisTicks} interval={0} tickFormatter={tickFormatter} />
-            <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} ticks={[30, 50, 70]} width={64} />
+            <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} ticks={[30, 50, 70]} width={Y_AXIS_W} />
             <Tooltip content={<RsiTooltip />} />
             <ReferenceLine y={70} stroke={DOWN} strokeDasharray="4 2" label={{ value: "70", position: "right", fontSize: 9, fill: DOWN }} />
             <ReferenceLine y={30} stroke={UP} strokeDasharray="4 2" label={{ value: "30", position: "right", fontSize: 9, fill: UP }} />
