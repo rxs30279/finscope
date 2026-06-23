@@ -1,4 +1,7 @@
 from fastapi import APIRouter, Response
+import os
+import tempfile
+import threading
 import time
 import numpy as np
 import pandas as pd
@@ -14,17 +17,147 @@ from prices import query as _db_query, _get_pool as _db_pool
 router = APIRouter(prefix="/api/market", tags=["market"])
 
 # ── In-memory cache (key → (data, timestamp)) ─────────────────────────────────
+# Default TTL for the genuinely intraday-live endpoints (Fear & Greed, rotation,
+# breadth, cross-asset…) whose underlying daily Close tracks the live price and
+# is meant to move through the trading day. Endpoints backed by data that changes
+# at most daily/monthly (BoE gilts, ONS macro, the F&G history table) override it
+# with a longer per-key TTL below.
 _cache: dict = {}
-CACHE_TTL = 900  # 15 minutes
+CACHE_TTL = 900           # 15 minutes — live intraday endpoints
+CACHE_TTL_HOURLY = 3600   # 1 hour — daily-changing data (gilts, F&G history table)
+CACHE_TTL_DAILY = 86400   # 24 hours — monthly-changing data (ONS macro)
+
+# Per-key locks (single-flight) so a burst of concurrent requests for the same
+# key collapses to ONE computation instead of stampeding the (expensive) Yahoo
+# fetch. `_locks_guard` only protects the small lock/refresh bookkeeping dicts.
+_cache_locks: dict = {}
+_refreshing: set = set()
+_locks_guard = threading.Lock()
 
 
-def _cached(key: str, fn):
+def _key_lock(key: str) -> threading.Lock:
+    with _locks_guard:
+        lock = _cache_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _cache_locks[key] = lock
+        return lock
+
+
+def _maybe_refresh_async(key: str, fn):
+    """Recompute `key` in a background daemon thread, off the request path. Used
+    by the stale-while-revalidate path so a stale-but-usable entry is served
+    instantly while the refresh happens behind it. At most one refresh per key
+    runs at a time. A failed/empty refresh never clobbers the existing entry."""
+    with _locks_guard:
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def _run():
+        try:
+            data = fn()
+            if data is None or (hasattr(data, "empty") and data.empty):
+                return  # don't overwrite a good entry with a failed/empty fetch
+            _cache[key] = (data, time.time())
+        except Exception as e:
+            print(f"[market] background refresh failed for {key}: {e}")
+        finally:
+            with _locks_guard:
+                _refreshing.discard(key)
+
+    threading.Thread(target=_run, name=f"refresh-{key}", daemon=True).start()
+
+
+def _cached(key: str, fn, ttl: int = CACHE_TTL, swr: bool = False):
+    """Cache `fn()` under `key` for `ttl` seconds.
+
+    swr=True (stale-while-revalidate): once an entry exists, a stale read returns
+    the old value immediately and refreshes in the background — so callers never
+    block on the recompute. A missing entry (cold worker) still computes
+    synchronously under the single-flight lock. swr=False keeps the old behaviour
+    (stale → synchronous recompute), still de-duplicated by the lock."""
     now = time.time()
-    if key in _cache and now - _cache[key][1] < CACHE_TTL:
-        return _cache[key][0]
-    data = fn()
-    _cache[key] = (data, now)
-    return data
+    entry = _cache.get(key)
+    if entry is not None and now - entry[1] < ttl:
+        return entry[0]
+    if entry is not None and swr:
+        _maybe_refresh_async(key, fn)
+        return entry[0]
+    # Missing, or stale without SWR → compute under single-flight, re-checking the
+    # cache after acquiring the lock in case another thread just filled it.
+    lock = _key_lock(key)
+    with lock:
+        entry = _cache.get(key)
+        if entry is not None and time.time() - entry[1] < ttl:
+            return entry[0]
+        data = fn()
+        _cache[key] = (data, time.time())
+        return data
+
+
+# ── On-disk price snapshots ───────────────────────────────────────────────────
+# The shared price frames are the one genuinely slow input (a live multi-hundred-
+# ticker Yahoo fetch). Persisting them to disk lets a freshly-started worker seed
+# its in-memory cache from a recent snapshot — turning a cold first request into a
+# fast local read instead of a blocking Yahoo round-trip. The daily prices cron
+# (run_prices.py → warm_price_snapshots) refreshes the snapshot after EOD prices
+# land; live worker fetches also rewrite it. Path is shared between the cron exec
+# and the uvicorn workers (same container filesystem).
+_SNAPSHOT_DIR = os.environ.get(
+    "MARKET_SNAPSHOT_DIR",
+    os.path.join(tempfile.gettempdir(), "finscope_market_cache"),
+)
+
+
+def _snapshot_path(name: str) -> str:
+    return os.path.join(_SNAPSHOT_DIR, f"{name}.pkl")
+
+
+def _save_snapshot(name: str, df) -> None:
+    """Atomically persist a price DataFrame. Best-effort — failures are logged
+    and swallowed (the snapshot is an optimisation, never a correctness input)."""
+    if df is None or (hasattr(df, "empty") and df.empty):
+        return
+    try:
+        os.makedirs(_SNAPSHOT_DIR, exist_ok=True)
+        tmp = _snapshot_path(name) + ".tmp"
+        df.to_pickle(tmp)
+        os.replace(tmp, _snapshot_path(name))  # atomic on POSIX
+    except Exception as e:
+        print(f"[market] snapshot save failed for {name}: {e}")
+
+
+def _load_snapshot(name: str):
+    try:
+        path = _snapshot_path(name)
+        if os.path.exists(path):
+            return pd.read_pickle(path)
+    except Exception as e:
+        print(f"[market] snapshot load failed for {name}: {e}")
+    return None
+
+
+def _cached_price_frame(key: str, fetch):
+    """Cache helper for the heavy shared price frames. Like _cached(swr=True) but
+    seeds a cold (in-memory-missing) worker from the on-disk snapshot so the first
+    request returns instantly instead of blocking on the live Yahoo fetch. A
+    background refresh is kicked off to restore intraday liveness. With no snapshot
+    on disk (very first deploy) it falls back to a synchronous single-flight fetch."""
+    now = time.time()
+    entry = _cache.get(key)
+    if entry is not None and now - entry[1] < CACHE_TTL:
+        return entry[0]
+    if entry is None:
+        snap = _load_snapshot(key)
+        if snap is not None and not snap.empty:
+            _cache[key] = (snap, now)          # seed as fresh → instant response
+            _maybe_refresh_async(key, fetch)   # pull live data behind it
+            return snap
+        return _cached(key, fetch)             # no snapshot → blocking fetch (once)
+    # Stale → serve stale immediately, refresh in the background.
+    _maybe_refresh_async(key, fetch)
+    return entry[0]
 
 
 # ── Ticker constants ───────────────────────────────────────────────────────────
@@ -173,35 +306,42 @@ ALL_PROXY_TICKERS = list(
 
 
 # ── Shared price fetch (all proxy tickers, 1 year history, cached) ────────────
-def _get_prices():
+def _fetch_prices_frame():
+    """Live Yahoo fetch of the full proxy universe (1y). Persists a disk snapshot
+    on success. Module-level (not a closure) so the daily cron can force a fresh
+    fetch via warm_price_snapshots() without going through the seeded cache."""
     import yfinance as yf  # deferred — only this fetch path needs it
-    def fetch():
-        def _fetch_one(ticker):
-            try:
-                hist = yf.Ticker(ticker).history(period="1y", auto_adjust=True)
-                if hist.empty:
-                    return ticker, None
-                col = hist["Close"]
-                if col.index.tz is not None:
-                    col.index = col.index.tz_localize(None)
-                return ticker, col
-            except Exception:
+
+    def _fetch_one(ticker):
+        try:
+            hist = yf.Ticker(ticker).history(period="1y", auto_adjust=True)
+            if hist.empty:
                 return ticker, None
+            col = hist["Close"]
+            if col.index.tz is not None:
+                col.index = col.index.tz_localize(None)
+            return ticker, col
+        except Exception:
+            return ticker, None
 
-        with ThreadPoolExecutor(max_workers=12) as executor:
-            futures = {executor.submit(_fetch_one, t): t for t in ALL_PROXY_TICKERS}
-            frames = {}
-            for future in as_completed(futures):
-                ticker, col = future.result()
-                if col is not None:
-                    frames[ticker] = col
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {executor.submit(_fetch_one, t): t for t in ALL_PROXY_TICKERS}
+        frames = {}
+        for future in as_completed(futures):
+            ticker, col = future.result()
+            if col is not None:
+                frames[ticker] = col
 
-        if not frames:
-            print("[market] yfinance: no data returned for any ticker")
-            return pd.DataFrame()
-        return pd.DataFrame(frames)
+    if not frames:
+        print("[market] yfinance: no data returned for any ticker")
+        return pd.DataFrame()
+    df = pd.DataFrame(frames)
+    _save_snapshot("prices", df)
+    return df
 
-    return _cached("prices", fetch)
+
+def _get_prices():
+    return _cached_price_frame("prices", _fetch_prices_frame)
 
 
 def _get_ftse_long():
@@ -731,36 +871,57 @@ FG_HISTORY_TICKERS = list(
 CNN_FG_HISTORY_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 
 
+def _fetch_fg_prices_2y_frame():
+    """Live Yahoo fetch of the F&G tickers (2y). Persists a disk snapshot on
+    success. Module-level so the daily cron can force a fresh fetch."""
+    import yfinance as yf  # deferred — only this fetch path needs it
+
+    def _fetch_one(ticker):
+        try:
+            hist = yf.Ticker(ticker).history(period="2y", auto_adjust=True)
+            if hist.empty:
+                return ticker, None
+            col = hist["Close"]
+            if col.index.tz is not None:
+                col.index = col.index.tz_localize(None)
+            return ticker, col
+        except Exception:
+            return ticker, None
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {executor.submit(_fetch_one, t): t for t in FG_HISTORY_TICKERS}
+        frames = {}
+        for future in as_completed(futures):
+            ticker, col = future.result()
+            if col is not None:
+                frames[ticker] = col
+    if not frames:
+        return pd.DataFrame()
+    df = pd.DataFrame(frames)
+    _save_snapshot("fg_prices_2y", df)
+    return df
+
+
 def _get_fg_prices_2y():
     """2-year close history for the F&G tickers, cached. A 252-day output series
     needs ~2y of input once the 52-week-high/low and 125-day-MA lookbacks are
     consumed, so this is fetched separately from the shared 1-year _get_prices()."""
-    import yfinance as yf  # deferred — only this fetch path needs it
-    def fetch():
-        def _fetch_one(ticker):
-            try:
-                hist = yf.Ticker(ticker).history(period="2y", auto_adjust=True)
-                if hist.empty:
-                    return ticker, None
-                col = hist["Close"]
-                if col.index.tz is not None:
-                    col.index = col.index.tz_localize(None)
-                return ticker, col
-            except Exception:
-                return ticker, None
+    return _cached_price_frame("fg_prices_2y", _fetch_fg_prices_2y_frame)
 
-        with ThreadPoolExecutor(max_workers=12) as executor:
-            futures = {executor.submit(_fetch_one, t): t for t in FG_HISTORY_TICKERS}
-            frames = {}
-            for future in as_completed(futures):
-                ticker, col = future.result()
-                if col is not None:
-                    frames[ticker] = col
-        if not frames:
-            return pd.DataFrame()
-        return pd.DataFrame(frames)
 
-    return _cached("fg_prices_2y", fetch)
+def warm_price_snapshots():
+    """Force a fresh live fetch of both shared price frames and persist them to
+    disk, so freshly-started web workers can seed their in-memory cache from a
+    recent snapshot instead of paying a live Yahoo fetch on the first request.
+    Called by the daily prices cron (run_prices.py) after EOD prices land. Goes
+    straight to the fetchers (not the seeded cache) so it always writes FRESH
+    data. Returns a small summary."""
+    p = _fetch_prices_frame()
+    fg = _fetch_fg_prices_2y_frame()
+    return {
+        "prices_cols": int(p.shape[1]) if hasattr(p, "shape") else 0,
+        "fg_cols": int(fg.shape[1]) if hasattr(fg, "shape") else 0,
+    }
 
 
 def _score_series_trailing(values, fn, window=252, min_obs=20):
@@ -997,7 +1158,9 @@ def fear_greed_history(response: Response):
                 print(f"[market] F&G history lazy rebuild failed: {e}")
         return data
 
-    return _cached("fg_history", compute)
+    # Rebuilt daily by the cron; the table read is cheap but hold an hour and
+    # serve-stale-while-revalidating so a visit never blocks on the lazy rebuild.
+    return _cached("fg_history", compute, ttl=CACHE_TTL_HOURLY, swr=True)
 
 
 @router.get("/sidebar")
@@ -1032,8 +1195,8 @@ def sidebar(response: Response):
             if vix_col is not None and len(vix_col)
             else None
         )
-        cnn_fg = _cached("cnn_fear_greed", _fetch_cnn_fg)
-        fg = _cached("fear_greed", _compute_fear_greed)
+        cnn_fg = _cached("cnn_fear_greed", _fetch_cnn_fg, swr=True)
+        fg = _cached("fear_greed", _compute_fear_greed, swr=True)
         return {
             "benchmarks": benchmarks,
             "sectors": sectors,
@@ -1046,7 +1209,7 @@ def sidebar(response: Response):
             },
         }
 
-    return _cached("sidebar", compute)
+    return _cached("sidebar", compute, swr=True)
 
 
 @router.get("/rotation")
@@ -1054,7 +1217,7 @@ def rotation(response: Response):
     # Live intraday signal, but the in-process cache already tolerates 15-min
     # staleness — edge-cache it so cold starts don't re-run the yfinance pipeline.
     response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
-    return _cached("rotation", _compute_rotation)
+    return _cached("rotation", _compute_rotation, swr=True)
 
 
 def _compute_breadth(prices=None):
@@ -1164,7 +1327,7 @@ def _compute_breadth(prices=None):
 def breadth(response: Response):
     # Live intraday, 15-min edge cache (matches the in-process cache staleness).
     response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
-    return _cached("breadth", _compute_breadth)
+    return _cached("breadth", _compute_breadth, swr=True)
 
 
 def _cross_asset_item(prices, ticker):
@@ -1227,7 +1390,7 @@ def _compute_cross_asset():
 def cross_asset(response: Response):
     # Live intraday, 15-min edge cache (matches the in-process cache staleness).
     response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
-    return _cached("cross_asset", _compute_cross_asset)
+    return _cached("cross_asset", _compute_cross_asset, swr=True)
 
 
 def _ons_latest(url, period_key):
@@ -1266,21 +1429,21 @@ def _fetch_uk_macro():
 def uk_macro(response: Response):
     # ONS CPI/GDP — changes monthly at most. Hold a day at the edge.
     response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
-    return _cached("uk_macro", _fetch_uk_macro)
+    return _cached("uk_macro", _fetch_uk_macro, ttl=CACHE_TTL_DAILY, swr=True)
 
 
 @router.get("/gilt-yields")
 def gilt_yields(response: Response):
     # BoE yields update daily; the miss path fetches + parses an Excel file. Hold 1h.
     response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
-    return _cached("gilt_yields", _fetch_boe_gilt_yields)
+    return _cached("gilt_yields", _fetch_boe_gilt_yields, ttl=CACHE_TTL_HOURLY, swr=True)
 
 
 @router.get("/fear-greed")
 def fear_greed(response: Response):
     # Live intraday, 15-min edge cache (matches the in-process cache staleness).
     response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
-    return _cached("fear_greed", _compute_fear_greed)
+    return _cached("fear_greed", _compute_fear_greed, swr=True)
 
 
 def _compute_signals():
@@ -1335,4 +1498,4 @@ def _compute_signals():
 def signals(response: Response):
     # = rotation + breadth; live intraday, 15-min edge cache.
     response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
-    return _cached("signals", _compute_signals)
+    return _cached("signals", _compute_signals, swr=True)

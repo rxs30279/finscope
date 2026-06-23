@@ -23,7 +23,7 @@ load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 from prices import refresh_prices
 from main import compute_and_store_scores, compute_and_store_valuations
-from market import _rebuild_fear_greed_history
+from market import _rebuild_fear_greed_history, warm_price_snapshots
 
 
 def main() -> int:
@@ -65,6 +65,17 @@ def main() -> int:
         print(f"[prices] fear-greed history rebuilt — {fg}")
     except Exception as e:
         print(f"[prices] fear-greed history rebuild FAILED (non-fatal) — {type(e).__name__}: {e}")
+        traceback.print_exc()
+
+    # Refresh the on-disk market price snapshots so freshly-started web workers
+    # seed their cache from a recent EOD frame instead of paying a live Yahoo
+    # fetch on the first request. Non-fatal: it's a load-time optimisation, and a
+    # missing/stale snapshot just means the worker falls back to a live fetch.
+    try:
+        snap = warm_price_snapshots()
+        print(f"[prices] market snapshots warmed — {snap}")
+    except Exception as e:
+        print(f"[prices] market snapshot warm FAILED (non-fatal) — {type(e).__name__}: {e}")
         traceback.print_exc()
 
     print("[prices] completed successfully")
