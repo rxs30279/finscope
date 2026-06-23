@@ -581,11 +581,14 @@ def trending(response: Response, min_streak: int = 3, limit: int = 40):
             "_dir": 1 if streak > 0 else -1,
         }
 
-    # Attach name, market cap and reporting currency for the qualifying symbols.
+    # Attach name, market cap and quote currency for the qualifying symbols.
+    # Market cap is denominated in the *quote* currency (GBp for LSE stocks), not
+    # the reporting currency — financial_currency is USD for multinationals that
+    # file in dollars (Shell, BP, AstraZeneca...) and would wrongly render a $.
     if qualifying:
         meta = query(
             """
-            SELECT m.symbol, m.name, m.sector, m.financial_currency, t.market_cap
+            SELECT m.symbol, m.name, m.sector, m.currency, t.market_cap
             FROM company_metadata m
             LEFT JOIN ttm_financials t ON t.company_symbol = m.symbol
             WHERE m.symbol = ANY(%s)
@@ -597,7 +600,7 @@ def trending(response: Response, min_streak: int = 3, limit: int = 40):
             m = meta_map.get(sym, {})
             item["name"] = m.get("name") or sym
             item["sector"] = m.get("sector")
-            item["currency"] = m.get("financial_currency") or "GBP"
+            item["currency"] = m.get("currency") or "GBp"
             item["market_cap"] = (
                 float(m["market_cap"]) if m.get("market_cap") is not None else None
             )

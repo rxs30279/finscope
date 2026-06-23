@@ -384,7 +384,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                       <div style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>{SECTOR_ABBR[r.sector] || r.sector}</div>
                     </td>
                     <td style={{ ...S.td, color: "#64748b" }}>{r.ftse_index?.replace("FTSE ", "")}</td>
-                    <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.market_cap, "currency", r.financial_currency)}</td>
+                    <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.market_cap, "currency", r.currency)}</td>
                     {tableView === "fundamentals" ? (
                       <>
                         <td style={{ ...S.tdNum, color: r.price_to_earnings < 15 ? "#10b981" : r.price_to_earnings > 40 ? "#ef4444" : "#ccc" }}>{fmt(r.price_to_earnings, "ratio")}</td>

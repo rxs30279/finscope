@@ -1124,7 +1124,8 @@ def screener(
         params.append(min_upside_pct)
     params.append(limit)
     sql = f"""
-        SELECT m.symbol, m.name, m.sector, m.country, m.exchange, m.ftse_index, m.financial_currency,
+        SELECT m.symbol, m.name, m.sector, m.country, m.exchange, m.ftse_index,
+               m.financial_currency, m.currency,
                t.market_cap, t.revenue, t.net_income,
                CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END as price_to_earnings,
                t.price_to_book, t.price_to_sales, t.roe, t.roa, t.roic, t.roce,
