@@ -214,6 +214,34 @@
   border-color: var(--muted);
   transform: translateY(-2px);
 }
+.am-landing .am-install {
+  position: relative;
+  display: inline-flex;
+}
+.am-landing .am-btn-ghost svg {
+  width: 16px;
+  height: 16px;
+}
+.am-landing .am-install-hint {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: 280px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: rgba(13, 17, 23, 0.96);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+}
+.am-landing .am-install-hint strong {
+  color: var(--accent);
+  font-weight: 600;
+}
 .am-landing .am-trust {
   margin-top: 48px;
   display: flex;

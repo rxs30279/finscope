@@ -65,7 +65,11 @@ export const metadata: Metadata = {
     ],
     apple: { url: "/apple-touch-icon.png", sizes: "180x180" },
   },
-  manifest: "/site.webmanifest",
+  // NOTE: the manifest <link> is rendered directly in <head> below rather than
+  // here. Next's Metadata API streams it into the body and lets React hoist it
+  // to <head> after hydration, which Chrome's installability/DevTools check
+  // does not reliably pick up ("No manifest detected"). A static head link is
+  // present at HTML-parse time, so the PWA is detected and installable.
 };
 
 export default function RootLayout({
@@ -76,6 +80,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${mulish.variable}`}>
       <head>
+        {/* PWA manifest — kept as a literal head link (not via the Metadata
+            API) so it is present at HTML-parse time and reliably detected as
+            installable. See the metadata note above. */}
+        <link rel="manifest" href="/site.webmanifest" />
         {/* Google Analytics 4 */}
         <Script
           src="https://www.googletagmanager.com/gtag/js?id=G-4D7NSXL95B"

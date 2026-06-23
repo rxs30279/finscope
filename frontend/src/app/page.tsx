@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
 import LandingEffects from "@/components/landing/LandingEffects";
+import InstallButton from "@/components/landing/InstallButton";
 import "./landing.css";
 
 export const metadata: Metadata = {
@@ -147,6 +148,7 @@ export default function Home() {
             </svg>
           </Link>
           <Link href="/markets" className="am-btn am-btn-ghost">See market signals</Link>
+          <InstallButton />
         </div>
         <div className="am-trust am-reveal">
           <span><span className="am-tick" aria-hidden="true">●</span> 600+ UK shares scored daily</span>
