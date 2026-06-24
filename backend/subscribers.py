@@ -17,6 +17,7 @@ Env:
 import os
 import re
 import json
+import time
 import hmac
 import hashlib
 import urllib.parse
@@ -96,6 +97,16 @@ def _segment_id() -> str:
     return sid
 
 
+# Hard cap on the active subscriber list. Surfaced as a scarcity message on the
+# signup forms; enforced here so the claim is real. Overridable via env without
+# a code change (default 100).
+def _max_subscribers() -> int:
+    try:
+        return int(os.environ.get("MAX_SUBSCRIBERS", "100"))
+    except ValueError:
+        return 100
+
+
 # ── Signup ────────────────────────────────────────────────────────────────────
 
 class SignupBody(BaseModel):
@@ -110,6 +121,24 @@ def signup(body: SignupBody):
     if not _EMAIL_RE.match(email):
         raise HTTPException(400, "Invalid email address")
     sid = _segment_id()
+
+    # Capacity gate. An address that's already an active subscriber is
+    # idempotent and never blocked; only a genuinely new (or returning,
+    # previously-unsubscribed) address is rejected once the list is full.
+    cap = _max_subscribers()
+    try:
+        active = list_active_contacts()
+    except RuntimeError as e:
+        raise HTTPException(502, f"Resend error: {e}")
+    already_active = any((c.get("email") or "").lower() == email for c in active)
+    if already_active:
+        return {"ok": True, "status": "subscribed"}
+    if len(active) >= cap:
+        raise HTTPException(
+            403,
+            f"Sign-ups are full — all {cap} spots have been taken. "
+            "Check back soon; we open more from time to time.",
+        )
 
     # Contacts are workspace-scoped in the Segments model. We associate the
     # new contact with our segment via the `segments` array on create.
@@ -133,6 +162,40 @@ def signup(body: SignupBody):
             return {"ok": True, "status": "reactivated"}
 
     raise HTTPException(502, f"Resend error: {payload}")
+
+
+# ── Live count (scarcity counter) ─────────────────────────────────────────────
+
+# Counting active contacts hits Resend, so cache it in-process — every landing
+# visitor reads this. Hosted on a long-lived process (Hetzner), so the module
+# cache survives across requests; a short TTL keeps the number fresh enough.
+_COUNT_TTL = 60.0
+_count_cache: dict = {"ts": 0.0, "data": None}
+
+
+@router.get("/api/subscribers/count")
+def subscriber_count():
+    """Public: active subscriber count + the cap, for the scarcity counter on
+    the signup forms. Cached `_COUNT_TTL` seconds; serves stale on Resend error
+    rather than failing the whole landing page."""
+    now = time.time()
+    cached = _count_cache["data"]
+    if cached is not None and now - _count_cache["ts"] < _COUNT_TTL:
+        return cached
+
+    cap = _max_subscribers()
+    try:
+        active = list_active_contacts()
+    except RuntimeError as e:
+        if cached is not None:
+            return cached
+        raise HTTPException(502, f"Resend error: {e}")
+
+    count = len(active)
+    data = {"count": count, "cap": cap, "remaining": max(0, cap - count)}
+    _count_cache["ts"] = now
+    _count_cache["data"] = data
+    return data
 
 
 # ── Unsubscribe ───────────────────────────────────────────────────────────────

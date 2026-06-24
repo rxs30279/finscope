@@ -3,6 +3,7 @@ import Link from "next/link";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
 import LandingEffects from "@/components/landing/LandingEffects";
 import InstallButton from "@/components/landing/InstallButton";
+import LandingSignup from "@/components/landing/LandingSignup";
 import "./landing.css";
 
 export const metadata: Metadata = {
@@ -68,9 +69,9 @@ const CAPS: { href: string; title: string; body: string; icon: React.ReactNode }
     ),
   },
   {
-    href: "/subscribe",
+    href: "#subscribe",
     title: "Free Email Digest",
-    body: "A weekday email of notable movers and the most significant RNS news, straight to your inbox.",
+    body: "Your UK market before the open — notable movers and the RNS news that matters, every weekday at 07:30.",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M4 6h16v12H4z" /><path d="M4 7l8 6 8-6" />
@@ -169,6 +170,8 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      <LandingSignup />
 
       <footer>
         <div className="am-foot-inner">

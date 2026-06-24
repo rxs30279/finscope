@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import SubscribeTab from "@/components/SubscribeTab";
 
 export const metadata: Metadata = {
-  title: "Subscribe — Free UK Market Email Digest",
+  title: "Free UK Market Email — Your Market Before the Open",
   description:
-    "Get a free weekday email digest of UK market signals, notable movers and the " +
-    "most significant RNS news from Alpha Move AI.",
+    "A free weekday email at 07:30 GMT: AI-ranked UK movers and the RNS news that " +
+    "actually matters, across FTSE 100, 250, SmallCap and AIM. One-click unsubscribe.",
   alternates: { canonical: "/subscribe" },
 };
 

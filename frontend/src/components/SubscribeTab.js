@@ -1,7 +1,8 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { API } from "@/lib/api";
 import PageHeader from "@/components/layout/PageHeader";
+import { DigestSample } from "@/components/DigestSample";
 
 const LABEL = {
   color: "#f97316",
@@ -20,13 +21,21 @@ const CARD = {
   marginBottom: 24,
 };
 
+// Prominent variant for the primary subscribe action.
+const HERO_CARD = {
+  ...CARD,
+  border: "1px solid #f9731655",
+  background:
+    "radial-gradient(120% 140% at 0% 0%, rgba(249,115,22,0.10) 0%, rgba(249,115,22,0) 55%), #141414",
+};
+
 const INPUT = {
   flex: 1,
   background: "#0d0d0d",
   border: "1px solid #2a2a2a",
   color: "#e5e5e5",
-  padding: "10px 12px",
-  fontSize: 13,
+  padding: "12px 14px",
+  fontSize: 14,
   fontFamily: "monospace",
   borderRadius: 3,
   outline: "none",
@@ -36,7 +45,7 @@ const BTN = {
   background: "linear-gradient(135deg, #2a1a00 0%, #1a1200 100%)",
   border: "1px solid #f97316",
   color: "#f97316",
-  padding: "10px 20px",
+  padding: "12px 22px",
   fontSize: 12,
   fontFamily: "monospace",
   fontWeight: 700,
@@ -60,14 +69,77 @@ function Message({ kind, text }) {
   );
 }
 
+// Trust signals shown directly under the subscribe form. (Scarcity is conveyed
+// by the live spots counter above the form, so it's not repeated here.)
+const TRUST = [
+  "Weekday mornings only",
+  "One-click unsubscribe",
+  "No spam, no sharing",
+];
+
+function TrustRow() {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 18px", marginTop: 16 }}>
+      {TRUST.map((t) => (
+        <span key={t} style={{ display: "flex", alignItems: "center", gap: 7, color: "#94a3b8", fontFamily: "monospace", fontSize: 11 }}>
+          <span style={{ color: "#10b981" }}>✓</span>
+          {t}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Live remaining-spots counter. Hidden until the count loads (and on any fetch
+// failure), mirroring the landing band.
+function SpotsPill({ spots }) {
+  if (!spots) return null;
+  const full = spots.remaining <= 0;
+  const accent = full ? "#ef4444" : "#f97316";
+  const bg = full ? "#2a0d0d" : "#1f1400";
+  return (
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 8,
+      padding: "7px 14px", marginBottom: 16, borderRadius: 100,
+      border: `1px solid ${accent}55`, background: bg,
+      fontFamily: "monospace", fontSize: 12, color: "#e5e5e5",
+    }}>
+      <span style={{
+        width: 7, height: 7, borderRadius: "50%", background: accent,
+        boxShadow: full ? "none" : `0 0 8px ${accent}`,
+      }} />
+      {full ? (
+        <span>All {spots.cap} spots taken — sign-ups closed for now.</span>
+      ) : (
+        <span>Only <strong style={{ color: accent }}>{spots.remaining}</strong> of {spots.cap} free spots left</span>
+      )}
+    </div>
+  );
+}
+
 export default function SubscribeTab() {
   const [signupEmail, setSignupEmail] = useState("");
   const [signupBusy, setSignupBusy]   = useState(false);
   const [signupMsg, setSignupMsg]     = useState(null);
+  const [spots, setSpots]             = useState(null);
 
+  const [unsubOpen, setUnsubOpen]     = useState(false);
   const [unsubEmail, setUnsubEmail]   = useState("");
   const [unsubBusy, setUnsubBusy]     = useState(false);
   const [unsubMsg, setUnsubMsg]       = useState(null);
+
+  // Live remaining-spots counter. Best-effort: on failure the pill just hides
+  // and the form stays open.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API}/subscribers/count`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d && typeof d.remaining === "number") setSpots(d); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  const full = spots != null && spots.remaining <= 0;
 
   async function submitSignup(e) {
     e.preventDefault();
@@ -80,9 +152,11 @@ export default function SubscribeTab() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const verb = data.status === "reactivated" ? "Re-subscribed" : "Subscribed";
-        setSignupMsg({ kind: "ok", text: `✓ ${verb} — ${signupEmail}` });
+        const verb = data.status === "reactivated" ? "back" : "in";
+        setSignupMsg({ kind: "ok", text: `✓ You're ${verb} — your first briefing lands at 07:30 on the next market day.` });
         setSignupEmail("");
+        // Optimistically reflect the taken spot (endpoint is cached ~60s).
+        setSpots((s) => (s ? { ...s, count: s.count + 1, remaining: Math.max(0, s.remaining - 1) } : s));
       } else {
         setSignupMsg({ kind: "err", text: data.detail || `Error (${res.status})` });
       }
@@ -122,22 +196,20 @@ export default function SubscribeTab() {
   return (
     <div style={{ maxWidth: 640 }}>
       <PageHeader
-        title="Email Digest"
-        subtitle="A free weekday email of notable movers and the most significant RNS news · AI-ranked · 07:30 GMT/BST · Mon–Fri."
+        title="Your UK market, before the open"
+        subtitle="One short email every weekday at 07:30 GMT/BST — AI-ranked movers and the RNS news that actually matters. Free."
       />
 
-      <div style={CARD}>
-        <div style={LABEL}>What you'll get</div>
-        <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.6 }}>
-          A morning email covering the last 24h of Tier&nbsp;A (high-impact) and
-          Tier&nbsp;B RNS announcements from FTSE&nbsp;100, FTSE&nbsp;250 and
-          SmallCap/AIM. Each item carries an AI thesis, risk flag, and a
-          research/watch/ignore action. Free, no commitment.
+      {/* Primary: subscribe */}
+      <div style={HERO_CARD}>
+        <div style={LABEL}>Get the morning briefing</div>
+        <div style={{ color: "#cbd5e1", fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
+          Read your market with your coffee, not your lunch. Each weekday at
+          07:30 we send the last 24h of notable movers and high-impact RNS from
+          FTSE&nbsp;100, 250 and SmallCap/AIM — each item carrying an AI thesis,
+          a risk flag, and a research / watch / ignore call.
         </div>
-      </div>
-
-      <div style={CARD}>
-        <div style={LABEL}>Subscribe</div>
+        <div><SpotsPill spots={spots} /></div>
         <form onSubmit={submitSignup} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
             type="email"
@@ -147,44 +219,71 @@ export default function SubscribeTab() {
             onChange={(e) => setSignupEmail(e.target.value)}
             style={{ ...INPUT, minWidth: 220 }}
             autoComplete="email"
+            disabled={signupBusy || full}
           />
-          <button type="submit" disabled={signupBusy} style={{ ...BTN, opacity: signupBusy ? 0.5 : 1 }}>
-            {signupBusy ? "Subscribing…" : "Subscribe"}
+          <button type="submit" disabled={signupBusy || full} style={{ ...BTN, opacity: (signupBusy || full) ? 0.5 : 1 }}>
+            {full ? "Sign-ups closed" : signupBusy ? "Subscribing…" : "Get the briefing"}
           </button>
         </form>
         <Message kind={signupMsg?.kind} text={signupMsg?.text} />
+        <TrustRow />
       </div>
 
+      {/* Sample of the email */}
       <div style={CARD}>
-        <div style={{ ...LABEL, color: "#94a3b8" }}>Unsubscribe</div>
-        <div style={{ color: "#666", fontSize: 12, fontFamily: "monospace", marginBottom: 12 }}>
-          Or use the one-click link in any digest email footer.
+        <div style={LABEL}>What a morning looks like</div>
+        <div style={{ color: "#94a3b8", fontSize: 13, lineHeight: 1.6, marginBottom: 12 }}>
+          Items are grouped by market cap and led by the highest-ranked, so what&apos;s
+          worth your attention sits at the top.
         </div>
-        <form onSubmit={submitUnsub} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <input
-            type="email"
-            required
-            placeholder="you@example.com"
-            value={unsubEmail}
-            onChange={(e) => setUnsubEmail(e.target.value)}
-            style={{ ...INPUT, minWidth: 220 }}
-            autoComplete="email"
-          />
+        <DigestSample />
+      </div>
+
+      {/* Unsubscribe — demoted, collapsed by default */}
+      <div style={CARD}>
+        {!unsubOpen ? (
           <button
-            type="submit"
-            disabled={unsubBusy}
+            onClick={() => setUnsubOpen(true)}
             style={{
-              ...BTN,
-              border: "1px solid #555",
-              color: "#94a3b8",
-              background: "#1a1a1a",
-              opacity: unsubBusy ? 0.5 : 1,
+              background: "none", border: "none", color: "#666",
+              fontFamily: "monospace", fontSize: 12, cursor: "pointer", padding: 0,
             }}
           >
-            {unsubBusy ? "Working…" : "Unsubscribe"}
+            Already subscribed and want out? Unsubscribe →
           </button>
-        </form>
-        <Message kind={unsubMsg?.kind} text={unsubMsg?.text} />
+        ) : (
+          <>
+            <div style={{ ...LABEL, color: "#94a3b8" }}>Unsubscribe</div>
+            <div style={{ color: "#666", fontSize: 12, fontFamily: "monospace", marginBottom: 12 }}>
+              Or use the one-click link in any digest email footer.
+            </div>
+            <form onSubmit={submitUnsub} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                type="email"
+                required
+                placeholder="you@example.com"
+                value={unsubEmail}
+                onChange={(e) => setUnsubEmail(e.target.value)}
+                style={{ ...INPUT, minWidth: 220 }}
+                autoComplete="email"
+              />
+              <button
+                type="submit"
+                disabled={unsubBusy}
+                style={{
+                  ...BTN,
+                  border: "1px solid #555",
+                  color: "#94a3b8",
+                  background: "#1a1a1a",
+                  opacity: unsubBusy ? 0.5 : 1,
+                }}
+              >
+                {unsubBusy ? "Working…" : "Unsubscribe"}
+              </button>
+            </form>
+            <Message kind={unsubMsg?.kind} text={unsubMsg?.text} />
+          </>
+        )}
       </div>
     </div>
   );
