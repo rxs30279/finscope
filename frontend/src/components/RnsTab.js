@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
-import { useIsMobile, useIsTablet } from "@/hooks/useMediaQuery";
+import { useIsMobile, useIsTablet, useMediaQuery } from "@/hooks/useMediaQuery";
 import { API } from "@/lib/api";
 import PageHeader from "@/components/layout/PageHeader";
 
@@ -211,7 +211,16 @@ export default function RnsTab({ refreshKey, onSelect }) {
   // crashing React (Rules of Hooks).
   const isMobileWidth = useIsMobile();
   const isTablet = useIsTablet();
-  const isMobile = isMobileWidth || isTablet;
+  // The full multi-column table needs ~1080px just for its fixed columns, and
+  // on a 1024-wide laptop the sidebar + card padding eat further into that —
+  // cramping the headline into a narrow sliver. Treat anything up to ~1200px as
+  // "small" and use the fluid stacked single-column layout there too.
+  const isCramped = useMediaQuery("(max-width: 1199px)");
+  const isMobile = isMobileWidth || isTablet || isCramped;
+  // On the narrowest (phone) widths the action pill won't fit beside the score
+  // on the meta line, so drop it down next to the market cap and leave just the
+  // score pinned top-right.
+  const isNarrow = useMediaQuery("(max-width: 640px)");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [hours, setHours] = useState(72);
@@ -407,13 +416,48 @@ export default function RnsTab({ refreshKey, onSelect }) {
                 {r.company_name}
               </span>
             )}
-            {/* AI score — pinned to the top-right of the card, as in the email digest */}
-            {r.llm_score != null && (
-              <span style={{ marginLeft: "auto" }}>
-                <ScoreCell value={r.llm_score} />
+            {/* Action + AI score — pinned to the top-right of the card, as in
+                the email digest. Action sits to the left of the score, but on
+                narrow widths it drops to the market-cap line (below) so the
+                score keeps its top-right slot. */}
+            {((!isNarrow && r.llm_action) || r.llm_score != null) && (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                {!isNarrow && r.llm_action && <ActionPill action={r.llm_action} />}
+                {r.llm_score != null && <ScoreCell value={r.llm_score} />}
               </span>
             )}
           </div>
+          {/* Market cap on its own line beneath the meta row. On narrow widths
+              this line also hosts the action pill (dropped from the meta row). */}
+          {(r.market_cap != null || (isNarrow && r.llm_action)) && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 6,
+              }}
+            >
+              {r.market_cap != null && (
+                <span
+                  style={{ color: "#666", fontSize: 11, fontFamily: "monospace" }}
+                >
+                  Mkt cap{" "}
+                  <span style={{ color: "#94a3b8" }}>
+                    {fmtCurrency(r.market_cap)}
+                  </span>
+                </span>
+              )}
+              {isNarrow && r.llm_action && <ActionPill action={r.llm_action} />}
+            </div>
+          )}
           <a
             href={r.url}
             target="_blank"
@@ -860,8 +904,37 @@ export default function RnsTab({ refreshKey, onSelect }) {
             {/* Section table */}
             <div style={{ ...S.card, overflowX: "auto" }}>
               <table
-                style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: 12,
+                  // Fixed layout + a shared colgroup so all three cap-bucket
+                  // tables share identical column widths and line up vertically.
+                  // (Default auto-layout sizes each table to its own content,
+                  // which is why the columns drifted out of alignment.)
+                  tableLayout: isMobile ? undefined : "fixed",
+                  // The 9 fixed columns total ~760px; reserve enough headroom so
+                  // the flexible Headline column stays readable. Below this the
+                  // card (overflowX:auto) scrolls horizontally rather than
+                  // squeezing the headline into a narrow sliver — which is what
+                  // happened at ~1024px-wide viewports (content area < table).
+                  minWidth: isMobile ? undefined : 1080,
+                }}
               >
+                {!isMobile && (
+                  <colgroup>
+                    <col style={{ width: 64 }} />{/* Time */}
+                    <col style={{ width: 56 }} />{/* Tier */}
+                    <col style={{ width: 80 }} />{/* Mkt Cap */}
+                    <col style={{ width: 96 }} />{/* Ticker */}
+                    <col style={{ width: 130 }} />{/* Company */}
+                    <col />{/* Headline / AI Thesis — takes remaining space */}
+                    <col style={{ width: 140 }} />{/* Category */}
+                    <col style={{ width: 56 }} />{/* Rules */}
+                    <col style={{ width: 48 }} />{/* AI */}
+                    <col style={{ width: 90 }} />{/* Action */}
+                  </colgroup>
+                )}
                 {!isMobile && (
                 <thead>
                   <tr style={{ borderBottom: "1px solid #2a2a2a" }}>
