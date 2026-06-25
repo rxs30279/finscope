@@ -59,6 +59,20 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   const [containerWidth, setContainerWidth] = useState(0);
   const isMobile = useIsMobile();
 
+  // On touch, recharts keeps the tooltip "active" across an orientation change
+  // (no mouseleave fires), so after rotating it lingers at the old data point —
+  // a different on-screen spot once the chart has re-laid-out. Bumping this key
+  // remounts the chart subtree on orientation flip, clearing recharts' internal
+  // active-tooltip state so no stale box is shown.
+  const [chartKey, setChartKey] = useState(0);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(orientation: portrait)");
+    const onChange = () => setChartKey((k) => k + 1);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
   // In `simple` mode (Trending) force a plain line with volume only — no candles,
   // MAs, MACD or RSI. These derive from state without mutating it, so the persisted
   // prefs stay intact for the full company view.
@@ -461,7 +475,7 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
           </div>
         )}
         <ResponsiveContainer width="100%" height={380}>
-          <ComposedChart data={chartData} margin={{ top: PRICE_TOP, right: 10, bottom: 5, left: 0 }}>
+          <ComposedChart key={chartKey} data={chartData} margin={{ top: PRICE_TOP, right: 10, bottom: 5, left: 0 }}>
             <defs>
               <linearGradient id="gPrice" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
@@ -493,7 +507,7 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
 
       {sMACD && (
         <ResponsiveContainer width="100%" height={150}>
-          <ComposedChart data={chartData} margin={{ top: 4, right: 10, bottom: 5, left: 0 }}>
+          <ComposedChart key={chartKey} data={chartData} margin={{ top: 4, right: 10, bottom: 5, left: 0 }}>
             <text x={70} y={12} fill="#64748b" fontSize={11} fontFamily="monospace">MACD (12, 26, 9)</text>
             <XAxis dataKey="date" tick={sRSI ? false : { fontSize: 10 }} ticks={axisTicks} interval={0} tickFormatter={tickFormatter} height={sRSI ? 4 : 30} />
             <YAxis tick={{ fontSize: 10 }} tickFormatter={fmtAxisPrice} width={Y_AXIS_W} />
@@ -510,7 +524,7 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
 
       {sRSI && (
         <ResponsiveContainer width="100%" height={130}>
-          <ComposedChart data={chartData} margin={{ top: 4, right: 10, bottom: 5, left: 0 }}>
+          <ComposedChart key={chartKey} data={chartData} margin={{ top: 4, right: 10, bottom: 5, left: 0 }}>
             <text x={70} y={12} fill="#64748b" fontSize={11} fontFamily="monospace">RSI (14)</text>
             <XAxis dataKey="date" tick={{ fontSize: 10 }} ticks={axisTicks} interval={0} tickFormatter={tickFormatter} />
             <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} ticks={[30, 50, 70]} width={Y_AXIS_W} />
