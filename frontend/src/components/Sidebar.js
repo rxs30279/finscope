@@ -45,8 +45,9 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
   const [constituents, setConstituents] = useState(null); // { sector: [{symbol,name}] }
   const [expandedSector, setExpandedSector] = useState(null);
   // Auto-refresh tick: the benchmark/sector/VIX figures are live. The backend
-  // re-pulls on a 15-minute cache, so poll every 5 minutes to surface a freshly
-  // computed value within ~5 min of it landing, keeping an open tab current.
+  // re-pulls on a fast market-hours cache (~2 min while the LSE is open), so poll
+  // every 2 min during the session to surface freshly computed values, and back
+  // off to 15 min once closed — prices are static until the next bell.
   const [autoTick, setAutoTick] = useState(0);
   // Per-second tick that drives the live LSE close countdown.
   const [, setClockTick] = useState(0);
@@ -58,12 +59,23 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    const tick = () => { if (!document.hidden) setAutoTick(t => t + 1); };
-    const id = setInterval(tick, 5 * 60 * 1000);
+    // Self-rescheduling timer that re-reads the LSE status each cycle, so the
+    // cadence adapts as the market opens/closes without remounting: 2 min while
+    // open, 15 min once closed. A hidden tab skips the bump (no fetch); returning
+    // to the tab forces an immediate refresh via the visibility handler.
+    let id;
+    const schedule = () => {
+      const delay = lseStatus().open ? 2 * 60 * 1000 : 15 * 60 * 1000;
+      id = setTimeout(() => {
+        if (!document.hidden) setAutoTick(t => t + 1);
+        schedule();
+      }, delay);
+    };
+    schedule();
     const onVisible = () => { if (!document.hidden) setAutoTick(t => t + 1); };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      clearInterval(id);
+      clearTimeout(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);

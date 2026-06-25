@@ -16,12 +16,15 @@ def _fake_prices(tickers, rows=280):
     return pd.DataFrame(data, index=dates)
 
 def _patch_prices(fake_df):
-    """Context manager: patch both price feeds — the shared 1-year _get_prices and the
-    2-year F&G feed (_get_fg_prices_2y, which the Fear & Greed calc now combines in) — to
-    return fake_df, so the calcs stay hermetic and never hit the network."""
+    """Context manager: patch the price feeds — the shared 1-year _get_prices, the
+    sidebar-only live frame (_get_sidebar_prices, used by the sidebar endpoint for
+    benchmarks/sectors/VIX) and the 2-year F&G feed (_get_fg_prices_2y, which the
+    Fear & Greed calc now combines in) — to return fake_df, so the calcs stay
+    hermetic and never hit the network."""
     import market
     stack = ExitStack()
     stack.enter_context(patch.object(market, "_get_prices", return_value=fake_df))
+    stack.enter_context(patch.object(market, "_get_sidebar_prices", return_value=fake_df))
     stack.enter_context(patch.object(market, "_get_fg_prices_2y", return_value=fake_df))
     return stack
 

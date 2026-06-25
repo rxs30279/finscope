@@ -24,6 +24,7 @@ router = APIRouter(prefix="/api/market", tags=["market"])
 # with a longer per-key TTL below.
 _cache: dict = {}
 CACHE_TTL = 900           # 15 minutes — live intraday endpoints
+CACHE_TTL_LIVE_OPEN = 120 # 2 minutes — sidebar live frame while the LSE is open
 CACHE_TTL_HOURLY = 3600   # 1 hour — daily-changing data (gilts, F&G history table)
 CACHE_TTL_DAILY = 86400   # 24 hours — monthly-changing data (ONS macro)
 
@@ -138,7 +139,7 @@ def _load_snapshot(name: str):
     return None
 
 
-def _cached_price_frame(key: str, fetch):
+def _cached_price_frame(key: str, fetch, ttl: int = CACHE_TTL):
     """Cache helper for the heavy shared price frames. Like _cached(swr=True) but
     seeds a cold (in-memory-missing) worker from the on-disk snapshot so the first
     request returns instantly instead of blocking on the live Yahoo fetch. A
@@ -146,7 +147,7 @@ def _cached_price_frame(key: str, fetch):
     on disk (very first deploy) it falls back to a synchronous single-flight fetch."""
     now = time.time()
     entry = _cache.get(key)
-    if entry is not None and now - entry[1] < CACHE_TTL:
+    if entry is not None and now - entry[1] < ttl:
         return entry[0]
     if entry is None:
         snap = _load_snapshot(key)
@@ -158,6 +159,30 @@ def _cached_price_frame(key: str, fetch):
     # Stale → serve stale immediately, refresh in the background.
     _maybe_refresh_async(key, fetch)
     return entry[0]
+
+
+def _lse_open(now=None):
+    """True if the LSE is in a regular trading session right now (Mon–Fri,
+    08:00–16:30 London). Mirrors _lse_open() in main.py / isLseOpen() in the
+    frontend. Holidays aren't excluded — misjudging a holiday as "open" only
+    forgoes the long closed-market cache (the data is static anyway), so it
+    degrades to the faster refresh rather than serving wrong data."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = now or datetime.now(ZoneInfo("Europe/London"))
+    except Exception:
+        now = now or datetime.utcnow()  # London ≈ UTC; close enough for the gate
+    if now.weekday() >= 5:  # Sat/Sun
+        return False
+    mins = now.hour * 60 + now.minute
+    return 8 * 60 <= mins <= 16 * 60 + 30
+
+
+def _live_ttl() -> int:
+    """Cache TTL for the live sidebar data: short while the market is open (the
+    figures move intraday on the ~15-min-delayed feed), long once closed (they're
+    static until the next bell, so there's nothing fresher to fetch)."""
+    return CACHE_TTL_LIVE_OPEN if _lse_open() else CACHE_TTL_HOURLY
 
 
 # ── Ticker constants ───────────────────────────────────────────────────────────
@@ -304,17 +329,30 @@ ALL_PROXY_TICKERS = list(
     )
 )
 
+# The subset of proxy tickers the SIDEBAR itself renders: benchmarks, sector
+# baskets and VIX (~85 names) — everything EXCEPT the ~100 breadth tickers, which
+# only feed Fear & Greed (separately cached at 15 min). Fetched as its own small
+# frame so the sidebar can refresh fast intraday without dragging the full breadth
+# universe through Yahoo each cycle.
+SIDEBAR_LIVE_TICKERS = list(
+    dict.fromkeys(
+        list(BENCHMARK_TICKERS.values())
+        + [t for tickers in SECTOR_TICKERS.values() for t in tickers]
+        + [VIX_TICKER]
+    )
+)
+
 
 # ── Shared price fetch (all proxy tickers, 1 year history, cached) ────────────
-def _fetch_prices_frame():
-    """Live Yahoo fetch of the full proxy universe (1y). Persists a disk snapshot
-    on success. Module-level (not a closure) so the daily cron can force a fresh
-    fetch via warm_price_snapshots() without going through the seeded cache."""
+def _fetch_frame(tickers, snapshot_name, period="1y"):
+    """Threaded live Yahoo fetch of `tickers` (Close series, `period` history),
+    persisting a disk snapshot under `snapshot_name` on success. Shared by the full
+    proxy frame and the smaller sidebar-live frame."""
     import yfinance as yf  # deferred — only this fetch path needs it
 
     def _fetch_one(ticker):
         try:
-            hist = yf.Ticker(ticker).history(period="1y", auto_adjust=True)
+            hist = yf.Ticker(ticker).history(period=period, auto_adjust=True)
             if hist.empty:
                 return ticker, None
             col = hist["Close"]
@@ -325,7 +363,7 @@ def _fetch_prices_frame():
             return ticker, None
 
     with ThreadPoolExecutor(max_workers=12) as executor:
-        futures = {executor.submit(_fetch_one, t): t for t in ALL_PROXY_TICKERS}
+        futures = {executor.submit(_fetch_one, t): t for t in tickers}
         frames = {}
         for future in as_completed(futures):
             ticker, col = future.result()
@@ -333,15 +371,36 @@ def _fetch_prices_frame():
                 frames[ticker] = col
 
     if not frames:
-        print("[market] yfinance: no data returned for any ticker")
+        print(f"[market] yfinance: no data returned for any ticker ({snapshot_name})")
         return pd.DataFrame()
     df = pd.DataFrame(frames)
-    _save_snapshot("prices", df)
+    _save_snapshot(snapshot_name, df)
     return df
+
+
+def _fetch_prices_frame():
+    """Live Yahoo fetch of the full proxy universe (1y). Persists a disk snapshot
+    on success. Module-level (not a closure) so the daily cron can force a fresh
+    fetch via warm_price_snapshots() without going through the seeded cache."""
+    return _fetch_frame(ALL_PROXY_TICKERS, "prices")
+
+
+def _fetch_sidebar_frame():
+    """Live Yahoo fetch of just the sidebar's benchmark/sector/VIX tickers (~85, a
+    subset of ALL_PROXY_TICKERS). Refreshed on the fast market-hours TTL so the
+    sidebar's intraday figures stay current without re-pulling the ~100 breadth
+    tickers (those feed Fear & Greed, which is separately cached at 15 min)."""
+    return _fetch_frame(SIDEBAR_LIVE_TICKERS, "sidebar_prices")
 
 
 def _get_prices():
     return _cached_price_frame("prices", _fetch_prices_frame)
+
+
+def _get_sidebar_prices():
+    """Small live frame for the sidebar (benchmarks/sectors/VIX), refreshed on the
+    fast market-hours TTL — ~2 min while the LSE is open, 1 h once closed."""
+    return _cached_price_frame("sidebar_prices", _fetch_sidebar_frame, ttl=_live_ttl())
 
 
 def _get_ftse_long():
@@ -910,16 +969,19 @@ def _get_fg_prices_2y():
 
 
 def warm_price_snapshots():
-    """Force a fresh live fetch of both shared price frames and persist them to
-    disk, so freshly-started web workers can seed their in-memory cache from a
-    recent snapshot instead of paying a live Yahoo fetch on the first request.
+    """Force a fresh live fetch of the shared price frames (full proxy, sidebar
+    subset, F&G 2y) and persist them to disk, so freshly-started web workers can
+    seed their in-memory cache from a recent snapshot instead of paying a live
+    Yahoo fetch on the first request.
     Called by the daily prices cron (run_prices.py) after EOD prices land. Goes
     straight to the fetchers (not the seeded cache) so it always writes FRESH
     data. Returns a small summary."""
     p = _fetch_prices_frame()
+    sb = _fetch_sidebar_frame()
     fg = _fetch_fg_prices_2y_frame()
     return {
         "prices_cols": int(p.shape[1]) if hasattr(p, "shape") else 0,
+        "sidebar_cols": int(sb.shape[1]) if hasattr(sb, "shape") else 0,
         "fg_cols": int(fg.shape[1]) if hasattr(fg, "shape") else 0,
     }
 
@@ -1165,19 +1227,25 @@ def fear_greed_history(response: Response):
 
 @router.get("/sidebar")
 def sidebar(response: Response):
-    # Polled by every open tab and identical for all users (no params). The 15-min
-    # in-process _cached() does nothing across Vercel's cold/separate instances —
-    # each poll still invoked the function. Edge-cache it so the whole fleet of
-    # pollers collapses to ~one function call per 15 min globally.
-    response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
+    # Polled by every open tab and identical for all users (no params). Cache
+    # market-hours-aware: ~2 min while the LSE is open (the figures move intraday),
+    # 1 h once closed (static until the next bell). The s-maxage header mirrors the
+    # in-process TTL so that, behind any edge cache, the fleet of pollers collapses
+    # to ~one function call per TTL globally.
+    ttl = _live_ttl()
+    response.headers["Cache-Control"] = (
+        f"public, s-maxage={ttl}, stale-while-revalidate=3600"
+    )
 
     def compute():
         # Benchmarks, sectors and VIX are intentionally LIVE: they read the raw
         # current-day bar (Yahoo's daily Close tracks the live price intraday) and
-        # refresh on the 15-minute _cached() TTL. Unlike Fear & Greed / Breadth they
-        # are deliberately NOT trimmed to the last completed session, so the % change
-        # is "since the previous close" and moves through the trading day.
-        prices = _get_prices()
+        # refresh on the fast market-hours TTL via _get_sidebar_prices() — a small
+        # frame that omits the breadth tickers (those feed Fear & Greed only).
+        # Unlike Fear & Greed / Breadth they are deliberately NOT trimmed to the
+        # last completed session, so the % change is "since the previous close" and
+        # moves through the trading day.
+        prices = _get_sidebar_prices()
         benchmarks = [
             {"name": name, "pct_change": _pct_change_today(prices, ticker)}
             for name, ticker in BENCHMARK_TICKERS.items()
@@ -1209,7 +1277,7 @@ def sidebar(response: Response):
             },
         }
 
-    return _cached("sidebar", compute, swr=True)
+    return _cached("sidebar", compute, ttl=ttl, swr=True)
 
 
 @router.get("/rotation")
