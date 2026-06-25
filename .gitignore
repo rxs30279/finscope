@@ -42,6 +42,9 @@ Thumbs.db
 *.pdf
 *.xlsx
 
+# Local-only report generator (builds Alpha_Move_AI_Technical_Review.docx)
+build_tech_review.py
+
 # Generated HTML edition of the user manual (built from USER_MANUAL.md by
 # build_manual_html.py; an artifact, not a source — don't track it)
 Alpha_Move_AI_User_Manual.html
