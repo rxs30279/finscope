@@ -36,7 +36,12 @@ export default function TrendingTab({ onSelect }: Props) {
   const risers = data?.risers || [];
   const fallers = data?.fallers || [];
   const colH = isMobile ? "auto" : "calc(100vh - 200px)";
-  const listH = isMobile ? "42vh" : colH;
+  const listH = isMobile ? "auto" : colH;
+  // On mobile, tapping a stock jumps straight to its company page; on desktop it
+  // selects the stock to populate the profile + news panels.
+  const handleSelect = isMobile ? onSelect : setSel;
+  // No persistent selection on mobile — taps navigate away, so nothing stays "active".
+  const listSel = isMobile ? null : sel;
 
   return (
     <div>
@@ -45,20 +50,22 @@ export default function TrendingTab({ onSelect }: Props) {
         subtitle="Stocks on a run of 3 or more consecutive up or down days, ranked by streak length."
       />
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(210px,1fr) minmax(210px,1fr) minmax(360px,1.5fr)", gap: 16, alignItems: "start" }}>
-        <TrendingList title="Risers" accent="#10b981" up items={risers} selected={sel} onSelect={setSel} height={listH} />
-        <TrendingList title="Fallers" accent="#ef4444" up={false} items={fallers} selected={sel} onSelect={setSel} height={listH} />
-        <div>
-          {sel ? (
-            <div style={{ ...S.card, height: colH, overflowY: isMobile ? "visible" : "auto", minHeight: 0 }}>
-              <TrendingProfile symbol={sel} onOpenFull={onSelect} />
-            </div>
-          ) : (
-            <div style={{ ...S.card, ...S.loading }}>Select a stock to see its profile and news.</div>
-          )}
-        </div>
+        <TrendingList title="Risers" accent="#10b981" up items={risers} selected={listSel} onSelect={handleSelect} height={listH} />
+        <TrendingList title="Fallers" accent="#ef4444" up={false} items={fallers} selected={listSel} onSelect={handleSelect} height={listH} />
+        {!isMobile && (
+          <div>
+            {sel ? (
+              <div style={{ ...S.card, height: colH, overflowY: "auto", minHeight: 0 }}>
+                <TrendingProfile symbol={sel} onOpenFull={onSelect} />
+              </div>
+            ) : (
+              <div style={{ ...S.card, ...S.loading }}>Select a stock to see its profile and news.</div>
+            )}
+          </div>
+        )}
       </div>
 
-      {sel && (
+      {!isMobile && sel && (
         <div style={{ ...S.card, marginTop: 16 }}>
           <h2 style={{ margin: "0 0 16px", fontFamily: "DM Serif Display,serif", fontSize: 20, color: "#f1f5f9" }}>
             News <span style={{ color: "#64748b", fontSize: 15 }}>— {sel.replace(".L", "")}</span>

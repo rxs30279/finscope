@@ -85,11 +85,10 @@ function LogoBadge({ symbol, paysDividend }: { symbol: string; paysDividend: boo
 
 interface Props {
   symbol: string;
-  onBack: () => void;
   initialTab?: string;
 }
 
-export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
+export default function CompanyDetail({ symbol, initialTab }: Props) {
   const [meta, setMeta] = useState<any>(null);
   const [snap, setSnap] = useState<any>(null);
   const [annual, setAnnual] = useState<any[]>([]);
@@ -193,43 +192,70 @@ export default function CompanyDetail({ symbol, onBack, initialTab }: Props) {
 
   const tabs = ["chart", "overview", "financials", "valuation", "health", "growth", "analysts", "news"];
 
+  const descriptors = (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {[symbol, meta?.exchange, meta?.sector, meta?.country, meta?.ftse_index].filter(Boolean).map((t: string) => (
+        <span key={t} style={S.badge}>{t}</span>
+      ))}
+    </div>
+  );
+
+  const dividendLink = paysDividend ? (
+    <a href={dividendDataUrl(symbol)} target="_blank" rel="noopener noreferrer" style={{ color: "#a78bfa", textDecoration: "none", borderBottom: "1px dashed #a78bfa55", paddingBottom: 1, fontFamily: "monospace", fontSize: 11, letterSpacing: 1, textTransform: "uppercase" }}>
+      Dividend Data ↗
+    </a>
+  ) : null;
+
+  const description = meta?.description ? (
+    <p style={{ color: "#94a3b8", fontSize: 13, maxWidth: 680, lineHeight: 1.7, margin: 0 }}>
+      {meta.description.slice(0, 300)}{meta.description.length > 300 ? "…" : ""}
+    </p>
+  ) : null;
+
   return (
     <div>
-      <button onClick={onBack} style={S.backBtn}>← Back to Screener</button>
-
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 10 }}>
-            <LogoBadge symbol={symbol} paysDividend={paysDividend} />
-            <div>
-              <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
-              <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
-                {[symbol, meta?.exchange, meta?.sector, meta?.country, meta?.ftse_index].filter(Boolean).map((t: string) => (
-                  <span key={t} style={S.badge}>{t}</span>
-                ))}
-              </div>
-              {paysDividend && (
-                <div style={{ display: "flex", gap: 14, marginTop: 8, flexWrap: "wrap", fontFamily: "monospace", fontSize: 11, letterSpacing: 1, textTransform: "uppercase" }}>
-                  <a href={dividendDataUrl(symbol)} target="_blank" rel="noopener noreferrer" style={{ color: "#a78bfa", textDecoration: "none", borderBottom: "1px dashed #a78bfa55", paddingBottom: 1 }}>
-                    Dividend Data ↗
-                  </a>
+      {isMobile ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 }}>
+          <div style={{ position: "relative", display: "flex", justifyContent: "flex-start", alignItems: "flex-start", minHeight: 144 }}>
+            {/* Logo with the market cap stacked beneath it, pinned left and out of flow */}
+            <div style={{ position: "absolute", left: 0, top: 0 }}>
+              <LogoBadge symbol={symbol} paysDividend={paysDividend} />
+              <div style={{ marginTop: 18 }}>
+                <div style={{ fontSize: 22, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>
+                  Market Cap{snap.enterprise_value ? ` · EV ${fmt(snap.enterprise_value, "currency", qcur)}` : ""}
                 </div>
-              )}
+              </div>
+            </div>
+            {/* Match the logo's vertical span (marginTop 9 + 64h) so the name sits on its midline */}
+            <div style={{ marginTop: 9, minHeight: 64, marginLeft: 84, display: "flex", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 22, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
             </div>
           </div>
-          {meta?.description && (
-            <p style={{ color: "#94a3b8", fontSize: 13, maxWidth: 680, lineHeight: 1.7, margin: 0 }}>
-              {meta.description.slice(0, 300)}{meta.description.length > 300 ? "…" : ""}
-            </p>
-          )}
+          {description}
+          {dividendLink}
         </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 30, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
-          {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>EV: {fmt(snap.enterprise_value, "currency", qcur)}</div>}
+      ) : (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 10 }}>
+              <LogoBadge symbol={symbol} paysDividend={paysDividend} />
+              <div>
+                <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
+                <div style={{ marginTop: 5 }}>{descriptors}</div>
+                {dividendLink && <div style={{ marginTop: 8 }}>{dividendLink}</div>}
+              </div>
+            </div>
+            {description}
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 30, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
+            {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>EV: {fmt(snap.enterprise_value, "currency", qcur)}</div>}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Tabs */}
       <div style={{ display: "flex", flexWrap: isMobile ? "wrap" : "nowrap", rowGap: isMobile ? 2 : 0, columnGap: 2, borderBottom: isMobile ? "none" : "1px solid #334155", marginBottom: 24 }}>

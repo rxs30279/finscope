@@ -16,6 +16,7 @@ import {
 import { API } from "@/lib/api";
 import { currSym, fmtUKDate } from "@/lib/format";
 import { loadChartPrefs, saveChartPrefs } from "@/lib/storage";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { S } from "@/lib/theme";
 
 interface Props {
@@ -39,14 +40,24 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   const [loading, setLoading] = useState(true);
   const [prefs] = useState(loadChartPrefs);
   const [range, setRange] = useState(prefs.range);
-  const [showMA20, setShowMA20] = useState(prefs.showMA20);
+  const [showMA20, setShowMA20] = useState(() => {
+    // Same as candles: keep the mobile chart clean by defaulting MA20 off.
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 943px)").matches) return false;
+    return prefs.showMA20;
+  });
   const [showMA50, setShowMA50] = useState(prefs.showMA50);
   const [showVolume, setShowVolume] = useState(prefs.showVolume);
-  const [showCandles, setShowCandles] = useState(prefs.showCandles);
+  const [showCandles, setShowCandles] = useState(() => {
+    // On phones, default to a cleaner line chart even when candles are the saved
+    // (desktop) preference. The user can still toggle candles on per session.
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 943px)").matches) return false;
+    return prefs.showCandles;
+  });
   const [showMACD, setShowMACD] = useState(prefs.showMACD);
   const [showRSI, setShowRSI] = useState(prefs.showRSI);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const isMobile = useIsMobile();
 
   // In `simple` mode (Trending) force a plain line with volume only — no candles,
   // MAs, MACD or RSI. These derive from state without mutating it, so the persisted
@@ -63,7 +74,11 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   // uses a tighter layout; the full company view keeps the original width.
   const Y_AXIS_W = simple ? 44 : 64;
 
+  // Skip the mount run so the mobile line-chart default (above) doesn't overwrite
+  // the user's saved candle preference — only actual toggles persist.
+  const firstSave = useRef(true);
   useEffect(() => {
+    if (firstSave.current) { firstSave.current = false; return; }
     saveChartPrefs({ range, showMA20, showMA50, showVolume, showCandles, showMACD, showRSI });
   }, [range, showMA20, showMA50, showVolume, showCandles, showMACD, showRSI]);
 
@@ -223,9 +238,11 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   // Candle overlay: computed as an absolutely-positioned SVG so we own the coordinate
   // math entirely and don't depend on recharts' Customized/scale internals.
   const PRICE_H = 380;
-  // Top margin on the price chart. In `simple` mode (Trending) the price is overlaid
-  // inside the plot, so we add headroom; the full company view keeps its original 5px.
-  const PRICE_TOP = simple ? 36 : 5;
+  // Top margin on the price chart. When the price is overlaid inside the plot
+  // (Trending `simple` mode, and the full view on mobile) we add headroom; the
+  // desktop company view keeps its original 5px.
+  const overlayPrice = simple || isMobile;
+  const PRICE_TOP = overlayPrice ? 36 : 5;
   const candleOverlay = (() => {
     if (!sCandles || containerWidth <= 0 || !chartData.length) return null;
 
@@ -426,13 +443,13 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
             ))}
           </div>
         </div>
-        {!simple && priceContent != null && (
+        {!overlayPrice && priceContent != null && (
           <div style={{ textAlign: "right", flexShrink: 0 }}>{priceContent}</div>
         )}
       </div>
 
       <div ref={containerRef} style={{ position: "relative" }}>
-        {simple && priceContent != null && (
+        {overlayPrice && priceContent != null && (
           <div style={{ position: "absolute", top: PRICE_TOP - 10, right: 5, textAlign: "right", zIndex: 11, pointerEvents: "none", background: "rgba(15,15,15,0.65)", borderRadius: 6, padding: "4px 10px", backdropFilter: "blur(2px)" }}>
             {priceContent}
           </div>
