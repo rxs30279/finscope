@@ -11,6 +11,20 @@ function fmtCountdown(sec) {
   return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`;
 }
 
+// "Updated …" label from the payload's as_of (UTC ISO). Relative so it reads at a
+// glance; the per-second clock tick re-renders the sidebar, keeping it current.
+function fmtAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 45) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const h = Math.floor(min / 60);
+  return `${h}h ${min % 60}m ago`;
+}
+
 function fgColor(score) {
   if (score >= 75) return '#10b981';
   if (score >= 55) return '#f59e0b';
@@ -153,6 +167,14 @@ export default function Sidebar({ refreshKey, onNavigate, mobile = false }) {
           </div>
         );
       })()}
+
+      {/* Data freshness — when the backend last computed this payload. Gated on
+          mounted (it's time-derived, like the clock) to avoid a hydration mismatch. */}
+      {mounted && data?.as_of && fmtAgo(data.as_of) && (
+        <div style={{ marginTop:6, color:'#475569', fontSize:9, fontFamily:'monospace' }} title={new Date(data.as_of).toLocaleString()}>
+          Updated {fmtAgo(data.as_of)}
+        </div>
+      )}
 
       {/* Benchmarks */}
       <div style={{ ...labelStyle, marginTop:12, paddingTop:10, borderTop:'1px solid #1e1e1e' }}>Benchmarks</div>

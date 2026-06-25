@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import requests
 import psycopg2.extras
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Reuse prices.py's connection pool + read helper rather than opening a second
@@ -1266,6 +1266,11 @@ def sidebar(response: Response):
         cnn_fg = _cached("cnn_fear_greed", _fetch_cnn_fg, swr=True)
         fg = _cached("fear_greed", _compute_fear_greed, swr=True)
         return {
+            # When this payload was assembled. Cached with the rest, so it reflects
+            # the data's TRUE age (last actual compute), not the request time —
+            # under SWR a stale read carries the older as_of until the background
+            # refresh lands. UTC ISO 8601; the frontend renders it relative.
+            "as_of": datetime.now(timezone.utc).isoformat(),
             "benchmarks": benchmarks,
             "sectors": sectors,
             "vix": vix_level,
