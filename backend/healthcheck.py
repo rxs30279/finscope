@@ -1,7 +1,7 @@
 """End-to-end health check for the stock screener.
 
 Verifies, in one pass, that every data pipeline is still landing fresh rows AND
-that the live Vercel API responds. Designed to run as a scheduled GitHub
+that the live backend API responds. Designed to run as a scheduled GitHub
 Actions workflow (see .github/workflows/healthcheck.yml): it prints an aligned
 PASS/WARN/FAIL table and exits non-zero if ANY check FAILs, so GitHub's built-in
 "scheduled workflow failed" email is the alert — no extra alerting code.
@@ -15,11 +15,11 @@ What it checks
     - Analysts         MAX(snapshot_date) on analyst_snapshots
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
-    - Vercel API       GET {VERCEL_BASE_URL}/api/filters
+    - Backend API      GET {API_BASE_URL}/api/filters
 
-  The RNS / prices / scores pipelines run as Render cron jobs (no HTTP endpoint
+  The RNS / prices / scores pipelines run as Dokploy cron jobs (no HTTP endpoint
   to ping); their success is covered by the data-freshness checks above plus
-  Render's own per-run red/green status and failure emails.
+  Dokploy's own per-run status.
 
 Known gap (not checked): the email digest leaves no DB trace — Resend is the
 source of truth — and hitting /api/digest would actually send mail, so this
@@ -27,7 +27,7 @@ script does not verify it.
 
 Env vars (same DB_* set the refresh workflows already use):
   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-  VERCEL_BASE_URL  — optional, defaults to https://finscope-api.vercel.app
+  API_BASE_URL  — optional, defaults to https://api.alphamoveai.co.uk
 
 Usage:
   python healthcheck.py            # plain table, exit 1 on any FAIL
@@ -56,7 +56,12 @@ DB_CONFIG = {
     "sslmode": "require",
 }
 
-VERCEL_BASE_URL = os.environ.get("VERCEL_BASE_URL", "https://finscope-api.vercel.app").rstrip("/")
+# Backend migrated off Vercel onto a Hetzner VPS (Dokploy) — api.alphamoveai.co.uk.
+# VERCEL_BASE_URL is still honoured as a legacy fallback so any old GHA secret keeps working.
+API_BASE_URL = os.environ.get(
+    "API_BASE_URL",
+    os.environ.get("VERCEL_BASE_URL", "https://api.alphamoveai.co.uk"),
+).rstrip("/")
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
@@ -208,9 +213,9 @@ def _http_get(url: str, timeout: int = 60):
 
 
 def run_http_checks() -> None:
-    @check("vercel.api")
-    def _vercel():
-        code, body = _http_get(f"{VERCEL_BASE_URL}/api/filters", timeout=30)
+    @check("backend.api")
+    def _backend():
+        code, body = _http_get(f"{API_BASE_URL}/api/filters", timeout=30)
         if code != 200:
             return FAIL, f"HTTP {code} from /api/filters"
         if not isinstance(body, dict):
