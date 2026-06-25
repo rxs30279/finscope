@@ -109,6 +109,13 @@ aside::-webkit-scrollbar {
   }
 }
 
+/* Belt-and-braces against orientation-change layout shifts: a stray over-wide
+   element (e.g. a stale chart tooltip) shouldn't be able to inflate the page
+   width and squash the layout. Clamp horizontal overflow at the root too. */
+html {
+  overflow-x: hidden;
+}
+
 /* Hamburger menu button */
 .hamburger {
   display: none;

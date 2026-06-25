@@ -412,7 +412,13 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   );
 
   return (
-    <div>
+    // overflow:hidden clips recharts' absolutely-positioned tooltip wrapper. On
+    // touch the tooltip stays "active" (no mouseleave) with a stale translateX
+    // from the wider landscape layout; on rotating back to portrait that stale
+    // wrapper sits off the right edge and inflates the page width, squashing the
+    // whole site left. Recharts keeps tooltips inside the plot area, so this
+    // clips nothing legitimate. See investigation 2026-06-25.
+    <div style={{ overflow: "hidden" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 12 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
