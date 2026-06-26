@@ -345,6 +345,14 @@ _CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
             "board change",
             "steps down",
             "directorate change",
+            "retirement",
+            "standing down",
+            "standing-down",
+            "stepping down",
+            "stepping-down",
+            "departure",
+            "resignation",
+            "succession",
         ),
     ),
     (
@@ -651,6 +659,16 @@ _CATALYTIC_KEYWORDS = (
 )
 
 
+# Full-year results are often titled "FY26 Results" / "FY2026 Results" /
+# "Results FY26" — a shape the enumerated final_results slugs ("final results",
+# "annual results", "full-year results", …) all miss. Enumerating every
+# year × separator × 2/4-digit variant is fragile and needs a yearly bump, so
+# match the fiscal-year-plus-results pattern directly instead.
+_FY_RESULTS_RE = re.compile(
+    r"\bfy\s?-?\s?\d{2,4}\b.*\bresults?\b|\bresults?\b.*\bfy\s?-?\s?\d{2,4}\b"
+)
+
+
 def _classify(headline: str, slug: str) -> dict:
     """Classify one announcement into tier/category/keyword hits/score.
 
@@ -668,6 +686,15 @@ def _classify(headline: str, slug: str) -> dict:
             category = cat
             tier = t
             break
+
+    # Fallback: fiscal-year results (e.g. "FY26 Results") that the enumerated
+    # final_results slugs miss. Runs only when nothing more specific matched.
+    # Skip when "notice" is present — a "Notice of FY26 Results" is just
+    # scheduling (the notice_of_results slugs don't cover the FY form either, so
+    # without this guard the fallback would wrongly promote it to Tier A).
+    hay = f"{hay_slug} {hay_headline}"
+    if category is None and "notice" not in hay and _FY_RESULTS_RE.search(hay):
+        category, tier = "final_results", "A"
 
     # Keyword overlays on headline
     hits = []
