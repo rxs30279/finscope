@@ -1295,26 +1295,21 @@ def rotation(response: Response):
 
 def _compute_breadth(prices=None):
     # `prices` lets a caller pass a pre-trimmed frame (the Fear & Greed calc
-    # passes its own EOD-only frame). When called with no arg (the Breadth tab
-    # and the sidebar) we keep TWO frames: a LIVE one (today's in-progress bar
-    # included) for the % above 50-day MA dial — which is meant to read the
-    # current session — and an EOD-trimmed one for the highs/lows and
-    # advance/decline tallies, which stay anchored to the last completed close so
-    # they don't wobble on the partial bar.
-    live_prices = None
+    # passes its own EOD-only frame, which we honour as-is). When called with no
+    # arg (the Breadth tab and the sidebar) we read the LIVE frame — today's
+    # in-progress bar included — for EVERY metric, so the % above 50-day MA dial,
+    # the 52-week highs/lows and the advance/decline tallies all reflect the
+    # current session and move together on the shared 15-minute refresh.
     if prices is None:
-        live_prices = _get_prices()
-        cutoff = _eod_cutoff()
-        prices = live_prices[live_prices.index < cutoff] if cutoff is not None else live_prices
+        prices = _get_prices()
     all_basket_tickers = BREADTH_TICKERS
 
-    # % above 50-day MA — read LIVE (or the caller's own frame when one is passed).
-    ma_frame = live_prices if live_prices is not None else prices
+    # % above 50-day MA.
     above_50 = ma_total = 0
     for t in all_basket_tickers:
-        if t not in ma_frame.columns:
+        if t not in prices.columns:
             continue
-        col = ma_frame[t].dropna()
+        col = prices[t].dropna()
         if len(col) < 51:
             continue
         ma_total += 1
@@ -1322,7 +1317,7 @@ def _compute_breadth(prices=None):
             above_50 += 1
     pct_above = round(above_50 / ma_total, 4) if ma_total else None
 
-    # 52-week highs/lows — last completed close (EOD frame).
+    # 52-week highs/lows.
     new_highs = new_lows = 0
     for t in all_basket_tickers:
         if t not in prices.columns:

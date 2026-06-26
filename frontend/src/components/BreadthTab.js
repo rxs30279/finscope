@@ -165,8 +165,8 @@ function Toggle({ on, onChange, label }) {
   );
 }
 
-// Small freshness stamp pinned to a card's bottom-right corner: "Current" for
-// the live MA dial, "Last close · <date>" for the EOD-anchored cards.
+// Small freshness stamp pinned to a card's bottom-right corner — all cards
+// now show "Current" since they read the live session frame.
 function CornerStamp({ children }) {
   return (
     <div style={{ position:'absolute', bottom:8, right:12, fontSize:8, color:'#475569', fontFamily:'monospace', textTransform:'uppercase', letterSpacing:'0.5px' }}>
@@ -222,15 +222,6 @@ export default function BreadthTab({ refreshKey }) {
   const hlScaleMax = scaleFor(Math.max(nh || 0, nl || 0));
   const adScaleMax = scaleFor(Math.max(data?.advances || 0, data?.declines || 0));
 
-  // Freshness stamp — the endpoint carries no explicit timestamp, so use the
-  // latest trading day present in the A/D line (the session these figures cover).
-  const lastDate = adLine.length ? adLine[adLine.length - 1].date : null;
-  const lastUpdated = (() => {
-    if (!lastDate) return null;
-    const dt = new Date(lastDate);
-    return isNaN(dt.getTime()) ? null : `${dt.getDate()} ${dt.toLocaleString('default', { month: 'short' })} ${dt.getFullYear()}`;
-  })();
-
   return (
     <div>
       <div style={{ display:'flex', alignItems:'baseline', gap:10, flexWrap:'wrap', marginBottom:20 }}>
@@ -263,7 +254,7 @@ export default function BreadthTab({ refreshKey }) {
               max={hlScaleMax}
             />
           </div>
-          <CornerStamp>Last close{lastUpdated ? ` · ${lastUpdated}` : ''}</CornerStamp>
+          <CornerStamp>Current</CornerStamp>
         </div>
 
         {/* A/D placeholder card — chart is below */}
@@ -272,19 +263,21 @@ export default function BreadthTab({ refreshKey }) {
             Advance / Decline
             <InfoDot text="Today's split of FTSE 100 constituents that rose (Advancing) versus fell (Declining), with Net = advancing − declining. It gauges how broad-based the day's move is: a rising index on weak net advances means few stocks are doing the lifting. Watch it against price for confirmation or divergence." />
           </div>
-          <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', transform:'translateY(-10px)' }}>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', transform: isMobile ? 'none' : 'translateY(-10px)' }}>
             <DivergingBar
               leftLabel="Declining"  leftValue={data?.declines}  leftColor="#ff2e3f"
               rightLabel="Advancing" rightValue={data?.advances} rightColor="#16d96b"
               max={adScaleMax}
             />
           </div>
-          {/* Absolute so it doesn't shrink the bar's centring region — keeps this
-              bar vertically aligned with the highs/lows bar in the next card. */}
-          <div style={{ position:'absolute', left:16, bottom:40 }}>
+          {/* Desktop: absolute so it doesn't shrink the bar's centring region —
+              keeps this bar aligned with the highs/lows bar across the 3-col row.
+              Mobile (stacked, short card): in normal flow below the bar so it
+              can't overlap it. */}
+          <div style={isMobile ? { marginTop: 14 } : { position:'absolute', left:16, bottom:40 }}>
             <Toggle on={showAdLine} onChange={setShowAdLine} label={`${showAdLine ? 'Hide' : 'Show'} A/D line`} />
           </div>
-          <CornerStamp>Last close{lastUpdated ? ` · ${lastUpdated}` : ''}</CornerStamp>
+          <CornerStamp>Current</CornerStamp>
         </div>
       </div>
 
@@ -305,7 +298,7 @@ export default function BreadthTab({ refreshKey }) {
               <Line type="monotone" dataKey="value" stroke="#16d96b" strokeWidth={2} dot={false} name="A/D Line" />
             </LineChart>
           </ResponsiveContainer>
-          <CornerStamp>Last close{lastUpdated ? ` · ${lastUpdated}` : ''}</CornerStamp>
+          <CornerStamp>Current</CornerStamp>
         </div>
       )}
     </div>
