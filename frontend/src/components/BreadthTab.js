@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { API } from "@/lib/api";
 import { fmtUKDate } from "@/lib/format";
-import { useIsMobile } from "@/hooks/useMediaQuery";
+import { useIsMobile, useIsNarrowMobile, useIsUnderMd } from "@/hooks/useMediaQuery";
 import InfoDot from "@/components/InfoDot";
 
 
@@ -78,22 +78,42 @@ function BreadthGauge({ value }) {
             <stop offset="0.55" stopColor="#16d96b" stopOpacity="1" />
             <stop offset="1" stopColor="#16d96b" stopOpacity="0.62" />
           </radialGradient>
+          {/* Top-bright / bottom-dark highlight — matches the 3D bar overlay */}
+          <linearGradient id="seg-highlight" x1="0" y1="22" x2="0" y2={cy} gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="white" stopOpacity="0.22" />
+            <stop offset="38%" stopColor="white" stopOpacity="0.04" />
+            <stop offset="100%" stopColor="black" stopOpacity="0.32" />
+          </linearGradient>
+          {/* Glow filter for active segment border */}
+          <filter id="seg-glow" x="-10%" y="-10%" width="120%" height="120%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="0.8" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
 
         {/* Gradient backdrop — top half only, flush at the baseline */}
         <path d={`M ${cx - R} ${cy} A ${R} ${R} 0 0 1 ${cx + R} ${cy} Z`} fill="url(#bg-dial)" />
 
         {/* Two zones — the side the needle lands in is lit, the other dimmed */}
-        {BANDS.map((b, i) => (
-          <path
-            key={i}
-            d={bandPath(b.lo, b.hi, i > 0, i < BANDS.length - 1)}
-            fill={`url(#bg-seg-${i === 0 ? 'red' : 'green'})`}
-            fillOpacity={i === activeIdx ? 1 : 0.4}
-            stroke={i === activeIdx ? b.color : '#2c2c30'}
-            strokeWidth={1}
-          />
-        ))}
+        {BANDS.map((b, i) => {
+          const isActive = i === activeIdx;
+          const d = bandPath(b.lo, b.hi, i > 0, i < BANDS.length - 1);
+          return (
+            <g key={i}>
+              {/* Base fill */}
+              <path d={d} fill={`url(#bg-seg-${i === 0 ? 'red' : 'green'})`} fillOpacity={isActive ? 1 : 0.4} stroke="none" />
+              {/* Glowing border on active segment */}
+              {isActive && <path d={d} fill="none" stroke={b.color} strokeWidth={1.5} filter="url(#seg-glow)" />}
+              {/* Crisp border */}
+              <path d={d} fill="none" stroke={isActive ? b.color : '#2c2c30'} strokeWidth={1} />
+              {/* 3D highlight overlay */}
+              {isActive && <path d={d} fill="url(#seg-highlight)" stroke="none" />}
+            </g>
+          );
+        })}
 
         {/* Tick dots + 0 / 50 / 100 scale figures, as on the F&G ring */}
         {dots.filter(v => v % 50 !== 0).map(v => { const [x, y] = polar(v, r - 9); return <circle key={v} cx={x} cy={y} r="1" fill="#52525b" />; })}
@@ -121,7 +141,12 @@ function BreadthGauge({ value }) {
 // Back-to-back bar on a single axis: the left value grows leftward from the
 // centre, the right value rightward. Each half is scaled independently to `max`
 // (the FTSE 100 universe) so the full span represents 2 × max.
-const STRIPE = 'repeating-linear-gradient(-45deg, #222, #222 5px, #161616 5px, #161616 10px)';
+const TRACK_SHADOW = [
+  '0 2px 4px rgba(0,0,0,0.95)',              // cast shadow below the track
+  'inset 0 4px 9px rgba(0,0,0,0.92)',        // deep channel / recessed depth
+  'inset 0 -1px 2px rgba(255,255,255,0.06)',// inner bottom glint
+].join(', ');
+const FILL_OVERLAY = 'linear-gradient(to bottom, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.04) 38%, rgba(0,0,0,0.32) 100%)';
 function DivergingBar({ leftLabel, leftValue, leftColor, rightLabel, rightValue, rightColor, max = 100 }) {
   const lp = (leftValue != null && leftValue > 0) ? Math.min(100, (leftValue / max) * 100) : 0;
   const rp = (rightValue != null && rightValue > 0) ? Math.min(100, (rightValue / max) * 100) : 0;
@@ -129,18 +154,22 @@ function DivergingBar({ leftLabel, leftValue, leftColor, rightLabel, rightValue,
   const fmt = (v) => v == null ? '—' : v === 0 ? 'No' : v;
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6, fontSize:9, fontFamily:'monospace', color:'#94a3b8' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6, fontSize:12, fontFamily:'monospace', color:'#94a3b8' }}>
         <span><span style={{ fontWeight:700, color: leftValue > 0 ? leftColor : undefined }}>{fmt(leftValue)}</span> {leftLabel}</span>
         <span>{rightLabel} <span style={{ fontWeight:700, color: rightValue > 0 ? rightColor : undefined }}>{fmt(rightValue)}</span></span>
       </div>
       <div style={{ display:'flex', height:26, gap:8 }}>
         {/* left bar — fill anchored to the centre, growing left */}
-        <div style={{ flex:1, background:STRIPE, border:'1px solid rgba(91,33,182,0.45)', boxSizing:'border-box', borderRadius:3, display:'flex', justifyContent:'flex-end', overflow:'hidden' }}>
-          <div style={{ width:`${lp}%`, height:'100%', background:leftColor, transition:'width .3s ease' }} />
+        <div style={{ flex:1, background:'#0a0a0a', boxSizing:'border-box', borderRadius:3, display:'flex', justifyContent:'flex-end', overflow:'hidden', boxShadow:TRACK_SHADOW }}>
+          <div style={{ width:`${lp}%`, height:'100%', background:leftColor, transition:'width .3s ease', position:'relative', overflow:'hidden', borderRadius:3 }}>
+            <div style={{ position:'absolute', inset:0, background:FILL_OVERLAY, boxShadow:`inset 0 0 0 1px ${leftColor}, inset 0 0 14px 2px ${leftColor}, inset 0 0 6px 1px ${leftColor}, inset 0 0 2px ${leftColor}` }} />
+          </div>
         </div>
         {/* right bar — fill anchored to the centre, growing right */}
-        <div style={{ flex:1, background:STRIPE, border:'1px solid rgba(91,33,182,0.45)', boxSizing:'border-box', borderRadius:3, overflow:'hidden' }}>
-          <div style={{ width:`${rp}%`, height:'100%', background:rightColor, transition:'width .3s ease' }} />
+        <div style={{ flex:1, background:'#0a0a0a', boxSizing:'border-box', borderRadius:3, overflow:'hidden', boxShadow:TRACK_SHADOW }}>
+          <div style={{ width:`${rp}%`, height:'100%', background:rightColor, transition:'width .3s ease', position:'relative', overflow:'hidden', borderRadius:3 }}>
+            <div style={{ position:'absolute', inset:0, background:FILL_OVERLAY, boxShadow:`inset 0 0 0 1px ${rightColor}, inset 0 0 14px 2px ${rightColor}, inset 0 0 6px 1px ${rightColor}, inset 0 0 2px ${rightColor}` }} />
+          </div>
         </div>
       </div>
     </div>
@@ -180,6 +209,8 @@ export default function BreadthTab({ refreshKey }) {
   const [loading, setLoading] = useState(true);
   const [showAdLine, setShowAdLine] = useState(false); // A/D line chart hidden by default
   const isMobile = useIsMobile();
+  const isNarrowMobile = useIsNarrowMobile();
+  const isUnderMd = useIsUnderMd();
 
   useEffect(() => {
     setLoading(true);
@@ -228,7 +259,7 @@ export default function BreadthTab({ refreshKey }) {
         <h2 style={{ fontFamily:'monospace', fontSize:14, fontWeight:700, color:'#f97316', textTransform:'uppercase', letterSpacing:2, margin:0 }}>Market Breadth</h2>
         <span style={{ fontFamily:'monospace', fontSize:10, color:'#64748b' }}>Across the FTSE 100 constituents</span>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap:16, marginBottom:16 }}>
+      <div style={{ display:'grid', gridTemplateColumns: !isUnderMd ? '1fr 1fr 1fr' : isNarrowMobile ? '1fr' : '1fr 1fr', gap:16, marginBottom:16 }}>
 
         {/* Gauge */}
         <div style={card}>
@@ -274,7 +305,7 @@ export default function BreadthTab({ refreshKey }) {
               keeps this bar aligned with the highs/lows bar across the 3-col row.
               Mobile (stacked, short card): in normal flow below the bar so it
               can't overlap it. */}
-          <div style={isMobile ? { marginTop: 14 } : { position:'absolute', left:16, bottom:40 }}>
+          <div style={{ position:'absolute', left:16, bottom: isMobile ? 8 : 40 }}>
             <Toggle on={showAdLine} onChange={setShowAdLine} label={`${showAdLine ? 'Hide' : 'Show'} A/D line`} />
           </div>
           <CornerStamp>Current</CornerStamp>

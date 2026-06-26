@@ -21,7 +21,7 @@ function fgColor(score) {
   if (score == null) return '#9ca3af';
   if (score >= 75) return '#16d96b'; // Extreme Greed
   if (score >= 55) return '#7ed321'; // Greed
-  if (score >= 45) return '#9ca3af'; // Neutral
+  if (score >= 44) return '#9ca3af'; // Neutral
   if (score >= 25) return '#ff7a14'; // Fear
   return '#ff2e3f';                  // Extreme Fear
 }
@@ -34,7 +34,7 @@ function fgSentiment(score) {
   if (score == null) return '—';
   if (score >= 75) return 'Extreme Greed';
   if (score >= 55) return 'Greed';
-  if (score >= 45) return 'Neutral';
+  if (score >= 44) return 'Neutral';
   if (score >= 25) return 'Fear';
   return 'Extreme Fear';
 }
@@ -43,8 +43,8 @@ function fgSentiment(score) {
 // history-chart reference bands so the gauge, bar and chart stay consistent.
 const FG_BANDS = [
   { lo: 0,  hi: 25,  color: '#ff2e3f', label: 'EXTREME FEAR' },
-  { lo: 25, hi: 45,  color: '#ff7a14', label: 'FEAR' },
-  { lo: 45, hi: 55,  color: '#9ca3af', label: 'NEUTRAL' },
+  { lo: 25, hi: 44,  color: '#ff7a14', label: 'FEAR' },
+  { lo: 44, hi: 55,  color: '#9ca3af', label: 'NEUTRAL' },
   { lo: 55, hi: 75,  color: '#7ed321', label: 'GREED' },
   { lo: 75, hi: 100, color: '#16d96b', label: 'EXTREME GREED' },
 ];
@@ -337,7 +337,7 @@ function FearGreedHistoryChart({ history, loading, bare = false }) {
           <LineChart data={chartData} margin={{ top:5, right:34, bottom:5, left:0 }}>
             {/* Sentiment bands behind the lines */}
             <ReferenceArea yAxisId="left" y1={0}  y2={25}  fill="#ff2e3f" fillOpacity={0.06} />
-            <ReferenceArea yAxisId="left" y1={25} y2={45}  fill="#ff7a14" fillOpacity={0.05} />
+            <ReferenceArea yAxisId="left" y1={25} y2={44}  fill="#ff7a14" fillOpacity={0.05} />
             <ReferenceArea yAxisId="left" y1={55} y2={75}  fill="#7ed321" fillOpacity={0.05} />
             <ReferenceArea yAxisId="left" y1={75} y2={100} fill="#16d96b" fillOpacity={0.06} />
             <ReferenceLine yAxisId="left" y={50} stroke="#2a2a2a" strokeDasharray="3 3" />

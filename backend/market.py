@@ -315,9 +315,11 @@ VIX_TICKER = "^VIX"
 GILT_ETF_TICKER = "IGLT.L"  # iShares UK Gilt ETF — used for safe haven spread & z-score
 
 # ONS timeseries JSON (no API key). d7g7/mm23 = CPI 12-month inflation rate;
-# ihyq/qna = GDP quarter-on-quarter growth (chained volume, seasonally adjusted).
+# ihyq/pn2 = GDP QoQ first estimate (flash, ~4 weeks after quarter end);
+# ihyq/qna = GDP QoQ revised (quarterly national accounts, ~3 months lag — fallback).
 ONS_CPI_URL = "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/d7g7/mm23/data"
-ONS_GDP_QOQ_URL = "https://www.ons.gov.uk/economy/grossdomesticproductgdp/timeseries/ihyq/qna/data"
+ONS_GDP_QOQ_URL          = "https://www.ons.gov.uk/economy/grossdomesticproductgdp/timeseries/ihyq/pn2/data"
+ONS_GDP_QOQ_URL_FALLBACK = "https://www.ons.gov.uk/economy/grossdomesticproductgdp/timeseries/ihyq/qna/data"
 
 ALL_PROXY_TICKERS = list(
     dict.fromkeys(
@@ -1474,10 +1476,16 @@ def _ons_latest(url, period_key):
 
 def _fetch_uk_macro():
     """Latest UK CPI (12-month inflation, monthly) and GDP quarter-on-quarter
-    growth from the ONS timeseries API."""
+    growth from the ONS timeseries API.  GDP tries the First Estimate (pn2,
+    ~4-week lag) and falls back to the Quarterly National Accounts (qna,
+    ~3-month lag) if pn2 returns nothing."""
+    gdp = _ons_latest(ONS_GDP_QOQ_URL, "quarters")
+    if gdp is None:
+        print("[market] ONS GDP pn2 empty, falling back to qna")
+        gdp = _ons_latest(ONS_GDP_QOQ_URL_FALLBACK, "quarters")
     return {
         "cpi": _ons_latest(ONS_CPI_URL, "months"),
-        "gdp_qoq": _ons_latest(ONS_GDP_QOQ_URL, "quarters"),
+        "gdp_qoq": gdp,
     }
 
 

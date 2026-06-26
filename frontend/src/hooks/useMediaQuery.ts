@@ -26,6 +26,18 @@ export function useIsMobile(): boolean {
   );
 }
 
+// True on narrow phones (≤640px / Tailwind sm). Use alongside useIsUnderMd to
+// add a 2-column middle state for tablets wide enough to fit two cards.
+export function useIsNarrowMobile(): boolean {
+  return useMediaQuery("(max-width: 640px)");
+}
+
+// True below Tailwind's md breakpoint (≤767px). Use for content grids that
+// should go 3-column at 768px, independent of the nav's 943px mobile cutoff.
+export function useIsUnderMd(): boolean {
+  return useMediaQuery("(max-width: 767px)");
+}
+
 // Desktop, but not wide enough to comfortably fit the full top nav (logo +
 // 8 menu groups + utility buttons + search). Used to tighten nav spacing and
 // drop non-essential items so nothing overruns the right edge on laptops.
