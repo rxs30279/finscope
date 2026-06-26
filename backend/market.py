@@ -1296,41 +1296,47 @@ def rotation(response: Response):
 def _compute_breadth(prices=None):
     # `prices` lets a caller pass a pre-trimmed frame (the Fear & Greed calc
     # passes its own EOD-only frame). When called with no arg (the Breadth tab
-    # and the sidebar), trim to the last completed session here so the figures
-    # match the EOD-anchored Fear & Greed page rather than wobbling on today's
-    # in-progress bar.
+    # and the sidebar) we keep TWO frames: a LIVE one (today's in-progress bar
+    # included) for the % above 50-day MA dial — which is meant to read the
+    # current session — and an EOD-trimmed one for the highs/lows and
+    # advance/decline tallies, which stay anchored to the last completed close so
+    # they don't wobble on the partial bar.
+    live_prices = None
     if prices is None:
-        prices = _get_prices()
+        live_prices = _get_prices()
         cutoff = _eod_cutoff()
-        if cutoff is not None:
-            prices = prices[prices.index < cutoff]
+        prices = live_prices[live_prices.index < cutoff] if cutoff is not None else live_prices
     all_basket_tickers = BREADTH_TICKERS
 
-    above_50 = 0
-    total = 0
-    new_highs = 0
-    new_lows = 0
+    # % above 50-day MA — read LIVE (or the caller's own frame when one is passed).
+    ma_frame = live_prices if live_prices is not None else prices
+    above_50 = ma_total = 0
+    for t in all_basket_tickers:
+        if t not in ma_frame.columns:
+            continue
+        col = ma_frame[t].dropna()
+        if len(col) < 51:
+            continue
+        ma_total += 1
+        if float(col.iloc[-1]) > float(col.iloc[-50:].mean()):
+            above_50 += 1
+    pct_above = round(above_50 / ma_total, 4) if ma_total else None
 
+    # 52-week highs/lows — last completed close (EOD frame).
+    new_highs = new_lows = 0
     for t in all_basket_tickers:
         if t not in prices.columns:
             continue
         col = prices[t].dropna()
-        if len(col) < 51:
+        if len(col) < 252:
             continue
-        total += 1
         current = float(col.iloc[-1])
-        ma50 = float(col.iloc[-50:].mean())
-        if current > ma50:
-            above_50 += 1
-        if len(col) >= 252:
-            high_52 = float(col.iloc[-252:].max())
-            low_52 = float(col.iloc[-252:].min())
-            if current >= high_52 * 0.99:
-                new_highs += 1
-            if current <= low_52 * 1.01:
-                new_lows += 1
-
-    pct_above = round(above_50 / total, 4) if total else None
+        high_52 = float(col.iloc[-252:].max())
+        low_52 = float(col.iloc[-252:].min())
+        if current >= high_52 * 0.99:
+            new_highs += 1
+        if current <= low_52 * 1.01:
+            new_lows += 1
 
     # A/D line: 20 trading days, advancing = basket stocks with positive return on that day
     ad_line = []
@@ -1380,7 +1386,7 @@ def _compute_breadth(prices=None):
     return {
         "pct_above_50ma": pct_above,
         "above_50ma": above_50,
-        "below_50ma": total - above_50,
+        "below_50ma": ma_total - above_50,
         "hl_universe": sum(
             1
             for t in all_basket_tickers

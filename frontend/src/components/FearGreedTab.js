@@ -175,10 +175,11 @@ function FearGreedGauge({ score, color }) {
         strokeLinejoin="round"
       />
 
-      {/* Hub (no outline) + score. Baseline sits level with the 0/100 scale
-          figures; neutral grey is lightened to match the band. */}
-      <circle cx={cx} cy={cy} r="44" fill="#0b0b0b" />
-      <text x={cx} y={cy + 1} fontSize="40" fontWeight="700" fontFamily="monospace" fill={color === '#666' ? '#9ca3af' : color} textAnchor="middle">{score}</text>
+      {/* Hub (no outline) + score — a flat-bottomed semicircle so the darker
+          lower half of a full circle no longer shows below the dial baseline.
+          Neutral grey is lightened to match the band. */}
+      <path d={`M ${cx - 44} ${cy} A 44 44 0 0 1 ${cx + 44} ${cy} Z`} fill="#0b0b0b" />
+      <text x={cx} y={cy - 6} fontSize="40" fontWeight="700" fontFamily="monospace" fill={color === '#666' ? '#9ca3af' : color} textAnchor="middle">{score}</text>
     </svg>
   );
 }

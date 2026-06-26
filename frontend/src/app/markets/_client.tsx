@@ -17,10 +17,10 @@ export default function MarketsPageClient() {
         subtitle="The UK Fear & Greed index, market breadth, sector rotation and cross-asset signals for the London market."
         marginBottom={0}
       />
-      <CrossAssetTab refreshKey={refreshKey} />
       <FearGreedTab refreshKey={refreshKey} />
       <BreadthTab refreshKey={refreshKey} />
       <RotationTab refreshKey={refreshKey} />
+      <CrossAssetTab refreshKey={refreshKey} />
     </div>
   );
 }
