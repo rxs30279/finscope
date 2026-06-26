@@ -13,20 +13,23 @@ const UK_COLOR = '#f97316'; // orange — matches the page accent
 const US_COLOR = '#38bdf8'; // sky blue — CNN US index
 const VIX_COLOR = '#a78bfa'; // violet — VIX overlay (off by default)
 
+// Sentiment → colour, sharing the gauge's FG_BANDS palette so the hub number,
+// comparison circles and component scores all match the dial exactly. Greed is
+// green (not amber) and Fear a vivid vermillion — both kept clear of the
+// burnt-orange page accent (#f97316) used by the section title, which they used
+// to collide with.
 function fgColor(score) {
-  if (score >= 75) return '#10b981';
-  if (score >= 55) return '#f59e0b';
-  if (score >= 45) return '#666';
-  if (score >= 25) return '#f97316';
-  return '#ef4444';
+  if (score == null) return '#9ca3af';
+  if (score >= 75) return '#16d96b'; // Extreme Greed
+  if (score >= 55) return '#7ed321'; // Greed
+  if (score >= 45) return '#9ca3af'; // Neutral
+  if (score >= 25) return '#ff7a14'; // Fear
+  return '#ff2e3f';                  // Extreme Fear
 }
 
-// fgColor with the dim neutral grey lightened — for text/markers that need to
-// read clearly against the dark card (the hub number, history circles).
-function fgInk(score) {
-  const c = fgColor(score);
-  return c === '#666' ? '#9ca3af' : c;
-}
+// fgColor already reads clearly against the dark card (neutral is a light grey),
+// so fgInk is now just an alias kept for call-site intent.
+const fgInk = fgColor;
 
 function fgSentiment(score) {
   if (score == null) return '—';
@@ -179,7 +182,7 @@ function FearGreedGauge({ score, color }) {
           lower half of a full circle no longer shows below the dial baseline.
           Neutral grey is lightened to match the band. */}
       <path d={`M ${cx - 44} ${cy} A 44 44 0 0 1 ${cx + 44} ${cy} Z`} fill="#0b0b0b" />
-      <text x={cx} y={cy - 6} fontSize="40" fontWeight="700" fontFamily="monospace" fill={color === '#666' ? '#9ca3af' : color} textAnchor="middle">{score}</text>
+      <text x={cx} y={cy - 6} fontSize="40" fontWeight="700" fontFamily="monospace" fill={color} textAnchor="middle">{score}</text>
     </svg>
   );
 }
@@ -334,10 +337,10 @@ function FearGreedHistoryChart({ history, loading, bare = false }) {
         <ResponsiveContainer width="100%" height={240}>
           <LineChart data={chartData} margin={{ top:5, right:34, bottom:5, left:0 }}>
             {/* Sentiment bands behind the lines */}
-            <ReferenceArea yAxisId="left" y1={0}  y2={25}  fill="#ef4444" fillOpacity={0.06} />
-            <ReferenceArea yAxisId="left" y1={25} y2={45}  fill="#f97316" fillOpacity={0.05} />
-            <ReferenceArea yAxisId="left" y1={55} y2={75}  fill="#f59e0b" fillOpacity={0.05} />
-            <ReferenceArea yAxisId="left" y1={75} y2={100} fill="#10b981" fillOpacity={0.06} />
+            <ReferenceArea yAxisId="left" y1={0}  y2={25}  fill="#ff2e3f" fillOpacity={0.06} />
+            <ReferenceArea yAxisId="left" y1={25} y2={45}  fill="#ff7a14" fillOpacity={0.05} />
+            <ReferenceArea yAxisId="left" y1={55} y2={75}  fill="#7ed321" fillOpacity={0.05} />
+            <ReferenceArea yAxisId="left" y1={75} y2={100} fill="#16d96b" fillOpacity={0.06} />
             <ReferenceLine yAxisId="left" y={50} stroke="#2a2a2a" strokeDasharray="3 3" />
             <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
             <XAxis dataKey="date" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} ticks={ticks} interval={0} tickMargin={8} tickFormatter={tickFormatter} />
@@ -502,7 +505,7 @@ export default function FearGreedTab({ refreshKey }) {
 
   return (
     <div>
-      <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>
+      <h2 style={{ fontFamily:'monospace', fontSize:14, fontWeight:700, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>
         UK Fear &amp; Greed
       </h2>
 

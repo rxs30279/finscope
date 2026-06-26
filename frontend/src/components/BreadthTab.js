@@ -18,7 +18,9 @@ function BreadthGauge({ value }) {
 
   const cx = 100, cy = 104, R = 82, r = 68;     // hub centre + outer/inner radii
   const tip = r - 2;                            // needle tip sits just inside the band
-  const color = pct > 60 ? '#10b981' : pct < 40 ? '#ef4444' : '#f59e0b';
+  // Shares the F&G dial's FG_BANDS palette (green #16d96b / red #ff2e3f, neutral
+  // grey #9ca3af) so the two gauges on the page read as one family — no amber.
+  const color = pct > 60 ? '#16d96b' : pct < 40 ? '#ff2e3f' : '#9ca3af';
   const label = pct > 60 ? 'Bullish Breadth' : pct < 40 ? 'Bearish Breadth' : 'Neutral';
 
   // value (0–100) → point at `rad` on the dial. Angle 180°…0° as value 0…100.
@@ -42,8 +44,8 @@ function BreadthGauge({ value }) {
   };
 
   const BANDS = [
-    { lo: 0,  hi: 50,  color: '#ef4444' },
-    { lo: 50, hi: 100, color: '#10b981' },
+    { lo: 0,  hi: 50,  color: '#ff2e3f' },
+    { lo: 50, hi: 100, color: '#16d96b' },
   ];
   const activeIdx = clamped < 50 ? 0 : 1;
 
@@ -69,12 +71,12 @@ function BreadthGauge({ value }) {
           </radialGradient>
           {/* Per-zone shading — denser at the inner edge, easing off to the rim */}
           <radialGradient id="bg-seg-red" cx={cx} cy={cy} r={R} gradientUnits="userSpaceOnUse">
-            <stop offset="0.55" stopColor="#ef4444" stopOpacity="1" />
-            <stop offset="1" stopColor="#ef4444" stopOpacity="0.62" />
+            <stop offset="0.55" stopColor="#ff2e3f" stopOpacity="1" />
+            <stop offset="1" stopColor="#ff2e3f" stopOpacity="0.62" />
           </radialGradient>
           <radialGradient id="bg-seg-green" cx={cx} cy={cy} r={R} gradientUnits="userSpaceOnUse">
-            <stop offset="0.55" stopColor="#10b981" stopOpacity="1" />
-            <stop offset="1" stopColor="#10b981" stopOpacity="0.62" />
+            <stop offset="0.55" stopColor="#16d96b" stopOpacity="1" />
+            <stop offset="1" stopColor="#16d96b" stopOpacity="0.62" />
           </radialGradient>
         </defs>
 
@@ -231,8 +233,10 @@ export default function BreadthTab({ refreshKey }) {
 
   return (
     <div>
-      <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:4 }}>Market Breadth</h2>
-      <div style={{ fontFamily:'monospace', fontSize:10, color:'#64748b', marginBottom:20 }}>Across the FTSE 100 constituents</div>
+      <div style={{ display:'flex', alignItems:'baseline', gap:10, flexWrap:'wrap', marginBottom:20 }}>
+        <h2 style={{ fontFamily:'monospace', fontSize:14, fontWeight:700, color:'#f97316', textTransform:'uppercase', letterSpacing:2, margin:0 }}>Market Breadth</h2>
+        <span style={{ fontFamily:'monospace', fontSize:10, color:'#64748b' }}>Across the FTSE 100 constituents</span>
+      </div>
       <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr', gap:16, marginBottom:16 }}>
 
         {/* Gauge */}
@@ -240,8 +244,8 @@ export default function BreadthTab({ refreshKey }) {
           <div style={title}>% Above 50-Day MA</div>
           <BreadthGauge value={data?.pct_above_50ma} />
           <div style={{ display:'flex', justifyContent:'space-around', marginTop:12, fontSize:10, fontFamily:'monospace' }}>
-            <span style={{ color:'#94a3b8' }}>Above: <span style={{ color:'#10b981' }}>{data?.above_50ma ?? '—'}</span></span>
-            <span style={{ color:'#94a3b8' }}>Below: <span style={{ color:'#ef4444' }}>{data?.below_50ma ?? '—'}</span></span>
+            <span style={{ color:'#94a3b8' }}>Below: <span style={{ color:'#ff2e3f' }}>{data?.below_50ma ?? '—'}</span></span>
+            <span style={{ color:'#94a3b8' }}>Above: <span style={{ color:'#16d96b' }}>{data?.above_50ma ?? '—'}</span></span>
           </div>
           <CornerStamp>Current</CornerStamp>
         </div>
@@ -254,8 +258,8 @@ export default function BreadthTab({ refreshKey }) {
           </div>
           <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', transform:'translateY(-10px)' }}>
             <DivergingBar
-              leftLabel="New Lows"   leftValue={data?.new_lows}   leftColor="#ef4444"
-              rightLabel="New Highs" rightValue={data?.new_highs} rightColor="#10b981"
+              leftLabel="New Lows"   leftValue={data?.new_lows}   leftColor="#ff2e3f"
+              rightLabel="New Highs" rightValue={data?.new_highs} rightColor="#16d96b"
               max={hlScaleMax}
             />
           </div>
@@ -270,8 +274,8 @@ export default function BreadthTab({ refreshKey }) {
           </div>
           <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', transform:'translateY(-10px)' }}>
             <DivergingBar
-              leftLabel="Declining"  leftValue={data?.declines}  leftColor="#ef4444"
-              rightLabel="Advancing" rightValue={data?.advances} rightColor="#10b981"
+              leftLabel="Declining"  leftValue={data?.declines}  leftColor="#ff2e3f"
+              rightLabel="Advancing" rightValue={data?.advances} rightColor="#16d96b"
               max={adScaleMax}
             />
           </div>
@@ -298,7 +302,7 @@ export default function BreadthTab({ refreshKey }) {
               <YAxis tick={{ fontSize:9, fill:'#64748b', fontFamily:'monospace' }} />
               <Tooltip contentStyle={tooltipStyle} labelStyle={{ color:'#e5e5e5' }} labelFormatter={fmtUKDate} />
               <ReferenceLine y={0} stroke="#333" />
-              <Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2} dot={false} name="A/D Line" />
+              <Line type="monotone" dataKey="value" stroke="#16d96b" strokeWidth={2} dot={false} name="A/D Line" />
             </LineChart>
           </ResponsiveContainer>
           <CornerStamp>Last close{lastUpdated ? ` · ${lastUpdated}` : ''}</CornerStamp>

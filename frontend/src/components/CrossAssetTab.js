@@ -16,7 +16,7 @@ function AssetCard({ label, item, decimals = 2, prefix = '', suffix = '' }) {
   );
 
   const { value, pct_change, bias } = item;
-  const chgColor = pct_change === null ? '#555' : pct_change > 0 ? '#10b981' : pct_change < 0 ? '#ef4444' : '#f59e0b';
+  const chgColor = pct_change === null ? '#555' : pct_change > 0 ? '#16d96b' : pct_change < 0 ? '#ff2e3f' : '#9ca3af';
   const arrow = pct_change === null ? '' : pct_change > 0.001 ? ' ↑' : pct_change < -0.001 ? ' ↓' : ' →';
 
   return (
@@ -57,7 +57,7 @@ function MacroCard({ label, item, signed = false }) {
   );
 
   const { value, period, prev } = item;
-  const valColor = signed ? (value > 0 ? '#10b981' : value < 0 ? '#ef4444' : '#f59e0b') : '#e5e5e5';
+  const valColor = signed ? (value > 0 ? '#16d96b' : value < 0 ? '#ff2e3f' : '#9ca3af') : '#e5e5e5';
   const valText = `${signed && value > 0 ? '+' : ''}${value.toFixed(1)}%`;
   const arrow = typeof prev !== 'number' ? '' : value > prev ? ' ↑' : value < prev ? ' ↓' : ' →';
 
@@ -87,7 +87,7 @@ function GiltUtilitiesGauge({ item }) {
   const ZONE = {
     cheap:     { color: '#60a5fa', caption: 'Gilts cheap vs utilities' },
     normal:    { color: '#94a3b8', caption: 'Within normal range' },
-    expensive: { color: '#f59e0b', caption: 'Gilts expensive vs utilities' },
+    expensive: { color: '#ff7a14', caption: 'Gilts expensive vs utilities' },
   };
   const { color, caption } = ZONE[zone];
 
@@ -134,7 +134,7 @@ function GiltUtilitiesGauge({ item }) {
         <div style={{ position:'absolute', inset:0, display:'flex', borderRadius:3, overflow:'hidden' }}>
           <div style={{ flex:'0 0 30%', background:'#1e3a5f' }} />
           <div style={{ flex:'0 0 40%', background:'#2a2a2a' }} />
-          <div style={{ flex:'0 0 30%', background:'#4a3a1a' }} />
+          <div style={{ flex:'0 0 30%', background:'#3a2410' }} />
         </div>
         <div style={{ position:'absolute', top:-3, left:`${pct}%`, transform:'translateX(-50%)', width:2, height:12, borderRadius:1, background: z === null ? '#555' : color }} />
       </div>
@@ -169,7 +169,7 @@ function GiltSnapshotChart({ snapshot, fill = false }) {
   }).filter(d => d.yield !== null);
 
   const isInverted = data.length >= 2 && data[0].yield > data[data.length - 1].yield;
-  const curveColor = isInverted ? '#ef4444' : '#10b981';
+  const curveColor = isInverted ? '#ff2e3f' : '#16d96b';
   const curveLabel = isInverted ? 'Inverted' : data[0]?.yield === data[data.length - 1]?.yield ? 'Flat' : 'Normal';
 
   return (
@@ -234,7 +234,7 @@ export default function CrossAssetTab({ refreshKey }) {
 
   return (
     <div>
-      <h2 style={{ fontFamily:'monospace', fontSize:14, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Cross-Asset</h2>
+      <h2 style={{ fontFamily:'monospace', fontSize:14, fontWeight:700, color:'#f97316', textTransform:'uppercase', letterSpacing:2, marginBottom:20 }}>Cross-Asset</h2>
       {/* Six measures as a 2-column block, with the yield-curve chart beside it
           on desktop. The right column (title + chart card) stretches to the box
           block's height, so the chart card bottom lines up with the boxes. */}
