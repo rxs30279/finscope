@@ -11,7 +11,6 @@ import { useIsMobile } from "@/hooks/useMediaQuery";
 const RANGE_DAYS = { '1M': 31, '3M': 92, '6M': 183, '1Y': 366 };
 const UK_COLOR = '#f97316'; // orange — matches the page accent
 const US_COLOR = '#38bdf8'; // sky blue — CNN US index
-const VIX_COLOR = '#a78bfa'; // violet — VIX overlay (off by default)
 
 // Sentiment → colour, sharing the gauge's FG_BANDS palette so the hub number,
 // comparison circles and component scores all match the dial exactly. Greed is
@@ -199,7 +198,7 @@ const COMPONENT_INFO = {
   },
   currency: {
     how: 'Takes the 60-day percentage change in GBP/USD, inverts it, and ranks it against its own trailing two-year range. A pound near its strongest of the period scores near 0 (fear), near its weakest near 100 (greed).',
-    means: 'Around three-quarters of FTSE 100 revenue is earned overseas, so the level of sterling drives reported profits. A weaker pound flatters those overseas earnings once converted back — a tailwind that reads as greed; a stronger pound is an earnings headwind that reads as fear. The US VIX, previously used here, now sits in its own panel as a standalone cross-check.',
+    means: 'Around three-quarters of FTSE 100 revenue is earned overseas, so the level of sterling drives reported profits. A weaker pound flatters those overseas earnings once converted back — a tailwind that reads as greed; a stronger pound is an earnings headwind that reads as fear.',
   },
   safe_haven: {
     how: 'Compares the 20-day total return of the FTSE 100 against a UK gilt ETF (all-maturity gilts), then ranks that spread against its own trailing two-year range. Stocks outpacing bonds by an unusual margin scores near 100; gilts winning by an unusual margin scores near 0.',
@@ -360,85 +359,6 @@ function FearGreedHistoryChart({ history, loading, bare = false }) {
         {mode === 'pct'
           ? 'Each index shown as its percentile within its own trailing-year history (0 = lowest reading of the period, 100 = highest). Puts the lower-variance UK index on a like-for-like scale with the US for comparing relative extremes.'
           : 'UK index reconstructed daily from our six price-derived components, each percentile-ranked against its own trailing two-year range and then averaged; US is CNN’s published Fear & Greed Index. 0 = extreme fear, 100 = extreme greed.'}
-      </div>
-    </div>
-  );
-}
-
-function VixHistoryChart({ history, loading }) {
-  const [range, setRange] = useState('1Y');
-
-  const filtered = useMemo(() => {
-    if (!history || history.length === 0) return [];
-    const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
-    return history.filter(d => d.vix != null && new Date(d.date).getTime() >= cutoff);
-  }, [history, range]);
-
-  const ticks = useMemo(() => {
-    const n = filtered.length;
-    if (n === 0) return [];
-    if (n <= 2) return filtered.map(d => d.date);
-    const count = Math.min(7, n);
-    const out = [];
-    for (let i = 0; i < count; i++) {
-      out.push(filtered[Math.round((i * (n - 1)) / (count - 1))].date);
-    }
-    return [...new Set(out)];
-  }, [filtered]);
-
-  const pillBase = { borderWidth:1, borderStyle:'solid', borderColor:'#2a2a2a', borderRadius:3, padding:'2px 8px', fontSize:9, cursor:'pointer', fontFamily:'monospace', background:'none' };
-  const pillActive = { ...pillBase, background:'#3730a3', color:'#e0e7ff', borderColor:'#4338ca' };
-  const pillInactive = { ...pillBase, color:'#555' };
-
-  const tickFormatter = (d) => {
-    const date = new Date(d);
-    const mon = date.toLocaleString('default', { month: 'short' });
-    if (range === '1M' || range === '3M') return `${date.getDate()} ${mon}`;
-    return `${mon} '${String(date.getFullYear()).slice(2)}`;
-  };
-
-  return (
-    <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:20, marginBottom:20 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:10 }}>
-        <div style={{ color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px' }}>
-          US VIX — rolling year
-        </div>
-        <div style={{ display:'flex', gap:14, alignItems:'center', flexWrap:'wrap' }}>
-          <span style={{ color: VIX_COLOR, fontSize:10, fontFamily:'monospace', display:'flex', alignItems:'center', gap:5 }}>
-            <span style={{ width:10, height:2, background: VIX_COLOR, display:'inline-block' }}/> US VIX
-          </span>
-          <div style={{ display:'flex', gap:4 }}>
-            {Object.keys(RANGE_DAYS).map(r => (
-              <button key={r} onClick={() => setRange(r)} style={r === range ? pillActive : pillInactive}>{r}</button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {loading ? (
-        <div style={{ color:'#444', fontFamily:'monospace', fontSize:11, padding:'40px 0', textAlign:'center' }}>Loading history…</div>
-      ) : filtered.length === 0 ? (
-        <div style={{ color:'#444', fontFamily:'monospace', fontSize:11, padding:'40px 0', textAlign:'center' }}>No VIX history available yet.</div>
-      ) : (
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={filtered} margin={{ top:5, right:34, bottom:5, left:0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" />
-            {/* 20 ≈ the VIX long-run average — a rough fear/calm divider. */}
-            <ReferenceLine y={20} stroke="#2a2a2a" strokeDasharray="3 3" label={{ value:'20', position:'right', fill:'#555', fontSize:9, fontFamily:'monospace' }} />
-            <XAxis dataKey="date" tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} ticks={ticks} interval={0} tickMargin={8} tickFormatter={tickFormatter} />
-            <YAxis domain={['auto', 'auto']} width={40} tick={{ fontSize:9, fill:'#888', fontFamily:'monospace' }} />
-            <Tooltip
-              contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:10, fontFamily:'monospace' }}
-              labelStyle={{ color:'#e5e5e5' }}
-              formatter={(v) => [v != null ? v.toFixed(2) : '—', 'US VIX']}
-              labelFormatter={fmtUKDate}
-            />
-            <Line type="monotone" dataKey="vix" name="US VIX" stroke={VIX_COLOR} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      )}
-      <div style={{ color:'#555', fontSize:9, fontFamily:'monospace', marginTop:8, lineHeight:1.6 }}>
-        The CBOE Volatility Index (VIX) — the market’s expected 30-day volatility implied by S&P 500 option prices. The original US “fear gauge”: higher = more fear (crash protection in demand), lower = calm/complacency. Shown here as the raw level; used globally as a risk-appetite proxy because equity risk moves in lockstep across markets.
       </div>
     </div>
   );
@@ -663,12 +583,7 @@ export default function FearGreedTab({ refreshKey }) {
         </div>
       )}
 
-      {/* ── US VIX — timeline only, below the chart ─────────────────────────── */}
-      {view === 'timeline' && (
-        <VixHistoryChart history={history} loading={historyLoading} />
-      )}
-
-      </>
+</>
       )}
     </div>
   );
