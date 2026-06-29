@@ -21,10 +21,10 @@ from xml.etree import ElementTree as ET
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from dotenv import load_dotenv
 
-from admin_auth import require_admin_token
+from admin_auth import require_admin_token  # noqa: F401 (kept for the re-gate path on /{symbol}/summary)
 
 load_dotenv()
 
@@ -34,6 +34,14 @@ _USER_AGENT = "Mozilla/5.0 (compatible; UKStockScreener/1.0)"
 _CACHE_TTL_HOURS = 24
 _HISTORY_MONTHS = 6
 _SUMMARY_LOOKBACK_DAYS = 60
+# The summary endpoint is public, so guard DeepSeek spend with a per-symbol
+# cooldown: a regenerate within this many hours just re-serves the cached row.
+_SUMMARY_COOLDOWN_HOURS = 24
+# Plus a per-IP cap on *fresh* generations (cooldown-served hits don't count),
+# so one client can't walk the whole universe and rack up spend in a day. Backed
+# by the summary_rate_hits table so the cap is shared across workers.
+_SUMMARY_RATE_LIMIT = 20
+_SUMMARY_RATE_WINDOW_HOURS = 24
 
 _DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -103,8 +111,21 @@ def _query(sql, params=None, fetch=True):
         pool.putconn(conn)
 
 
+_schema_ready = False
+
+
 def _ensure_schema():
-    """Create the news tables on first use (idempotent)."""
+    """Create the news tables on first use (idempotent).
+
+    Runs once per process. The DDL is invoked on every news request, so without
+    this guard each GET would fire a batch of CREATE TABLE IF NOT EXISTS
+    round-trips to Postgres for no reason — pure wasted DB traffic. A worker
+    crash/restart re-runs it, which is fine (still idempotent). The flag is a
+    plain bool: a brief startup race just re-runs the harmless DDL once or twice
+    before converging, so no lock is needed."""
+    global _schema_ready
+    if _schema_ready:
+        return
     _query("""
         CREATE TABLE IF NOT EXISTS company_news (
             id            TEXT PRIMARY KEY,
@@ -132,6 +153,20 @@ def _ensure_schema():
             generated_at TIMESTAMPTZ DEFAULT NOW()
         )
     """, fetch=False)
+    # One row per fresh summary generation, used by the per-IP rate limiter.
+    # Shared across workers (unlike the old in-process counter). Pruned by the
+    # limiter itself, so it stays tiny.
+    _query("""
+        CREATE TABLE IF NOT EXISTS summary_rate_hits (
+            ip     TEXT NOT NULL,
+            hit_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """, fetch=False)
+    _query("""
+        CREATE INDEX IF NOT EXISTS idx_summary_rate_hits_ip_at
+        ON summary_rate_hits(ip, hit_at DESC)
+    """, fetch=False)
+    _schema_ready = True
 
 
 # ── Google News RSS ───────────────────────────────────────────────────────────
@@ -311,7 +346,112 @@ def _save_summary(symbol: str, result: dict, rns_n: int, google_n: int) -> None:
         pool.putconn(conn)
 
 
-def _build_summary_messages(name: str, symbol: str, rns: list[dict], google: list[dict]) -> list[dict]:
+def _load_fundamentals(symbol: str) -> dict | None:
+    """Compact fundamentals + our precomputed factor scores for one symbol.
+
+    Built from the same tables/joins as the screener so the summary sees the
+    same numbers the rest of the app shows. quality_score and pegy reuse the
+    canonical helpers in main (rather than re-deriving them here and drifting);
+    risk/momentum/piotroski/altman come precomputed from screener_scores.
+    Returns None if the symbol has no TTM financials row."""
+    rows = _query("""
+        SELECT m.sector, m.financial_currency,
+               t.market_cap, t.revenue,
+               CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END AS price_to_earnings,
+               t.price_to_book, t.price_to_sales, t.dividend_yield, t.fcf,
+               t.dividends_per_share, t.period_end_price, t.eps_diluted, t.eps_cagr_10,
+               t.roe, t.roic, t.gross_margin, t.operating_margin, t.net_income_margin, t.fcf_margin,
+               t.revenue_growth, t.eps_diluted_growth, t.debt_to_equity, t.current_ratio,
+               t.roic_median, t.roe_median, t.gross_margin_median,
+               t.operating_margin_median, t.net_margin_median,
+               a.total_analysts, a.eps_growth_next_yr, a.eps_est_current_yr,
+               s.momentum_score, s.risk_score, s.piotroski_score,
+               s.altman_z, s.volatility_annualised
+        FROM ttm_financials t
+        JOIN company_metadata m ON m.symbol = t.company_symbol
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol)
+                   symbol, total_analysts, eps_growth_next_yr, eps_est_current_yr
+            FROM analyst_snapshots
+            ORDER BY symbol, snapshot_date DESC
+        ) a ON a.symbol = t.company_symbol
+        LEFT JOIN screener_scores s ON s.symbol = t.company_symbol
+        WHERE t.company_symbol = %s
+        LIMIT 1
+    """, (symbol,))
+    if not rows:
+        return None
+    f = rows[0]
+    try:
+        from main import _quality_score, _value_score, _attach_pegy
+        _attach_pegy([f])  # adds f["pegy"] in place; value_score uses it
+        f["quality_score"] = _quality_score(f)
+        f["value_score"] = _value_score(f)
+    except Exception as e:  # never let scoring break the summary
+        print(f"[news] fundamentals scoring failed for {symbol}: {type(e).__name__}: {e}", flush=True)
+    return f
+
+
+def _fundamentals_block(f: dict | None) -> str:
+    """Render the fundamentals/scores dict as compact labelled lines for the
+    prompt. Skips anything missing so we never feed the model 'None'."""
+    if not f:
+        return "  (no fundamentals on file)"
+    cur = f.get("financial_currency") or ""
+
+    def _n(x):
+        return float(x) if isinstance(x, (int, float)) else None
+
+    def pct(x):
+        x = _n(x)
+        return f"{x * 100:.1f}%" if x is not None else None
+
+    def num(x):
+        x = _n(x)
+        return f"{x:.2f}" if x is not None else None
+
+    def money(x):
+        x = _n(x)
+        if x is None:
+            return None
+        for unit, div in (("bn", 1e9), ("m", 1e6)):
+            if abs(x) >= div:
+                return f"{cur} {x / div:.2f}{unit}".strip()
+        return f"{cur} {x:.0f}".strip()
+
+    lines: list[str] = []
+
+    def add(label, val):
+        if val is not None and val != "":
+            lines.append(f"  - {label}: {val}")
+
+    # Our factor scores
+    add("Quality score (0-10, higher = better)", f.get("quality_score"))
+    add("Value score (0-10, higher = cheaper)", f.get("value_score"))
+    add("Risk score (1-10, higher = riskier)", f.get("risk_score"))
+    add("Momentum score (1-10, higher = stronger 12-1m)", f.get("momentum_score"))
+    add("Piotroski F-score (0-9, higher = better)", f.get("piotroski_score"))
+    add("Altman Z (>3 safe, <1.8 distress)", num(f.get("altman_z")))
+    # Valuation
+    add("PEGY (lower = cheaper vs growth+yield)", num(f.get("pegy")))
+    add("P/E", num(f.get("price_to_earnings")))
+    add("P/B", num(f.get("price_to_book")))
+    add("P/S", num(f.get("price_to_sales")))
+    add("Dividend yield", pct(f.get("dividend_yield")))
+    # Size & profitability
+    add("Market cap", money(f.get("market_cap")))
+    add("Revenue (TTM)", money(f.get("revenue")))
+    add("Operating margin", pct(f.get("operating_margin")))
+    add("Net margin", pct(f.get("net_income_margin")))
+    add("ROE", pct(f.get("roe")))
+    add("ROIC", pct(f.get("roic")))
+    add("Revenue growth (YoY)", pct(f.get("revenue_growth")))
+    add("EPS growth (YoY)", pct(f.get("eps_diluted_growth")))
+    add("Debt / equity", num(f.get("debt_to_equity")))
+    return "\n".join(lines) or "  (no fundamentals on file)"
+
+
+def _build_summary_messages(name: str, symbol: str, rns: list[dict], google: list[dict], fundamentals: dict | None = None) -> list[dict]:
     system = (
         "You are a UK equity analyst. Summarise the last 60 days of news for one "
         "company — combining regulatory announcements (RNS) with press "
@@ -319,6 +459,12 @@ def _build_summary_messages(name: str, symbol: str, rns: list[dict], google: lis
         "earnings, guidance, M&A, management, strategy, regulatory, legal. "
         "Ignore routine TR-1 / holding notifications, director share dealings "
         "under £100k, and boilerplate press that just rehashes prior news. "
+        "You are also given the company's current fundamentals and our factor "
+        "scores (quality, value, risk, momentum). Use them as context — to "
+        "judge whether the news strengthens or undermines an already strong or "
+        "weak setup, or sits at odds with it (e.g. upbeat news on a high-risk, "
+        "richly-valued name). The summary stays news-led; the fundamentals are "
+        "supporting colour, not the subject. Don't just restate the numbers. "
         "Return STRICT JSON only."
     )
 
@@ -342,6 +488,9 @@ def _build_summary_messages(name: str, symbol: str, rns: list[dict], google: lis
 
     user = f"""Company: {name} ({symbol})
 Window: last 60 days
+
+Fundamentals & factor scores (current snapshot)
+{_fundamentals_block(fundamentals)}
 
 Regulatory (RNS) announcements
 {rns_lines}
@@ -400,7 +549,8 @@ def _generate_summary(symbol: str) -> dict:
     if not rns and not google:
         raise HTTPException(400, "No news in the last 60 days to summarise")
 
-    messages = _build_summary_messages(name, symbol, rns, google)
+    fundamentals = _load_fundamentals(symbol)
+    messages = _build_summary_messages(name, symbol, rns, google, fundamentals)
     result = _call_summariser(messages)
     _save_summary(symbol, result, len(rns), len(google))
 
@@ -416,10 +566,72 @@ def _generate_summary(symbol: str) -> dict:
     }
 
 
-@router.post("/{symbol}/summary", dependencies=[Depends(require_admin_token)])
-def generate_summary(symbol: str):
+def _client_ip(request: Request) -> str:
+    """Real client IP. Behind the Dokploy/Traefik proxy request.client.host is
+    the proxy, so prefer the first hop of X-Forwarded-For."""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_summary_rate_limit(ip: str) -> None:
+    """Reserve a slot in this IP's rolling window, or raise 429. Backed by the
+    summary_rate_hits table so the cap is shared across both workers (the old
+    in-process counter gave each worker its own quota). One CTE prunes expired
+    rows, counts what's left in-window, and inserts a new hit only if still
+    under the limit. It's a soft cap: two simultaneous requests take separate
+    snapshots and could both pass at the boundary, so the effective ceiling is
+    limit + (concurrent requests - 1) — at most one over with two workers."""
+    rows = _query(
+        """
+        WITH pruned AS (
+            DELETE FROM summary_rate_hits
+            WHERE hit_at < NOW() - make_interval(hours => %(window)s)
+        ),
+        win AS (
+            SELECT COUNT(*) AS n FROM summary_rate_hits
+            WHERE ip = %(ip)s
+              AND hit_at > NOW() - make_interval(hours => %(window)s)
+        ),
+        ins AS (
+            INSERT INTO summary_rate_hits (ip)
+            SELECT %(ip)s FROM win WHERE win.n < %(limit)s
+            RETURNING 1
+        )
+        SELECT (SELECT n FROM win) AS n, (SELECT COUNT(*) FROM ins) AS inserted
+        """,
+        {"ip": ip, "window": _SUMMARY_RATE_WINDOW_HOURS, "limit": _SUMMARY_RATE_LIMIT},
+    )
+    if not rows or rows[0]["inserted"] == 0:
+        raise HTTPException(
+            429,
+            f"Rate limit: max {_SUMMARY_RATE_LIMIT} fresh summaries per "
+            f"{_SUMMARY_RATE_WINDOW_HOURS}h. Try again later.",
+        )
+
+
+# Public: any visitor can trigger a summary. A cached summary is served to
+# everyone via GET /{symbol} (see _load_summary), so most views cost nothing;
+# this POST only spends DeepSeek on an explicit (re)generate click. To re-gate
+# it as admin-only, restore `dependencies=[Depends(require_admin_token)]`.
+@router.post("/{symbol}/summary")
+def generate_summary(symbol: str, request: Request):
     """Call DeepSeek to summarise the last 60 days of news for this company."""
     _ensure_schema()
+
+    # Per-symbol cooldown: if a fresh summary already exists, re-serve it
+    # rather than spending DeepSeek again. Keeps the public button cheap under
+    # repeated/automated clicks. Cooldown hits don't count toward the rate limit.
+    cached = _load_summary(symbol)
+    if cached and cached.get("generated_at"):
+        age = datetime.now(timezone.utc) - cached["generated_at"]
+        if age < timedelta(hours=_SUMMARY_COOLDOWN_HOURS):
+            return {"symbol": symbol, "cached": True, **cached}
+
+    # Past the cooldown → this will spend DeepSeek, so count it against the IP.
+    _check_summary_rate_limit(_client_ip(request))
+
     try:
         return _generate_summary(symbol)
     except HTTPException:

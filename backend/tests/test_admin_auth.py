@@ -15,7 +15,8 @@ GUARDED = [
     "/api/rns/backfill-summaries",
     "/api/rns/rank",
     "/api/rns/rank/1",
-    "/api/news/SHEL.L/summary",
+    # /api/news/{symbol}/summary is intentionally public (per-symbol 24h
+    # cooldown guards DeepSeek spend instead of an admin token) — not listed.
 ]
 
 

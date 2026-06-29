@@ -343,6 +343,67 @@ def _quality_score(r):
     return score
 
 
+def _value_score(r):
+    """Value score 0-10: how cheap the stock looks across several valuation
+    lenses — earnings (forward P/E), book, sales, free-cash-flow yield, dividend
+    yield, and growth-adjusted (PEGY). Each available lens is mapped to 0-1
+    (1 = cheapest), then averaged and scaled to 0-10, so a stock isn't penalised
+    for a lens it lacks (e.g. a loss-maker with no P/E). Returns None if fewer
+    than two lenses are available.
+
+    Uses the forward P/E (analyst-rebased) so one-off statutory items can't make
+    a stock look cheap when it isn't — same basis as PEGY (see _forward_pe).
+
+    Thresholds are absolute, so the score is comparable across the whole
+    universe but blunt across sectors (banks/insurers screen 'cheap' on P/E and
+    P/B by design). Read it alongside quality_score and the sector, not alone.
+    """
+    def _f(x):
+        try:
+            return float(x) if x is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def low_cheap(x, cheap, rich):
+        # Lower is cheaper: x<=cheap -> 1.0, x>=rich -> 0.0, linear between.
+        if x is None or x <= 0:
+            return None
+        if x <= cheap:
+            return 1.0
+        if x >= rich:
+            return 0.0
+        return (rich - x) / (rich - cheap)
+
+    def high_cheap(x, low, high):
+        # Higher is cheaper (yields): x<=low -> 0.0, x>=high -> 1.0, linear.
+        if x is None:
+            return None
+        if x <= low:
+            return 0.0
+        if x >= high:
+            return 1.0
+        return (x - low) / (high - low)
+
+    lenses = [
+        low_cheap(_forward_pe(r, _f), 8.0, 25.0),   # earnings
+        low_cheap(_f(r.get("price_to_book")), 0.75, 4.0),
+        low_cheap(_f(r.get("price_to_sales")), 0.5, 6.0),
+        low_cheap(_f(r.get("pegy")), 0.75, 3.0),     # growth-adjusted
+        high_cheap(_f(r.get("dividend_yield")), 0.0, 0.06),
+    ]
+
+    # FCF yield = free cash flow / market cap (both in the reporting currency,
+    # so the ratio is currency-safe).
+    fcf, mc = _f(r.get("fcf")), _f(r.get("market_cap"))
+    if fcf is not None and mc and mc > 0:
+        lenses.append(high_cheap(fcf / mc, 0.0, 0.10))
+
+    legs = [v for v in lenses if v is not None]
+    if len(legs) < 2:
+        return None
+    return round(sum(legs) / len(legs) * 10)
+
+
 import math as _math
 
 
@@ -1167,11 +1228,13 @@ def screener(
     """
     results = query(sql, params)
     # momentum / piotroski / risk / altman_z / volatility now come precomputed via
-    # the screener_scores JOIN (see compute_and_store_scores). quality_score and
-    # pegy stay inline — they read only columns already in this query, no extra DB hit.
+    # the screener_scores JOIN (see compute_and_store_scores). quality_score,
+    # value_score and pegy stay inline — they read only columns already in this
+    # query, no extra DB hit. PEGY is attached first because value_score uses it.
+    _attach_pegy(results)
     for r in results:
         r["quality_score"] = _quality_score(r)
-    _attach_pegy(results)
+        r["value_score"] = _value_score(r)
     # Surface ICB labels so the table matches the sidebar/heatmap. Done last so
     # scoring above still sees the raw GICS sector it was built against.
     for r in results:

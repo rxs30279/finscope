@@ -193,25 +193,31 @@ export default function NewsTab({ symbol, split = false }) {
                 Generated {fmtTime(summary.generated_at)}
               </span>
             )}
-            {isAdmin && (
-              <button
-                onClick={(e) => { /* Ctrl/Cmd requirement disabled — restore: if (e.ctrlKey || e.metaKey) generateSummary(); */ generateSummary(); }}
-                disabled={summarising}
-                style={{
-                  background: summarising ? '#2e1065' : '#1a1a1a',
-                  color:      summarising ? '#c4b5fd' : '#a78bfa',
-                  border: '1px solid #4c1d95',
-                  padding: '4px 10px', borderRadius: 2,
-                  fontFamily: 'monospace', fontSize: 10,
-                  cursor: summarising ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {summarising ? '✦ Summarising…' : (summary ? '↻ Regenerate' : '✦ Generate summary')}
-              </button>
-            )}
+            {/* Public button (no admin gate) — a cached summary is served to
+                everyone, so most views are free; this only spends DeepSeek on
+                an explicit click. To re-gate, wrap in `{isAdmin && (...)}`. */}
+            <button
+              onClick={(e) => { /* Ctrl/Cmd requirement disabled — restore: if (e.ctrlKey || e.metaKey) generateSummary(); */ generateSummary(); }}
+              disabled={summarising}
+              style={{
+                background: summarising ? '#2e1065' : '#1a1a1a',
+                color:      summarising ? '#c4b5fd' : '#a78bfa',
+                border: '1px solid #4c1d95',
+                padding: '4px 10px', borderRadius: 2,
+                fontFamily: 'monospace', fontSize: 10,
+                cursor: summarising ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {summarising ? '✦ Summarising…' : (summary ? '↻ Regenerate' : '✦ Generate summary')}
+            </button>
           </div>
         </div>
         <div style={{ padding:'14px 16px' }}>
+          {summary?.cached && (
+            <div style={{ color:'#a78bfa', fontSize:11, fontFamily:'monospace', marginBottom:10, lineHeight:1.6 }}>
+              ↻ On a 24h cooldown — showing the latest summary rather than spending a fresh one.
+            </div>
+          )}
           {summaryError && (
             <div style={{ color:'#ef4444', fontSize:12, fontFamily:'monospace', marginBottom:10 }}>
               {summaryError}
@@ -219,9 +225,7 @@ export default function NewsTab({ symbol, split = false }) {
           )}
           {!summary && !summaryError && (
             <div style={{ color:'#666', fontSize:12, fontFamily:'monospace', lineHeight:1.7 }}>
-              {isAdmin
-                ? <>Press <span style={{ color:'#a78bfa' }}>✦ Generate summary</span> to have DeepSeek read the last 60 days of RNS + press coverage and produce a short summary.</>
-                : 'No AI summary has been generated for this company yet.'}
+              Press <span style={{ color:'#a78bfa' }}>✦ Generate summary</span> to have DeepSeek read the last 60 days of RNS + press coverage and produce a short summary.
             </div>
           )}
           {summary && (

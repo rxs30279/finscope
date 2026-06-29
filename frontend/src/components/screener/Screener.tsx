@@ -14,14 +14,14 @@ import PageHeader from "@/components/layout/PageHeader";
 
 const EMPTY_FILTERS = { sector: "", exclude_sectors: "", ftse_index: "", min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "", consensus: "", min_upside_pct: "" };
 const EMPTY_MODES = { min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "" };
-const EMPTY_SCORE_FILTERS = { min_momentum: "", min_quality: "", min_piotroski: "", max_risk: "", max_pegy: "" };
+const EMPTY_SCORE_FILTERS = { min_momentum: "", min_quality: "", min_value: "", max_risk: "", max_pegy: "" };
 
 const FUND_COLS = [
   ["Symbol", false, "symbol"], ["Name", false, "name"], ["Sector", false, "sector"],
   ["Index", false, "ftse_index"], ["Mkt Cap", true, "market_cap"], ["P/E", true, "price_to_earnings"],
   ["P/B", true, "price_to_book"], ["ROE", true, "roe"], ["Rev Grwth", true, "revenue_growth"],
   ["D/E", true, "debt_to_equity"], ["PEGY", true, "pegy"], ["Mom", true, "momentum_score"],
-  ["Qual", true, "quality_score"], ["Value", true, "piotroski_score"], ["Risk", true, "risk_score"],
+  ["Qual", true, "quality_score"], ["Value", true, "value_score"], ["Risk", true, "risk_score"],
 ];
 // Full column names, shown as a hover tooltip on the abbreviated headers.
 const COL_TITLES: Record<string, string> = {
@@ -38,7 +38,7 @@ const COL_TITLES: Record<string, string> = {
   pegy: "Price/earnings-to-growth-and-yield ratio",
   momentum_score: "Momentum score (0–10)",
   quality_score: "Quality score (0–10)",
-  piotroski_score: "Value score (Piotroski F-score, 0–10)",
+  value_score: "Value score (0–10, higher = cheaper)",
   risk_score: "Risk score (0–10, lower is safer)",
   consensus: "Analyst consensus rating",
   upside_pct: "Upside to mean analyst price target",
@@ -48,7 +48,7 @@ const COL_TITLES: Record<string, string> = {
 };
 // Composite-score columns — rendered as graded pills and visually grouped.
 // Pinned to one equal width so the columns stay even regardless of header text.
-const SCORE_KEYS = new Set(["momentum_score", "quality_score", "piotroski_score", "risk_score"]);
+const SCORE_KEYS = new Set(["momentum_score", "quality_score", "value_score", "risk_score"]);
 const SCORE_COL_WIDTH = 72;
 
 // Display-only shortenings for the widest ICB sector names (full name kept in
@@ -106,7 +106,15 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     const s = loadScreenerState();
     if (s.filters) setFilters((f) => ({ ...f, ...s.filters }));
     if (s.selectModes) setSelectModes((m) => ({ ...m, ...s.selectModes }));
-    if (s.scoreFilters) setScoreFilters((sf) => ({ ...sf, ...s.scoreFilters }));
+    // Merge only known score-filter keys so a stale key from an older build
+    // (e.g. the former `min_piotroski` Value filter) is dropped rather than
+    // lingering as a phantom active filter.
+    if (s.scoreFilters) setScoreFilters((sf) => {
+      const saved = s.scoreFilters as Record<string, string>;
+      const next = { ...sf };
+      for (const k of Object.keys(sf)) if (k in saved) (next as any)[k] = saved[k];
+      return next;
+    });
     if (s.tableView) setTableView(s.tableView);
     if (s.sortCol !== undefined) setSortCol(s.sortCol);
     if (s.sortDir) setSortDir(s.sortDir);
@@ -226,7 +234,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     const sf = scoreFilters;
     if (sf.min_momentum && (r.momentum_score == null || r.momentum_score < +sf.min_momentum)) return false;
     if (sf.min_quality && (r.quality_score == null || r.quality_score < +sf.min_quality)) return false;
-    if (sf.min_piotroski && (r.piotroski_score == null || r.piotroski_score < +sf.min_piotroski)) return false;
+    if (sf.min_value && (r.value_score == null || r.value_score < +sf.min_value)) return false;
     if (sf.max_risk && (r.risk_score == null || r.risk_score > +sf.max_risk)) return false;
     if (sf.max_pegy && (r.pegy == null || r.pegy > +sf.max_pegy)) return false;
     return true;
@@ -249,7 +257,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   const hasActiveFilters = Object.values(filters).some((v) => v !== "") || Object.values(scoreFilters).some((v) => v !== "");
   // Accent a filter control when it has a value, so active filters are obvious.
   const selStyle = (active: boolean) => (active ? { ...S.select, ...S.selectActive } : S.select);
-  const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_piotroski || scoreFilters.max_risk || scoreFilters.max_pegy;
+  const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_value || scoreFilters.max_risk || scoreFilters.max_pegy;
 
   const handleSort = (key: string) => {
     if (sortCol === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
@@ -303,7 +311,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
       {showAdvanced && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-          {[["min_momentum", "Momentum", [["4","Mom ≥ 4"],["6","Mom ≥ 6"],["8","Mom ≥ 8"]]],["min_quality","Quality",[["4","Quality ≥ 4"],["6","Quality ≥ 6"],["8","Quality ≥ 8"]]],["min_piotroski","Value",[["4","Value ≥ 4"],["6","Value ≥ 6"],["8","Value ≥ 8"]]],["max_risk","Risk",[["3","Risk ≤ 3"],["5","Risk ≤ 5"],["7","Risk ≤ 7"]]],["max_pegy","PEGY",[["1","PEGY ≤ 1"],["1.5","PEGY ≤ 1.5"],["2","PEGY ≤ 2"]]]].map(([k, label, opts]: any) => (
+          {[["min_momentum", "Momentum", [["4","Mom ≥ 4"],["6","Mom ≥ 6"],["8","Mom ≥ 8"]]],["min_quality","Quality",[["4","Quality ≥ 4"],["6","Quality ≥ 6"],["8","Quality ≥ 8"]]],["min_value","Value",[["4","Value ≥ 4"],["6","Value ≥ 6"],["8","Value ≥ 8"]]],["max_risk","Risk",[["3","Risk ≤ 3"],["5","Risk ≤ 5"],["7","Risk ≤ 7"]]],["max_pegy","PEGY",[["1","PEGY ≤ 1"],["1.5","PEGY ≤ 1.5"],["2","PEGY ≤ 2"]]]].map(([k, label, opts]: any) => (
             <select key={k} style={selStyle(!!(scoreFilters as any)[k])} value={(scoreFilters as any)[k]} onChange={(e) => updateScore(k, e.target.value)}>
               <option value="">{label}</option>
               {opts.map(([v, l]: any) => <option key={v} value={v}>{l}</option>)}
@@ -393,7 +401,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                         <td style={{ ...S.tdNum, color: gc(r.revenue_growth) }}>{fmt(r.revenue_growth, "pct")}</td>
                         <td style={{ ...S.tdNum, color: r.debt_to_equity > 2 ? "#ef4444" : "#ccc" }}>{fmt(r.debt_to_equity, "ratio")}</td>
                         <td style={{ ...S.tdNum, color: r.pegy == null ? "#444" : r.pegy < 1 ? "#10b981" : r.pegy <= 2 ? "#f59e0b" : "#ef4444" }}>{r.pegy ?? "—"}</td>
-                        {[["momentum_score", false], ["quality_score", false], ["piotroski_score", false], ["risk_score", true]].map(([k, invert]: any) => (
+                        {[["momentum_score", false], ["quality_score", false], ["value_score", false], ["risk_score", true]].map(([k, invert]: any) => (
                           <td key={k} style={{ ...S.tdNum, textAlign: "center", width: SCORE_COL_WIDTH, ...(k === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
                             <ScorePill value={r[k]} invert={invert} />
                           </td>
