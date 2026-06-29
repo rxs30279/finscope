@@ -43,7 +43,7 @@ export default function FairValueCard({ val }: { val: ValuationData | null }) {
   if (!val || val.fair_value == null || val.upside_pct == null || val.current_price == null) {
     return (
       <div style={card}>
-        <div style={title}>Fair Value Estimate</div>
+        <div style={title}>Peer Fair Value Estimate</div>
         <div style={{ color: "#777", fontSize: 14, fontFamily: "monospace", marginTop: 10 }}>
           Not enough comparable peers to estimate a fair value.
         </div>
@@ -67,7 +67,7 @@ export default function FairValueCard({ val }: { val: ValuationData | null }) {
 
   return (
     <div style={card}>
-      <div style={title}>Fair Value Estimate</div>
+      <div style={title}>Peer Fair Value Estimate</div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 24, fontWeight: 700, fontFamily: "monospace", color: accent }}>
