@@ -47,8 +47,11 @@ export function HoverTip({ text, children }: { text: string; children: React.Rea
 
 // Small "i" circle that reveals a styled explanation on hover. Uses a custom
 // dark tooltip rather than the native (unstyleable, white) title attribute.
-export default function InfoDot({ text, size = 14 }: { text: string; size?: number }) {
+export default function InfoDot({ text, size = 14, placement = "top" }: { text: string; size?: number; placement?: "top" | "bottom-right" }) {
   const [show, setShow] = useState(false);
+  const pos: React.CSSProperties = placement === "bottom-right"
+    ? { top: "calc(100% + 8px)", left: 0 }
+    : { bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)" };
   return (
     <span
       onMouseEnter={() => setShow(true)}
@@ -67,7 +70,7 @@ export default function InfoDot({ text, size = 14 }: { text: string; size?: numb
         <span
           style={{
             ...TIP_BOX,
-            position: "absolute", bottom: "calc(100% + 8px)", left: "50%", transform: "translateX(-50%)",
+            position: "absolute", ...pos,
             maxWidth: "70vw",
           }}
         >

@@ -433,7 +433,10 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ background: "#141414", borderRadius: 2, padding: "18px 22px", border: "1px solid #2a2a2a", display: "flex", alignItems: "center", gap: 24 }}>
             <div>
-              <div style={{ fontSize: 10, color: "#666", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1, fontFamily: "monospace" }}>Risk Score</div>
+              <div style={{ fontSize: 10, color: "#666", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
+                Risk Score
+                <InfoDot text={"Risk Score 1–10, lower is safer\n\nBlends two inputs:\n\n  • Altman Z-Score — bankruptcy-distress:\n      Z ≥ 3.0 → low risk (safe)\n      Z ≤ 1.0 → high risk (distress)\n      in between scales linearly\n\n  • Share-price volatility — annualised;\n     more volatile means higher risk.\n\nThe two are weighted — 60% Altman (inverted), 40% volatility — then rounded to the nearest whole number.\n\nBanks & insurers: the Altman Z is invalid, so it is dropped and the score uses volatility (60%) + ROE quality (40%) instead."} placement="bottom-right" />
+              </div>
               {snap.risk_score == null ? (
                 <span style={{ fontSize: 28, fontFamily: "monospace", fontWeight: 700, color: "#444" }}>—</span>
               ) : (
@@ -445,7 +448,6 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
             <div style={{ display: "flex", flexDirection: "column", gap: 6, color: "#888", fontSize: 12, fontFamily: "monospace" }}>
               <span>Altman Z: {snap.altman_z != null ? snap.altman_z.toFixed(2) : "—"}</span>
               <span>Volatility: {snap.volatility_annualised != null ? `${snap.volatility_annualised}% ann.` : "—"}</span>
-              <span style={{ color: "#555", fontSize: 11, marginTop: 2 }}>Z &gt; 3.0 safe · 1.8–3.0 grey · &lt; 1.8 distress</span>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(145px,1fr))", gap: 10 }}>
