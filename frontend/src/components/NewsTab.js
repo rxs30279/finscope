@@ -189,7 +189,7 @@ export default function NewsTab({ symbol, split = false }) {
           </div>
           <div style={{ display:'flex', gap:10, alignItems:'center' }}>
             {summary?.generated_at && (
-              <span style={{ color:'#555', fontSize:10, fontFamily:'monospace' }}>
+              <span style={{ color:'#777', fontSize:10, fontFamily:'monospace' }}>
                 Generated {fmtTime(summary.generated_at)}
               </span>
             )}
