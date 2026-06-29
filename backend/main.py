@@ -123,7 +123,12 @@ def sitemap_xml():
             f"<priority>{prio}</priority></url>"
         )
     for r in rows:
-        loc = escape(f"{SITEMAP_BASE}/company?symbol={quote(r['symbol'])}")
+        # Clean company URL: /company/<TICKER> with the ".L" suffix stripped, to
+        # mirror the Next route (see frontend/src/lib/company.ts). Must stay in
+        # sync with tickerSlug() there.
+        sym = r["symbol"]
+        ticker = sym[:-2] if sym.upper().endswith(".L") else sym
+        loc = escape(f"{SITEMAP_BASE}/company/{quote(ticker.upper())}")
         parts.append(
             f"<url><loc>{loc}</loc><changefreq>daily</changefreq>"
             f"<priority>0.6</priority></url>"

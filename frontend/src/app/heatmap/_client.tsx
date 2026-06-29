@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useRefresh } from "@/app/providers";
+import { companyHref } from "@/lib/company";
 import HeatmapTab from "@/components/HeatmapTab";
 
 export default function HeatmapPageClient() {
@@ -11,7 +12,7 @@ export default function HeatmapPageClient() {
   return (
     <HeatmapTab
       refreshKey={refreshKey}
-      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
+      onSelect={(sym: string) => router.push(companyHref(sym))}
     />
   );
 }

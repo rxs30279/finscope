@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useWatchlist } from "@/app/providers";
+import { companyHref } from "@/lib/company";
 import WatchlistTab from "@/components/WatchlistTab";
 
 export default function WatchlistPageClient() {
@@ -18,7 +19,7 @@ export default function WatchlistPageClient() {
   return (
     <WatchlistTab
       watchlists={watchlists}
-      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
+      onSelect={(sym: string) => router.push(companyHref(sym))}
       onCreateList={createWatchlist}
       onRenameList={renameWatchlist}
       onDeleteList={deleteWatchlist}

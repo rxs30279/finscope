@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useRefresh } from "@/app/providers";
+import { companyHref } from "@/lib/company";
 import RnsTab from "@/components/RnsTab";
 
 export default function RnsPageClient() {
@@ -11,7 +12,7 @@ export default function RnsPageClient() {
   return (
     <RnsTab
       refreshKey={refreshKey}
-      onSelect={(sym: string) => router.push(`/company?symbol=${encodeURIComponent(sym)}`)}
+      onSelect={(sym: string) => router.push(companyHref(sym))}
     />
   );
 }

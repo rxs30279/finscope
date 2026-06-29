@@ -1,6 +1,7 @@
 import { fmt } from "@/lib/format";
 import type { CompanyMeta, CompanySnap } from "@/lib/companyData";
 import { SITE_URL } from "@/lib/seo";
+import { tickerSlug } from "@/lib/company";
 
 // Server-rendered, crawlable summary that sits above the interactive (client-only)
 // CompanyDetail dashboard. This is the real HTML search engines index for each of
@@ -65,7 +66,7 @@ export default function CompanySeoContent({ symbol, meta, snap }: Props) {
     name,
     tickerSymbol: ticker(symbol),
     ...(meta?.exchange ? { exchange: meta.exchange } : {}),
-    url: `${SITE_URL}/company?symbol=${encodeURIComponent(symbol)}`,
+    url: `${SITE_URL}/company/${tickerSlug(symbol)}`,
   };
   const breadcrumb = {
     "@context": "https://schema.org",
@@ -77,7 +78,7 @@ export default function CompanySeoContent({ symbol, meta, snap }: Props) {
         "@type": "ListItem",
         position: 3,
         name,
-        item: `${SITE_URL}/company?symbol=${encodeURIComponent(symbol)}`,
+        item: `${SITE_URL}/company/${tickerSlug(symbol)}`,
       },
     ],
   };
