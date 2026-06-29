@@ -140,8 +140,15 @@ _CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
             "interim-results",
             "half-year-results",
             "half-yearly-report",
+            "half-year-ended",
+            "half-yearly-financial-report",
+            "six-months-ended",
+            "results-for-the-half-year",
+            "results-for-the-six-months",
             "interim report",
             "half year results",
+            "half year ended",
+            "six months ended",
             "half-yearly report",
         ),
     ),
@@ -416,6 +423,11 @@ _CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
         "B",
         ("update-statement", "trading-and-operational-update", "operational-update"),
     ),
+    # NOTE: product / new-business-line launches are handled by _PRODUCT_LAUNCH_RE in the
+    # fallback block, NOT as an enumerated category. "launch" is too broad to sit in Tier B
+    # ahead of the Tier C categories below — "Launch of share buyback programme" must stay
+    # buyback/Tier C, "Launch of Placing" capital_raise, etc. Running it as a fallback means
+    # it only fires when no enumerated category (including the Tier C ones) matched.
     # Tier C — routine noise
     (
         "buyback",
@@ -508,7 +520,6 @@ _CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
             "2025-annual-report",  # e.g. "2025-annual-report-*-di-"
             "annual-report-and-notice",
             "notice of agm",
-            "annual financial report",
             "result of agm",
             "notice of annual general meeting",
         ),
@@ -659,13 +670,71 @@ _CATALYTIC_KEYWORDS = (
 )
 
 
-# Full-year results are often titled "FY26 Results" / "FY2026 Results" /
-# "Results FY26" — a shape the enumerated final_results slugs ("final results",
-# "annual results", "full-year results", …) all miss. Enumerating every
-# year × separator × 2/4-digit variant is fragile and needs a yearly bump, so
-# match the fiscal-year-plus-results pattern directly instead.
+# Full-year results take many headline shapes the enumerated final_results slugs
+# ("final results", "annual results", "full-year results", …) all miss:
+#   "FY26 Results" / "FY2026 Results" / "Results FY26"      — fiscal year + results
+#   "FY Results"                                             — FY standalone + results
+#   "FY results for the financial year ended 31/3/2026"     — full-year prose
+#   "Financial Results for year ended 28 February 2026"     — "...year ended <date>"
+# Enumerating every year × separator variant is fragile and needs a yearly bump,
+# so match the shapes directly. \bfy\b keeps the word boundary so it never fires
+# inside "satisfy"/"notify"/"comfy". The "year ended" form is the canonical full-year
+# results phrasing; the half-year/six-months variants are caught above as interim_results
+# first (so they never reach this fallback) and the "notice" guard keeps schedulers out.
 _FY_RESULTS_RE = re.compile(
-    r"\bfy\s?-?\s?\d{2,4}\b.*\bresults?\b|\bresults?\b.*\bfy\s?-?\s?\d{2,4}\b"
+    r"\bfy\d{0,4}\b.*\bresults?\b"
+    r"|\bresults?\b.*\bfy\d{0,4}\b"
+    r"|\byear ended\b.*\bresults?\b"
+    r"|\bresults?\b.*\byear ended\b"
+)
+
+# Interim/half-year results take just as many shapes the enumerated interim_results
+# slugs miss — "Half-year Financial Report", "Interim Report", "Half Yearly Report".
+# Match a half-year/six-months/interim marker paired with a results/report/statement
+# word. Checked BEFORE _FY_RESULTS_RE in the fallback because "half year ended" also
+# contains "year ended", so the full-year regex would otherwise mislabel it. "interim"
+# is safe here only because a results/report/statement word is required — "Interim
+# Dividend" (→ dividend_routine) is already categorised above and never reaches this.
+_INTERIM_RESULTS_RE = re.compile(
+    r"\b(?:half[- ]?year(?:ly)?|six[- ]?months?|interim)\b.*\b(?:results?|report|statement)\b"
+)
+
+# Contract wins phrased so the enumerated contract_win slugs miss them: the "award"
+# and "contract" words split or reversed ("provisional award of 25yr LDES contract",
+# Gresham House GRID 2026-06-29 — the slug ends "-contract" so the "-contract-"
+# pattern, which needs hyphens both sides, can't match), or won/secured/preferred-
+# bidder forms. Require BOTH an award/win verb AND "contract"/"tender" so it never
+# fires on LTIP "awards" (no contract word) — those stay equity_issue/Tier C.
+_CONTRACT_RE = re.compile(
+    r"\b(?:award(?:ed|s)?|wins?|won|secur(?:e|es|ed)|selected)\b.*\b(?:contract|tender)\b"
+    r"|\b(?:contract|tender)\b.*\b(?:award(?:ed|s)?|wins?|won|secur(?:e|es|ed)|selected)\b"
+    r"|\bpreferred[- ]bidder\b"
+)
+
+# An "Annual Financial Report" / "Annual Report and Accounts" is the publication of
+# the full annual report — for many issuers (esp. trusts/funds) it IS the full-year
+# results, not AGM admin (Aberdeen City Council 54MP, 2026-06-26, was being grabbed by
+# agm_notice/Tier C). Only the bare report forms; the genuine-admin variants
+# ("publication of …", "… and notice of AGM") stay in agm_notice / are excluded by the
+# notice+agm guard on the fallback so the bundled report-plus-meeting items stay Tier C.
+_ANNUAL_REPORT_RE = re.compile(
+    r"\bannual financial report\b"
+    r"|\bannual report (?:and|&) (?:accounts|financial statements)\b"
+)
+
+# Product / new-business-line launches and market expansion ("Plus500 launches sports
+# event-based contracts", 2026-06-29). Deliberately broad — Tier B routes it to the LLM
+# ranker to judge materiality. Run ONLY as a fallback (after every enumerated category)
+# so it never out-ranks a more specific action: "Launch of share buyback programme"
+# stays buyback/Tier C, "Launch of Placing" capital_raise, "launch of strategic review"
+# strategic_review. \blaunch\b excludes "re-launch" mid-word is fine; the verb covers
+# launch/launches/launched/launching.
+_PRODUCT_LAUNCH_RE = re.compile(
+    r"\blaunch(?:es|ed|ing)?\b"
+    r"|\bnew (?:product|platform|service|range)\b"
+    r"|\broll[- ]?out\b"
+    r"|\bexpan(?:ds|sion) into\b"
+    r"|\bmarket entry\b"
 )
 
 
@@ -687,14 +756,29 @@ def _classify(headline: str, slug: str) -> dict:
             tier = t
             break
 
-    # Fallback: fiscal-year results (e.g. "FY26 Results") that the enumerated
-    # final_results slugs miss. Runs only when nothing more specific matched.
-    # Skip when "notice" is present — a "Notice of FY26 Results" is just
-    # scheduling (the notice_of_results slugs don't cover the FY form either, so
-    # without this guard the fallback would wrongly promote it to Tier A).
+    # Fallback: results announcements (e.g. "FY26 Results", "Half-year Financial
+    # Report") that the enumerated final_results/interim_results slugs miss. Runs
+    # only when nothing more specific matched. Skip when "notice" is present — a
+    # "Notice of FY26 Results" is just scheduling (the notice_of_results slugs don't
+    # cover these forms either, so without the guard the fallback would wrongly
+    # promote it to Tier A). Interim is checked first: "half year ended" also
+    # contains "year ended", which the full-year regex would otherwise grab.
     hay = f"{hay_slug} {hay_headline}"
-    if category is None and "notice" not in hay and _FY_RESULTS_RE.search(hay):
-        category, tier = "final_results", "A"
+    if category is None and "notice" not in hay:
+        if _INTERIM_RESULTS_RE.search(hay):
+            category, tier = "interim_results", "A"
+        elif _FY_RESULTS_RE.search(hay):
+            category, tier = "final_results", "A"
+        elif (
+            "agm" not in hay
+            and "general meeting" not in hay
+            and _ANNUAL_REPORT_RE.search(hay)
+        ):
+            category, tier = "final_results", "A"
+        elif _CONTRACT_RE.search(hay):
+            category, tier = "contract_win", "B"
+        elif _PRODUCT_LAUNCH_RE.search(hay):
+            category, tier = "product_launch", "B"
 
     # Keyword overlays on headline
     hits = []
@@ -731,6 +815,13 @@ _BASE_URL = "https://www.investegate.co.uk"
 
 # Investegate URL: /announcement/{wire}/{company-slug}--{ticker}/{headline-slug}/{id}
 _ANN_URL_RE = re.compile(r"/announcement/([^/]+)/[^/]+--([^/]+)/([^/]+)/(\d+)")
+
+# Wires to drop at ingest — non-regulatory PR/newswire feeds that never resolve to a
+# company in our universe and are pure noise. FNW = "FinanceWire News" (ticker FNEWS):
+# press releases for non-UK-listed entities (STARTRADER, PU Prime, …); 44 rows / 14 days,
+# 0 symbol-resolved, 0 tier A/B of value. Excluded rows are skipped before upsert so they
+# never enter the DB or reach the LLM/feed.
+_EXCLUDED_WIRES = {"FNW"}
 
 
 def _fetch_page(page: int = 1, timeout: int = 20) -> str:
@@ -815,6 +906,10 @@ def _parse_rows(html: str) -> list[dict]:
             wire = url_wire.upper()
         if ticker is None and url_ticker:
             ticker = url_ticker.upper()
+
+        # Drop non-regulatory PR/newswire feeds (e.g. FinanceWire) — pure noise.
+        if wire in _EXCLUDED_WIRES:
+            continue
 
         rows.append(
             {
