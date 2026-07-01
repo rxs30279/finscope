@@ -719,7 +719,7 @@ _CONTRACT_RE = re.compile(
 # notice+agm guard on the fallback so the bundled report-plus-meeting items stay Tier C.
 _ANNUAL_REPORT_RE = re.compile(
     r"\bannual financial report\b"
-    r"|\bannual report (?:and|&) (?:accounts|financial statements)\b"
+    r"|\bannual report (?:and|&) (?:consolidated )?(?:accounts|financial statements)\b"
 )
 
 # Product / new-business-line launches and market expansion ("Plus500 launches sports
