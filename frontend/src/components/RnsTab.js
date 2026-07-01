@@ -291,7 +291,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
   useEffect(() => {
     setLoading(true);
     const bust = manualRefresh > 0 ? `&_t=${Date.now()}` : "";
-    const limit = hours >= 168 ? 1000 : 500;
+    const limit = hours * 20; // ~20 announcements/hour headroom
     fetch(`${API}/rns/latest?min_score=0&hours=${hours}&limit=${limit}${bust}`)
       .then((r) => r.json())
       .then((d) => {
