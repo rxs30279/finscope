@@ -708,7 +708,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
               >
                 {loading ? "Refreshing…" : "↻ Refresh"}
               </button>
-              <span style={{ color: "#444", fontSize: 9, fontFamily: "monospace" }}>auto ~15 min</span>
             </span>
             <span style={{ color: "#444" }}>·</span>
             <span>
