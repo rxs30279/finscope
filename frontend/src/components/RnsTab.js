@@ -673,15 +673,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
           display: isMobile ? "none" : undefined,
         }}
       >
-        <ScoreCell value={r.score} />
-      </td>
-      <td
-        style={{
-          ...S.td,
-          textAlign: "right",
-          display: isMobile ? "none" : undefined,
-        }}
-      >
         <ScoreCell value={r.llm_score} />
       </td>
       <td
@@ -939,7 +930,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
                     <col style={{ width: 130 }} />{/* Company */}
                     <col />{/* Headline / AI Thesis — takes remaining space */}
                     <col style={{ width: 140 }} />{/* Category */}
-                    <col style={{ width: 56 }} />{/* Rules */}
                     <col style={{ width: 48 }} />{/* AI */}
                     <col style={{ width: 90 }} />{/* Action */}
                   </colgroup>
@@ -963,15 +953,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
                     <th style={S.th}>Headline / AI Thesis</th>
                     <th style={{ ...S.th, display: isMobile ? "none" : undefined }}>
                       Category
-                    </th>
-                    <th
-                      style={{
-                        ...S.th,
-                        textAlign: "right",
-                        display: isMobile ? "none" : undefined,
-                      }}
-                    >
-                      Rules
                     </th>
                     <th
                       style={{
