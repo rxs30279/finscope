@@ -192,10 +192,11 @@ function PriceTargetRange({ row, isMobile }) {
   // instead of cramming the whole gradient into a few px and going black.
   const D = 28;
   const peak = isMobile ? 0.72 : 0.55;            // colour intensity at the price
-  const shadeMax = isMobile ? 0.42 : 0.55;        // max darkening at the outer edge
+  const shadeMax = isMobile ? 0.30 : 0.55;        // max darkening at the outer edge
+  const outFloor = isMobile ? 0.30 : 0;           // min colour kept at the outer edge
   const zoneBg = (rgb, w, currentLeft) => {
     const lift = Math.max(0, 1 - w / D);          // 0 for wide zones → ~1 for tiny
-    const cOut = (peak * lift).toFixed(3);        // outer colour alpha, lifted when narrow
+    const cOut = Math.max(peak * lift, outFloor).toFixed(3); // outer colour alpha (floored on mobile)
     const dark = (shadeMax * (1 - lift)).toFixed(3); // outer shade, eased off when narrow
     const color = currentLeft
       ? `linear-gradient(to right, rgba(${rgb},${peak}), rgba(${rgb},${cOut}))`
