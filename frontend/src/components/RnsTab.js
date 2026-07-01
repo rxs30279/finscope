@@ -291,7 +291,8 @@ export default function RnsTab({ refreshKey, onSelect }) {
   useEffect(() => {
     setLoading(true);
     const bust = manualRefresh > 0 ? `&_t=${Date.now()}` : "";
-    fetch(`${API}/rns/latest?min_score=0&hours=${hours}&limit=500${bust}`)
+    const limit = hours >= 168 ? 1000 : 500;
+    fetch(`${API}/rns/latest?min_score=0&hours=${hours}&limit=${limit}${bust}`)
       .then((r) => r.json())
       .then((d) => {
         const data = Array.isArray(d) ? d : [];
