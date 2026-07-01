@@ -256,7 +256,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
   // fires immediately when the tab becomes visible again after >15 min away.
   useEffect(() => {
     const INTERVAL = 15 * 60 * 1000;
-    const STAGGER = 90 * 1000; // wait 90s after the boundary for the cron to finish
+    const STAGGER = 30 * 1000; // wait 30s after the boundary for the cron to finish
     const poll = () => setManualRefresh((n) => n + 1);
     let timeout = null;
     let interval = null;
