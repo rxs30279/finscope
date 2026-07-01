@@ -251,11 +251,12 @@ export default function RnsTab({ refreshKey, onSelect }) {
   // Bumped by the manual refresh button or the auto-poll to force a re-fetch.
   const [manualRefresh, setManualRefresh] = useState(0);
 
-  // Auto-poll: fire at the next 15-min UTC boundary (synced to the backend cron),
-  // then every 15 min. Pauses when the tab is hidden; re-syncs and optionally
+  // Auto-poll: fire 90s after each 15-min UTC boundary (synced to the backend cron,
+  // staggered to give the pipeline time to finish). Then every 15 min. Pauses when the tab is hidden; re-syncs and optionally
   // fires immediately when the tab becomes visible again after >15 min away.
   useEffect(() => {
     const INTERVAL = 15 * 60 * 1000;
+    const STAGGER = 90 * 1000; // wait 90s after the boundary for the cron to finish
     const poll = () => setManualRefresh((n) => n + 1);
     let timeout = null;
     let interval = null;
@@ -265,7 +266,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
 
     const schedule = () => {
       stop();
-      const msUntilNext = INTERVAL - (Date.now() % INTERVAL);
+      const msUntilNext = INTERVAL - (Date.now() % INTERVAL) + STAGGER;
       timeout = setTimeout(() => {
         poll();
         interval = setInterval(poll, INTERVAL);
