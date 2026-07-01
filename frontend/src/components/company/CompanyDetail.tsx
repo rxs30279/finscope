@@ -34,11 +34,20 @@ const WrapTick = ({ x, y, payload }: any) => {
   );
 };
 
+// logo.dev's ticker index maps a few LSE tickers to the wrong brand — e.g. RR.L
+// (Rolls-Royce Holdings plc, aerospace/defence) resolves to the "Rolls-Royce
+// Motor Cars Limited" wordmark, a separate BMW-owned company. For those we pull
+// by the correct company domain, which logo.dev serves accurately.
+const LOGO_DOMAIN_OVERRIDES: Record<string, string> = {
+  "RR.L": "rollsroyce.com", // interlocked RR monogram, not Motor Cars Ltd
+};
+
 // Company logo badge. Pulls the logo from logo.dev keyed by ticker (LSE tickers
-// keep the ".L" suffix, which is exactly the format logo.dev expects). We pass
-// fallback=404 so a miss fires the img onError and we drop back to the original
-// purple ticker-initials badge. Needs NEXT_PUBLIC_LOGODEV_TOKEN (a publishable
-// pk_ key); with no token set we skip the fetch and just show the initials.
+// keep the ".L" suffix, which is exactly the format logo.dev expects), unless
+// the ticker is in LOGO_DOMAIN_OVERRIDES, in which case we key by domain. We
+// pass fallback=404 so a miss fires the img onError and we drop back to the
+// original purple ticker-initials badge. Needs NEXT_PUBLIC_LOGODEV_TOKEN (a
+// publishable pk_ key); with no token set we skip the fetch and show initials.
 function LogoBadge({ symbol, paysDividend }: { symbol: string; paysDividend: boolean }) {
   const [failed, setFailed] = useState(false);
   const label = symbol.replace(".L", "").slice(0, 4);
@@ -48,8 +57,12 @@ function LogoBadge({ symbol, paysDividend }: { symbol: string; paysDividend: boo
   // so its background reaches the rounded corners; the chip itself is transparent
   // so any letterboxing blends into the page rather than showing a white ring.
   // Misses (fallback=404) drop to the purple initials.
+  const override = LOGO_DOMAIN_OVERRIDES[symbol];
+  const logoPath = override
+    ? encodeURIComponent(override)
+    : `ticker/${encodeURIComponent(symbol)}`;
   const logoUrl = token
-    ? `https://img.logo.dev/ticker/${encodeURIComponent(symbol)}?token=${token}&size=120&format=png&retina=true&fallback=404`
+    ? `https://img.logo.dev/${logoPath}?token=${token}&size=120&format=png&retina=true&fallback=404`
     : null;
   const showLogo = !!logoUrl && !failed;
 
