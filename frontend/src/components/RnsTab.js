@@ -248,9 +248,44 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const [hours, setHours] = useState(72);
   const [minLlmScore, setMinLlmScore] = useState(50);
   const [search, setSearch] = useState("");
-  // Bumped by the manual refresh button to force a re-fetch (the backend
-  // ingests on a 15-min cron, so the data on screen can lag a few minutes).
+  // Bumped by the manual refresh button or the auto-poll to force a re-fetch.
   const [manualRefresh, setManualRefresh] = useState(0);
+
+  // Auto-poll: fire at the next 15-min UTC boundary (synced to the backend cron),
+  // then every 15 min. Pauses when the tab is hidden; re-syncs and optionally
+  // fires immediately when the tab becomes visible again after >15 min away.
+  useEffect(() => {
+    const INTERVAL = 15 * 60 * 1000;
+    const poll = () => setManualRefresh((n) => n + 1);
+    let timeout = null;
+    let interval = null;
+    let hiddenAt = null;
+
+    const stop = () => { clearTimeout(timeout); clearInterval(interval); };
+
+    const schedule = () => {
+      stop();
+      const msUntilNext = INTERVAL - (Date.now() % INTERVAL);
+      timeout = setTimeout(() => {
+        poll();
+        interval = setInterval(poll, INTERVAL);
+      }, msUntilNext);
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) {
+        hiddenAt = Date.now();
+        stop();
+      } else {
+        if (hiddenAt && Date.now() - hiddenAt > INTERVAL) poll();
+        schedule();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    if (!document.hidden) schedule();
+    return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
+  }, []);
 
   useEffect(() => {
     setLoading(true);
