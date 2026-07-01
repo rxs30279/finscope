@@ -250,7 +250,7 @@ function PriceTargetRange({ row, isMobile }) {
         transform: cur < 15 ? 'none' : cur > 85 ? 'translateX(-100%)' : 'translateX(-50%)',
         textAlign: cur < 15 ? 'left' : cur > 85 ? 'right' : 'center',
       }}>
-        <span style={{ color: '#999' }}>Current {current.toFixed(0)}p</span>
+        <span style={{ color: '#999' }}>Last close {current.toFixed(0)}p</span>
         {upside != null && (
           <><br /><span style={{ color: upColor, fontWeight: 700 }}>{upside >= 0 ? '+' : ''}{upside.toFixed(1)}% to mean</span></>
         )}
