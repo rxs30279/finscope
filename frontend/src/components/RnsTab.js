@@ -246,7 +246,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [hours, setHours] = useState(72);
-  const [minLlmScore, setMinLlmScore] = useState(0);
+  const [minLlmScore, setMinLlmScore] = useState(50);
   const [search, setSearch] = useState("");
   // Bumped by the manual refresh button to force a re-fetch (the backend
   // ingests on a 15-min cron, so the data on screen can lag a few minutes).
