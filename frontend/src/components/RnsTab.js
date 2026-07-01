@@ -692,7 +692,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
                 type="button"
                 onClick={() => setManualRefresh((n) => n + 1)}
                 disabled={loading}
-                title="Refresh"
+                title="Reload data from server — new announcements ingest automatically every ~15 min"
                 style={{
                   background: "#0a0a0a",
                   color: loading ? "#444" : "#f97316",
@@ -708,6 +708,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               >
                 {loading ? "Refreshing…" : "↻ Refresh"}
               </button>
+              <span style={{ color: "#444", fontSize: 9, fontFamily: "monospace" }}>auto ~15 min</span>
             </span>
             <span style={{ color: "#444" }}>·</span>
             <span>
