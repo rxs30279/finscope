@@ -1,7 +1,8 @@
 """Daily RNS digest email.
 
 Reads the last 24h of Tier A + B announcements from the existing
-rns_announcements table and emails an HTML digest via Resend. Strictly
+rns_announcements table, drops sub-£15m / unpriceable names, and emails an
+HTML digest via Resend. Strictly
 read-only — does not trigger ingest, summary fetching, or DeepSeek ranking.
 The pipeline that populates llm_* columns runs on its own GitHub Actions
 schedule (refresh-rns.yml).
@@ -28,6 +29,7 @@ import json
 import html
 import urllib.request
 import urllib.error
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -39,6 +41,9 @@ from rns import _query, _fetch_market_caps_batch
 
 _UK_TZ      = ZoneInfo("Europe/London")
 _WINDOW_H   = 24
+_MIN_MARKET_CAP = 15_000_000   # drop stories below £15m (and any with no determinable cap)
+# Public app URL for company-page links; mirrors the frontend seo.ts default.
+_SITE_URL   = (os.environ.get("PUBLIC_BASE_URL") or "https://app.alphamoveai.co.uk").rstrip("/")
 _DEFAULT_TO = "richard_stephens@hotmail.co.uk"
 _DEFAULT_FROM = "Alpha Move AI <digest@alphamoveai.co.uk>"
 _KOFI_URL   = "https://ko-fi.com/alphamoveai"  # same page the in-app Support button links to
@@ -55,10 +60,11 @@ def _fetch_rows(hours: int = _WINDOW_H) -> list[dict]:
     (shown inline next to the ticker). For rows missing ttm_financials
     coverage (mostly AIM / FTSE SmallCap), falls back to a parallel
     yfinance batch fetch — same helper rns_llm and /api/rns/market-caps
-    use."""
+    use. Rows below `_MIN_MARKET_CAP` (or with no determinable cap) are
+    then dropped."""
     rows = _query("""
         SELECT r.id, r.published_at, r.ticker, r.symbol, r.company_name,
-               r.headline, r.url, r.tier, r.category,
+               r.headline, r.url, r.tier, r.category, r.keyword_hits,
                r.score, r.llm_score, r.llm_thesis, r.llm_action, r.llm_risks,
                m.ftse_index, f.market_cap
           FROM rns_announcements r
@@ -73,7 +79,30 @@ def _fetch_rows(hours: int = _WINDOW_H) -> list[dict]:
     """, (str(hours),))
 
     _backfill_market_caps(rows)
-    return rows
+
+    # Drop micro-caps and anything we couldn't price at all.
+    kept: list[dict] = []
+    for r in rows:
+        mc = r.get("market_cap")
+        if mc is None:
+            continue
+        try:
+            if float(mc) >= _MIN_MARKET_CAP:
+                kept.append(r)
+        except (TypeError, ValueError):
+            continue
+    return kept
+
+
+def _count_all_rns(hours: int = _WINDOW_H) -> int:
+    """Total RNS announcements in the window across *all* tiers — the
+    denominator for the header's 'AI-ranked: X/Y' stat."""
+    rows = _query("""
+        SELECT COUNT(*) AS n
+          FROM rns_announcements
+         WHERE published_at >= NOW() - (%s || ' hours')::interval
+    """, (str(hours),))
+    return int(rows[0]["n"]) if rows else 0
 
 
 def _backfill_market_caps(rows: list[dict]) -> None:
@@ -147,7 +176,73 @@ def _format_mc(mc) -> str:
 
 # ── HTML rendering ────────────────────────────────────────────────────────────
 
-_TIER_COLOR  = {"A": "#f97316", "B": "#60a5fa"}
+# ── Sentiment signal (ported verbatim from frontend RnsTab.js getSentiment) ────
+_NEG_CATS = {
+    "profit_warning", "going_concern", "liquidation", "delisting", "suspension",
+}
+_POS_CATS = {
+    "firm_offer", "recommended_offer", "drug_approval", "contract_win",
+}
+_LLM_POS = ["positive", "upside", "beat", "above expectations", "outperform",
+            "upgrade", "bullish", "boost", "opportunity"]
+_LLM_NEG = ["negative", "pressure", "miss", "below expectations", "concern",
+            "decline", "downgrade", "disappoint", "warning", "bearish", "weak"]
+
+_SENTIMENT_STYLE = {
+    "positive": ("▲", "#10b981"),
+    "negative": ("▼", "#ef4444"),
+    "neutral":  ("—", "#60a5fa"),
+}
+
+
+def _sentiment(r: dict) -> str:
+    """Directional read on an announcement — matches the web RNS table.
+    Layer 1: unambiguous category overrides. Layer 2: scan the LLM thesis
+    for directional language. Layer 3: fall back to keyword_hits tallies."""
+    # Layer 1: category overrides
+    if r.get("category") in _NEG_CATS:
+        return "negative"
+    if r.get("category") in _POS_CATS:
+        return "positive"
+
+    # Layer 2: LLM thesis language
+    thesis = r.get("llm_thesis")
+    if thesis:
+        text = thesis.lower()
+        pos = sum(1 for w in _LLM_POS if w in text)
+        neg = sum(1 for w in _LLM_NEG if w in text)
+        if neg > pos:
+            return "negative"
+        if pos > neg:
+            return "positive"
+
+    # Layer 3: keyword hits fallback
+    hits = r.get("keyword_hits") or []
+    neg = sum(1 for h in hits if h.startswith("neg:"))
+    pos = sum(1 for h in hits if h.startswith("pos:"))
+    if neg > pos:
+        return "negative"
+    if pos > neg:
+        return "positive"
+    return "neutral"
+
+
+def _render_sentiment(r: dict) -> str:
+    symbol, color = _SENTIMENT_STYLE[_sentiment(r)]
+    return (
+        f'<span style="color:{color};font-family:monospace;'
+        f'font-size:15px;font-weight:700;line-height:1;">{symbol}</span>'
+    )
+
+
+def _company_url(r: dict) -> str:
+    """Public company-page URL for a row. Mirrors the frontend tickerSlug():
+    strip the '.L' suffix, upper-case, URL-encode (e.g. TSCO.L -> /company/TSCO)."""
+    sym = (r.get("symbol") or r.get("ticker") or "").strip()
+    slug = sym[:-2] if sym.upper().endswith(".L") else sym
+    return f"{_SITE_URL}/company/{urllib.parse.quote(slug.upper())}"
+
+
 _ACTION_COLOR = {
     "research": "#f97316",
     "watch":    "#60a5fa",
@@ -196,7 +291,6 @@ def _render_row(r: dict) -> str:
     """Renders BOTH the desktop table row AND the mobile card for one item.
     Each is wrapped in a class that the media query toggles between
     display:none and display:table-row / display:block."""
-    tier_c   = _TIER_COLOR.get(r["tier"], "#888")
     action   = r.get("llm_action") or ""
     action_c = _ACTION_COLOR.get(action, "#888")
     category = _CATEGORY_LABELS.get(r.get("category"), r.get("category") or "—")
@@ -220,6 +314,10 @@ def _render_row(r: dict) -> str:
     ai_score = r.get("llm_score")
     ai_cell  = f'<b style="color:#f97316;">{ai_score}</b>' if ai_score is not None else '<span style="color:#bbb;">—</span>'
 
+    # Dim low-signal rows — those the AI flagged as "ignore".
+    dim = action == "ignore"
+    dim_style = "opacity:0.5;" if dim else ""
+
     action_cell = (
         f'<span style="background:{action_c}20;color:{action_c};'
         f'padding:2px 8px;border-radius:3px;font-size:10px;'
@@ -227,10 +325,8 @@ def _render_row(r: dict) -> str:
         if action else '<span style="color:#bbb;">—</span>'
     )
 
-    tier_pill = (
-        f'<span style="background:{tier_c}20;color:{tier_c};padding:2px 6px;'
-        f'border-radius:2px;font-family:monospace;font-size:10px;font-weight:700;">{r["tier"]}</span>'
-    )
+    sentiment_badge = _render_sentiment(r)
+    company_url     = _company_url(r)
 
     mc_s = _format_mc(r.get("market_cap"))
     mc_line = (
@@ -244,11 +340,11 @@ def _render_row(r: dict) -> str:
 
     # ── desktop row (hidden on mobile) ──
     desktop = f"""
-      <tr class="dt-row" style="border-bottom:1px solid #eee;">
-        <td style="padding:10px 8px;font-family:monospace;color:#666;font-size:12px;white-space:nowrap;vertical-align:top;">{time_s}</td>
-        <td style="padding:10px 8px;vertical-align:top;">{tier_pill}</td>
-        <td style="padding:10px 8px;font-family:monospace;font-weight:700;color:#111;font-size:13px;white-space:nowrap;vertical-align:top;">
-          {_esc(r.get('ticker'))}
+      <tr class="dt-row" style="border-bottom:1px solid #eee;{dim_style}">
+        <td style="padding:10px 8px;font-family:monospace;color:#666;font-size:12px;white-space:nowrap;vertical-align:baseline;">{time_s}</td>
+        <td style="padding:10px 8px;text-align:center;vertical-align:baseline;">{sentiment_badge}</td>
+        <td style="padding:10px 8px;font-family:monospace;font-weight:700;color:#111;font-size:13px;white-space:nowrap;vertical-align:baseline;">
+          <a href="{_esc(company_url)}" style="color:#111;text-decoration:none;">{_esc(r.get('ticker'))}</a>
           {mc_line}
         </td>
         <td style="padding:10px 8px;color:#444;font-size:12px;vertical-align:top;">
@@ -269,22 +365,24 @@ def _render_row(r: dict) -> str:
     mobile = f"""
       <tr class="mb-row" style="display:none;">
         <td style="padding:0;">
-          <div style="border:1px solid #eee;border-radius:6px;margin-bottom:10px;background:#fff;overflow:hidden;">
-            <div style="padding:8px 12px;background:#fafafa;border-bottom:1px solid #eee;display:flex;align-items:center;flex-wrap:wrap;">
+          <div style="border:1px solid #eee;border-radius:6px;margin-bottom:10px;background:#fff;overflow:hidden;{dim_style}">
+            <div style="padding:8px 12px;background:#fafafa;border-bottom:1px solid #eee;display:flex;align-items:baseline;flex-wrap:wrap;">
               <span style="font-family:monospace;color:#666;font-size:12px;padding-right:10px;">{time_s}</span>
-              <span style="display:inline-block;padding-right:10px;">{tier_pill}</span>
-              <span style="font-family:monospace;font-weight:700;color:#111;font-size:13px;padding-right:10px;">{_esc(r.get('ticker'))}</span>
+              <span style="display:inline-block;padding-right:10px;">{sentiment_badge}</span>
+              <span style="font-family:monospace;font-weight:700;color:#111;font-size:13px;padding-right:10px;"><a href="{_esc(company_url)}" style="color:#111;text-decoration:none;">{_esc(r.get('ticker'))}</a></span>
               {f'<span style="font-family:monospace;color:#888;font-size:11px;padding-right:10px;">{mc_s}</span>' if mc_s else ""}
               <span style="margin-left:auto;font-family:monospace;font-size:13px;">{ai_cell}</span>
             </div>
             <div style="padding:10px 12px;">
-              <div style="font-weight:500;color:#222;font-size:13px;margin-bottom:2px;">{_esc(r.get('company_name'))}</div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;margin-bottom:2px;">
+                <span style="font-weight:500;color:#222;font-size:13px;padding-right:10px;">{_esc(r.get('company_name'))}</span>
+                <span style="color:#f97316;font-size:11px;font-family:monospace;">{_esc(category)}</span>
+              </div>
               <a href="{_esc(r['url'])}" style="color:#1d4ed8;text-decoration:none;font-size:14px;line-height:1.35;display:block;">{_esc(r['headline'])}</a>
-              {thesis_block}
-              <div style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;">
-                <span style="color:#666;font-size:11px;font-family:monospace;padding-right:10px;">{_esc(category)}</span>
+              <div style="margin-top:6px;text-align:left;">
                 {action_cell}
               </div>
+              {thesis_block}
             </div>
           </div>
         </td>
@@ -325,7 +423,7 @@ def _render_section(bucket: str, rows: list[dict]) -> str:
           <thead class="dt-head">
             <tr style="background:#f5f5f5;border-bottom:2px solid #ddd;">
               <th style="padding:10px 8px;text-align:left;font-family:monospace;font-size:10px;color:#555;letter-spacing:1px;text-transform:uppercase;">Time</th>
-              <th style="padding:10px 8px;text-align:left;font-family:monospace;font-size:10px;color:#555;letter-spacing:1px;text-transform:uppercase;">Tier</th>
+              <th style="padding:10px 8px;text-align:center;font-family:monospace;font-size:10px;color:#555;letter-spacing:1px;text-transform:uppercase;">Signal</th>
               <th style="padding:10px 8px;text-align:left;font-family:monospace;font-size:10px;color:#555;letter-spacing:1px;text-transform:uppercase;">Ticker</th>
               <th style="padding:10px 8px;text-align:left;font-family:monospace;font-size:10px;color:#555;letter-spacing:1px;text-transform:uppercase;">Company / Headline</th>
               <th style="padding:10px 8px;text-align:left;font-family:monospace;font-size:10px;color:#555;letter-spacing:1px;text-transform:uppercase;">Category</th>
@@ -341,7 +439,7 @@ def _render_section(bucket: str, rows: list[dict]) -> str:
     return heading + body
 
 
-def _render_html(rows: list[dict], window_h: int, sub_footer_html: str = "") -> str:
+def _render_html(rows: list[dict], total_all: int = 0, sub_footer_html: str = "") -> str:
     now_uk = datetime.now(_UK_TZ)
     date_s = now_uk.strftime("%A %d %B %Y")
 
@@ -356,8 +454,9 @@ def _render_html(rows: list[dict], window_h: int, sub_footer_html: str = "") -> 
             buckets[_cap_bucket(r)].append(r)
         body = "".join(_render_section(b, buckets[b]) for b in _CAP_BUCKETS)
 
-    n_a = sum(1 for r in rows if r["tier"] == "A")
-    n_b = sum(1 for r in rows if r["tier"] == "B")
+    n_pos = sum(1 for r in rows if _sentiment(r) == "positive")
+    n_neg = sum(1 for r in rows if _sentiment(r) == "negative")
+    n_neu = sum(1 for r in rows if _sentiment(r) == "neutral")
     n_ranked = sum(1 for r in rows if r.get("llm_score") is not None)
 
     # NB: <style> in <head> + media queries are supported by every major
@@ -388,7 +487,7 @@ def _render_html(rows: list[dict], window_h: int, sub_footer_html: str = "") -> 
   <div class="digest-wrap" style="max-width:920px;margin:0 auto;padding:24px;">
     <div style="border-bottom:2px solid #f97316;padding-bottom:12px;margin-bottom:16px;">
       <h1 style="margin:0;font-size:18px;font-family:monospace;color:#f97316;letter-spacing:2px;text-transform:uppercase;">Alpha Move AI · RNS Morning Digest</h1>
-      <div style="margin-top:4px;color:#666;font-size:12px;">{date_s} · last {window_h}h · Tier A: <b>{n_a}</b> · Tier B: <b>{n_b}</b> · AI-ranked: <b>{n_ranked}</b></div>
+      <div style="margin-top:4px;color:#666;font-size:12px;">{date_s} · last 24h · {len(rows)} items · <span style="color:#10b981;">&#9650; {n_pos}</span> · <span style="color:#ef4444;">&#9660; {n_neg}</span> · <span style="color:#60a5fa;">&mdash; {n_neu}</span> · AI-ranked: <b>{n_ranked}/{total_all}</b></div>
     </div>
     {body}
     <div style="margin-top:24px;text-align:center;">
@@ -462,7 +561,7 @@ def _sub_footer(unsub_url: str, manage_url: str) -> str:
 
 
 def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
-              to_email: str, base_url: str) -> bool:
+              to_email: str, base_url: str, total_all: int = 0) -> bool:
     """Render + send one digest email with per-recipient unsub plumbing.
     Returns True on success, False on failure (errors logged, not raised)."""
     try:
@@ -474,7 +573,7 @@ def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
             "List-Unsubscribe":      f"<{unsub_url}>, <mailto:unsubscribe@alphamoveai.co.uk>",
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         }
-        html_body = _render_html(rows, _WINDOW_H, sub_footer_html=footer)
+        html_body = _render_html(rows, total_all, sub_footer_html=footer)
         result = _send_via_resend(subject, html_body, to_email, from_addr, api_key, extra_headers=headers)
         print(f"[digest] sent to {to_email} — id={result.get('id')}")
         return True
@@ -494,7 +593,8 @@ def main() -> int:
     base_url   = os.environ.get("PUBLIC_BASE_URL", "")
 
     rows = _fetch_rows(_WINDOW_H)
-    print(f"[digest] {len(rows)} rows in last {_WINDOW_H}h (Tier A+B)")
+    total_all = _count_all_rns(_WINDOW_H)
+    print(f"[digest] {len(rows)} rows in last {_WINDOW_H}h (Tier A+B, cap ≥ £{_MIN_MARKET_CAP // 1_000_000}m) of {total_all} total")
 
     now_uk = datetime.now(_UK_TZ)
     if rows:
@@ -517,7 +617,7 @@ def main() -> int:
                 email = (c.get("email") or "").strip()
                 if not email:
                     continue
-                if _send_one(api_key, from_addr, subject, rows, email, base_url):
+                if _send_one(api_key, from_addr, subject, rows, email, base_url, total_all):
                     sent += 1
                 else:
                     failed += 1
@@ -544,7 +644,7 @@ def main() -> int:
     except Exception as e:
         print(f"[digest] could not build unsub footer for fallback: {e}")
 
-    html_body = _render_html(rows, _WINDOW_H, sub_footer_html=footer)
+    html_body = _render_html(rows, total_all, sub_footer_html=footer)
     result = _send_via_resend(subject, html_body, to_addr, from_addr, api_key, extra_headers=headers)
     print(f"[digest] sent to {to_addr} — id={result.get('id')}")
     return 0
