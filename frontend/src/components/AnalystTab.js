@@ -154,6 +154,24 @@ function PriceTargetRange({ row, isMobile }) {
   const cur = pos(current);
   const upColor = upside == null ? '#94a3b8' : upside >= 0 ? '#10b981' : '#ef4444';
 
+  // Zone fill: colour brightest at the current-price edge, fading toward the
+  // outer edge — but the fade is over a FIXED distance (D, in container %), not
+  // the zone's own width. So a narrow zone (price near an end) stays coloured
+  // instead of cramming the whole gradient into a few px and going black.
+  const D = 28;
+  const zoneBg = (rgb, w, currentLeft) => {
+    const lift = Math.max(0, 1 - w / D);          // 0 for wide zones → ~1 for tiny
+    const cOut = (0.55 * lift).toFixed(3);        // outer colour alpha, lifted when narrow
+    const dark = (0.55 * (1 - lift)).toFixed(3);  // outer shade, eased off when narrow
+    const color = currentLeft
+      ? `linear-gradient(to right, rgba(${rgb},0.55), rgba(${rgb},${cOut}))`
+      : `linear-gradient(to right, rgba(${rgb},${cOut}), rgba(${rgb},0.55))`;
+    const shade = currentLeft
+      ? `linear-gradient(to right, rgba(255,255,255,0.18), rgba(0,0,0,${dark}))`
+      : `linear-gradient(to right, rgba(0,0,0,${dark}), rgba(255,255,255,0.18))`;
+    return `${color}, ${shade}, linear-gradient(#0a0a0a, #0a0a0a)`;
+  };
+
   // Mean & median markers; splay their labels outward so near-equal values don't overlap.
   const marks = [
     median != null && { name: 'Median', val: median },
@@ -168,8 +186,8 @@ function PriceTargetRange({ row, isMobile }) {
   return (
     <div style={{ position: 'relative', height: 112, marginTop: 12 }}>
       {/* Downside / upside zones (split at current) */}
-      <div style={{ ...zone, left: `${X(0)}%`, width: `${X(cur) - X(0)}%`, background: 'linear-gradient(to right, rgba(185,28,28,0), rgba(185,28,28,0.55)), linear-gradient(to right, rgba(0,0,0,0.55), rgba(255,255,255,0.18)), linear-gradient(#0a0a0a, #0a0a0a)', borderRadius: '2px 0 0 2px', boxShadow: '0 0 8px #b91c1c55, 0 2px 5px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.3)' }} />
-      <div style={{ ...zone, left: `${X(cur)}%`, width: `${X(100) - X(cur)}%`, background: 'linear-gradient(to right, rgba(5,150,105,0.55), rgba(5,150,105,0)), linear-gradient(to right, rgba(255,255,255,0.18), rgba(0,0,0,0.55)), linear-gradient(#0a0a0a, #0a0a0a)', borderRadius: '0 2px 2px 0', boxShadow: '0 0 8px #05966955, 0 2px 5px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.3)' }} />
+      <div style={{ ...zone, left: `${X(0)}%`, width: `${X(cur) - X(0)}%`, background: zoneBg('185,28,28', X(cur) - X(0), false), borderRadius: '2px 0 0 2px', boxShadow: '0 0 8px #b91c1c55, 0 2px 5px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.3)' }} />
+      <div style={{ ...zone, left: `${X(cur)}%`, width: `${X(100) - X(cur)}%`, background: zoneBg('5,150,105', X(100) - X(cur), true), borderRadius: '0 2px 2px 0', boxShadow: '0 0 8px #05966955, 0 2px 5px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.3)' }} />
 
       {/* Mean & median ticks + splayed labels */}
       {marks.map((m, i) => (
