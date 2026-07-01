@@ -4,12 +4,6 @@ import { useIsMobile, useIsTablet, useMediaQuery } from "@/hooks/useMediaQuery";
 import { API } from "@/lib/api";
 import PageHeader from "@/components/layout/PageHeader";
 
-const TIER_COLORS = {
-  A: { bg: "#1f1200", color: "#f97316", label: "Tier A" },
-  B: { bg: "#0d1a2a", color: "#60a5fa", label: "Tier B" },
-  C: { bg: "#141414", color: "#555", label: "Tier C" },
-};
-
 const CATEGORY_LABELS = {
   profit_warning: "Profit Warning",
   trading_update: "Trading Update",
@@ -97,22 +91,50 @@ function fmtAgo(iso) {
   return `${days}d ago`;
 }
 
-function TierBadge({ tier }) {
-  const c = TIER_COLORS[tier] || TIER_COLORS.C;
+const _NEG_CATS = new Set([
+  "profit_warning", "going_concern", "liquidation", "delisting", "suspension",
+]);
+const _POS_CATS = new Set([
+  "firm_offer", "recommended_offer", "drug_approval", "contract_win",
+]);
+
+const _LLM_POS = ["positive", "upside", "beat", "above expectations", "outperform", "upgrade", "bullish", "boost", "opportunity"];
+const _LLM_NEG = ["negative", "pressure", "miss", "below expectations", "concern", "decline", "downgrade", "disappoint", "warning", "bearish", "weak"];
+
+function getSentiment(r) {
+  // Layer 1: unambiguous category overrides
+  if (_NEG_CATS.has(r.category)) return "negative";
+  if (_POS_CATS.has(r.category)) return "positive";
+
+  // Layer 2: LLM thesis — scan for directional language
+  if (r.llm_thesis) {
+    const text = r.llm_thesis.toLowerCase();
+    const pos = _LLM_POS.filter((w) => text.includes(w)).length;
+    const neg = _LLM_NEG.filter((w) => text.includes(w)).length;
+    if (neg > pos) return "negative";
+    if (pos > neg) return "positive";
+  }
+
+  // Layer 3: keyword hits fallback
+  const hits = r.keyword_hits || [];
+  const neg = hits.filter((h) => h.startsWith("neg:")).length;
+  const pos = hits.filter((h) => h.startsWith("pos:")).length;
+  if (neg > pos) return "negative";
+  if (pos > neg) return "positive";
+  return "neutral";
+}
+
+function SentimentBadge({ row }) {
+  const s = getSentiment(row);
+  const map = {
+    positive: { symbol: "▲", color: "#10b981" },
+    negative: { symbol: "▼", color: "#ef4444" },
+    neutral:  { symbol: "—", color: "#444"    },
+  };
+  const { symbol, color } = map[s];
   return (
-    <span
-      style={{
-        background: c.bg,
-        color: c.color,
-        padding: "2px 8px",
-        borderRadius: 2,
-        fontSize: 10,
-        fontFamily: "monospace",
-        fontWeight: 700,
-        letterSpacing: 1,
-      }}
-    >
-      {tier}
+    <span style={{ color, fontFamily: "monospace", fontSize: 11, fontWeight: 700 }}>
+      {symbol}
     </span>
   );
 }
@@ -224,17 +246,15 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [hours, setHours] = useState(72);
-  const [minScore, setMinScore] = useState(20);
-  const [tierFilter, setTierFilter] = useState("all"); // all | A | B | C
+  const [minLlmScore, setMinLlmScore] = useState(0);
   const [search, setSearch] = useState("");
-  const [sortMode, setSortMode] = useState("llm"); // 'llm' | 'time'
   // Bumped by the manual refresh button to force a re-fetch (the backend
   // ingests on a 15-min cron, so the data on screen can lag a few minutes).
   const [manualRefresh, setManualRefresh] = useState(0);
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API}/rns/latest?min_score=${minScore}&hours=${hours}&limit=500`)
+    fetch(`${API}/rns/latest?min_score=0&hours=${hours}&limit=500`)
       .then((r) => r.json())
       .then((d) => {
         const data = Array.isArray(d) ? d : [];
@@ -243,7 +263,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
         // After initial render, try to fill in market caps for rows that
         // don't have one in the DB. The backend returns {} if no Yahoo
         // Finance API key is configured — the column shows "—" in that case.
-        fetch(`${API}/rns/market-caps?min_score=${minScore}&hours=${hours}`)
+        fetch(`${API}/rns/market-caps?min_score=0&hours=${hours}`)
           .then((r) => r.json())
           .then((mcMap) => {
             if (Object.keys(mcMap).length === 0) return;
@@ -260,11 +280,10 @@ export default function RnsTab({ refreshKey, onSelect }) {
           .catch(() => {});
       })
       .catch(() => setLoading(false));
-  }, [refreshKey, hours, minScore, manualRefresh]);
+  }, [refreshKey, hours, manualRefresh]);
 
   const filtered = useMemo(() => {
     let r = rows;
-    if (tierFilter !== "all") r = r.filter((x) => x.tier === tierFilter);
     if (search) {
       const q = search.toLowerCase();
       r = r.filter(
@@ -274,22 +293,21 @@ export default function RnsTab({ refreshKey, onSelect }) {
           x.headline?.toLowerCase().includes(q),
       );
     }
-    if (sortMode === "llm") {
-      // Ranked rows first (by llm_score desc), then unranked (by published_at desc)
-      r = [...r].sort((a, b) => {
-        const aR = a.llm_score != null,
-          bR = b.llm_score != null;
-        if (aR && bR) return b.llm_score - a.llm_score;
-        if (aR) return -1;
-        if (bR) return 1;
-        return new Date(b.published_at) - new Date(a.published_at);
-      });
+    if (minLlmScore > 0) {
+      r = r.filter((x) => x.llm_score != null && x.llm_score >= minLlmScore);
     }
+    // Ranked rows first (by llm_score desc), then unranked (by published_at desc)
+    r = [...r].sort((a, b) => {
+      const aR = a.llm_score != null,
+        bR = b.llm_score != null;
+      if (aR && bR) return b.llm_score - a.llm_score;
+      if (aR) return -1;
+      if (bR) return 1;
+      return new Date(b.published_at) - new Date(a.published_at);
+    });
     return r;
-  }, [rows, tierFilter, search, sortMode]);
+  }, [rows, search, minLlmScore]);
 
-  const tierA = useMemo(() => rows.filter((r) => r.tier === "A"), [rows]);
-  const tierB = useMemo(() => rows.filter((r) => r.tier === "B"), [rows]);
   const ranked = useMemo(() => rows.filter((r) => r.llm_score != null), [rows]);
 
   // Bucket filtered rows by FTSE index — same logic as the digest email.
@@ -386,7 +404,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               {date ? `${date} ` : ""}
               {time}
             </span>
-            <TierBadge tier={r.tier} />
+            <SentimentBadge row={r} />
             {r.ticker &&
               (r.symbol ? (
                 <span
@@ -505,8 +523,8 @@ export default function RnsTab({ refreshKey, onSelect }) {
           );
         })()}
       </td>
-      <td style={S.td}>
-        <TierBadge tier={r.tier} />
+      <td style={{ ...S.td, textAlign: "center", paddingLeft: 4, paddingRight: 4 }}>
+        <SentimentBadge row={r} />
       </td>
       <td
         style={{
@@ -692,9 +710,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
             </span>
             <span style={{ color: "#444" }}>·</span>
             <span>
-              Tier A: <span style={{ color: "#f97316" }}>{tierA.length}</span>
-              {"  "}Tier B: <span style={{ color: "#60a5fa" }}>{tierB.length}</span>
-              {"  "}AI: <span style={{ color: "#10b981" }}>{ranked.length}</span>
+              AI Ranked: <span style={{ color: "#10b981" }}>{ranked.length}</span>
               {"  "}Total: <span style={{ color: "#e5e5e5" }}>{rows.length}</span>
             </span>
             <span style={{ color: "#444" }}>·</span>
@@ -713,127 +729,86 @@ export default function RnsTab({ refreshKey, onSelect }) {
       />
 
       {/* Controls */}
-      <div
-        style={{
-          ...S.card,
-          marginBottom: 16,
-          display: "flex",
-          gap: 16,
-          alignItems: "center",
-          flexWrap: "wrap",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            style={{
-              fontSize: 10,
-              color: "#555",
-              letterSpacing: 1,
-              textTransform: "uppercase",
-              fontFamily: "monospace",
-            }}
-          >
-            Window
-          </span>
-          <select
-            value={hours}
-            onChange={(e) => setHours(Number(e.target.value))}
-            style={{
-              background: "#0a0a0a",
-              color: "#e5e5e5",
-              border: "1px solid #2a2a2a",
-              padding: "4px 8px",
-              fontFamily: "monospace",
-              fontSize: 11,
-              borderRadius: 2,
-            }}
-          >
-            <option value={6}>6 hours</option>
-            <option value={12}>12 hours</option>
-            <option value={24}>24 hours</option>
-            <option value={48}>48 hours</option>
-            <option value={72}>72 hours</option>
-            <option value={168}>1 week</option>
-          </select>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            style={{
-              fontSize: 10,
-              color: "#555",
-              letterSpacing: 1,
-              textTransform: "uppercase",
-              fontFamily: "monospace",
-            }}
-          >
-            Min score
-          </span>
-          <select
-            value={minScore}
-            onChange={(e) => setMinScore(Number(e.target.value))}
-            style={{
-              background: "#0a0a0a",
-              color: "#e5e5e5",
-              border: "1px solid #2a2a2a",
-              padding: "4px 8px",
-              fontFamily: "monospace",
-              fontSize: 11,
-              borderRadius: 2,
-            }}
-          >
-            <option value={0}>0 (all)</option>
-            <option value={20}>20</option>
-            <option value={40}>40 (Tier B+)</option>
-            <option value={60}>60 (Tier A+)</option>
-            <option value={75}>75 (high)</option>
-          </select>
-        </div>
-
-        <div style={{ display: "flex", gap: 4 }}>
-          {["all", "A", "B", "C"].map((t) => (
-            <button
-              key={t}
-              onClick={() => setTierFilter(t)}
-              style={S.pill(tierFilter === t)}
+      {(() => {
+        const windowDropdown = (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <span style={{ fontSize: 10, color: "#555", letterSpacing: 1, textTransform: "uppercase", fontFamily: "monospace" }}>
+              Window
+            </span>
+            <select
+              value={hours}
+              onChange={(e) => setHours(Number(e.target.value))}
+              style={{ background: "#0a0a0a", color: "#e5e5e5", border: "1px solid #2a2a2a", padding: "4px 8px", fontFamily: "monospace", fontSize: 11, borderRadius: 2 }}
             >
-              {t === "all" ? "All tiers" : `Tier ${t}`}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", gap: 4 }}>
-          <button
-            onClick={() => setSortMode("llm")}
-            style={S.pill(sortMode === "llm")}
-          >
-            Sort: AI score
-          </button>
-          <button
-            onClick={() => setSortMode("time")}
-            style={S.pill(sortMode === "time")}
-          >
-            Sort: Time
-          </button>
-        </div>
-
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Filter ticker / company / headline…"
-          style={{
-            background: "#0a0a0a",
-            border: "1px solid #2a2a2a",
-            color: "#e5e5e5",
-            padding: "6px 10px",
-            borderRadius: 2,
-            fontFamily: "monospace",
-            fontSize: 11,
-            flex: 1,
-            minWidth: 200,
-          }}
-        />
-      </div>
+              <option value={6}>6 hours</option>
+              <option value={12}>12 hours</option>
+              <option value={24}>24 hours</option>
+              <option value={48}>48 hours</option>
+              <option value={72}>72 hours</option>
+              <option value={168}>1 week</option>
+            </select>
+          </div>
+        );
+        const scoreCount = (
+          <span style={{ fontFamily: "monospace", whiteSpace: "nowrap", textAlign: "right" }}>
+            <span style={{ fontSize: 11, color: "#888" }}>AI </span>
+            <span style={{ fontSize: 11, color: minLlmScore >= 75 ? "#f97316" : minLlmScore >= 50 ? "#60a5fa" : minLlmScore >= 25 ? "#94a3b8" : "#888" }}>
+              {minLlmScore > 0 ? `${minLlmScore}+` : "All"}
+            </span>
+            <span style={{ fontSize: 11, color: "#888" }}>{" "}({filtered.length} news items)</span>
+          </span>
+        );
+        const sliderLabel = (
+          <span style={{ fontSize: 10, color: "#555", letterSpacing: 1, textTransform: "uppercase", fontFamily: "monospace" }}>
+            AI Score
+          </span>
+        );
+        const sliderInput = (
+          <input
+            type="range"
+            min={0} max={100} step={5}
+            value={minLlmScore}
+            onChange={(e) => setMinLlmScore(Number(e.target.value))}
+            style={{ flex: 1, width: "100%", accentColor: "#f97316", cursor: "pointer" }}
+          />
+        );
+        const searchInput = (
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter ticker / company / headline…"
+            style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e5e5e5", padding: "6px 10px", borderRadius: 2, fontFamily: "monospace", fontSize: 11, width: "100%", boxSizing: "border-box" }}
+          />
+        );
+        return isMobile ? (
+          <div style={{ ...S.card, marginBottom: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              {windowDropdown}
+              <span style={{ marginLeft: "auto" }}>{scoreCount}</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {sliderLabel}
+              {sliderInput}
+            </div>
+            {searchInput}
+          </div>
+        ) : (
+          <div style={{ ...S.card, marginBottom: 16, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+            {windowDropdown}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 220px", minWidth: 160 }}>
+              {sliderLabel}
+              {sliderInput}
+              {scoreCount}
+            </div>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Filter ticker / company / headline…"
+              style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e5e5e5", padding: "6px 10px", borderRadius: 2, fontFamily: "monospace", fontSize: 11, flex: 1, minWidth: 200 }}
+            />
+          </div>
+        );
+      })()}
 
       {/* Bucketed tables — one section per FTSE cap bucket. */}
       {filtered.length === 0 && (
@@ -924,7 +899,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
                 {!isMobile && (
                   <colgroup>
                     <col style={{ width: 64 }} />{/* Time */}
-                    <col style={{ width: 56 }} />{/* Tier */}
+                    <col style={{ width: 80 }} />{/* Sentiment */}
                     <col style={{ width: 80 }} />{/* Mkt Cap */}
                     <col style={{ width: 96 }} />{/* Ticker */}
                     <col style={{ width: 130 }} />{/* Company */}
@@ -939,7 +914,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
                 <thead>
                   <tr style={{ borderBottom: "1px solid #2a2a2a" }}>
                     <th style={S.th}>Time</th>
-                    <th style={S.th}>Tier</th>
+                    <th style={{ ...S.th, textAlign: "center" }}>Sentiment</th>
                     <th
                       style={{
                         ...S.th,
