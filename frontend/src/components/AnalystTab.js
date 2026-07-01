@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer
@@ -45,9 +45,11 @@ const LABEL_COLORS = {
 // all-one-side book fills exactly to that edge and the spine stays put at 50%.
 function ConsensusDivergingBar({ row, isMobile }) {
   const [hover, setHover] = useState(null);
-  const total = row.total_analysts || 0;
-  if (!total) return <div style={{ color: '#444', fontSize: 12 }}>No consensus data</div>;
+  const [staggered, setStaggered] = useState(false);
+  const labelWrapRef = useRef(null);
+  const segsRef = useRef([]);
 
+  const total = row.total_analysts || 0;
   const counts = {
     strong_sell: row.strong_sell || 0, sell: row.sell || 0, hold: row.hold || 0,
     buy: row.buy || 0, strong_buy: row.strong_buy || 0,
@@ -57,7 +59,7 @@ function ConsensusDivergingBar({ row, isMobile }) {
   // of the total, with a small gap between them, filling a target fraction of
   // the card. Fill nearly the whole width on mobile so blocks don't get squished.
   const ORDER = ['strong_sell', 'sell', 'hold', 'buy', 'strong_buy'];
-  const active = ORDER.filter((k) => counts[k] > 0);
+  const active = total ? ORDER.filter((k) => counts[k] > 0) : [];
   const GAP = 1.2;                                   // container %
   const fill = isMobile ? 98 : 52;                   // target width of the run
   const scale = (fill - Math.max(0, active.length - 1) * GAP) / 100;
@@ -68,20 +70,50 @@ function ConsensusDivergingBar({ row, isMobile }) {
     x += width + GAP;
     return seg;
   });
+  segsRef.current = segs;
+
+  // Stagger the labels onto two rows only when they'd actually overlap on one
+  // line — measure each label's real width against its block-centre position.
+  // Re-checks on resize so it un-staggers when there's room.
+  const staggerKey = segs.map((s) => `${s.k}${s.width.toFixed(1)}`).join('|');
+  useEffect(() => {
+    const wrap = labelWrapRef.current;
+    if (!wrap) return;
+    const measure = () => {
+      const cw = wrap.offsetWidth;
+      const s = segsRef.current;
+      const kids = Array.from(wrap.children);
+      if (!cw || kids.length !== s.length || kids.length < 2) { setStaggered(false); return; }
+      let overlap = false, prevRight = -Infinity;
+      for (let i = 0; i < kids.length; i++) {
+        const center = ((s[i].left + s[i].width / 2) / 100) * cw;
+        const half = kids[i].offsetWidth / 2;
+        if (center - half < prevRight + 4) { overlap = true; break; }
+        prevRight = center + half;
+      }
+      setStaggered(overlap);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, [staggerKey]);
+
+  if (!total) return <div style={{ color: '#444', fontSize: 12 }}>No consensus data</div>;
 
   const lowCoverage = total < 3;
 
   return (
     <div>
       {/* Segment labels above the bar — every rating shown, each centred over
-          its block. Single line on desktop; staggered onto two rows on mobile
-          where narrow adjacent blocks would otherwise collide. */}
-      <div style={{ position: 'relative', height: isMobile ? 30 : 16, marginBottom: 2 }}>
+          its block. Single line by default; staggered onto two rows only when
+          the labels would actually overlap (measured, see effect above). */}
+      <div ref={labelWrapRef} style={{ position: 'relative', height: staggered ? 30 : 16, marginBottom: 2 }}>
         {segs.map(({ k, left, width }, i) => (
           <div
             key={k}
             style={{
-              position: 'absolute', left: `${left + width / 2}%`, top: isMobile && i % 2 ? 15 : 0,
+              position: 'absolute', left: `${left + width / 2}%`, top: staggered && i % 2 ? 15 : 0,
               transform: 'translateX(-50%)', whiteSpace: 'nowrap',
               fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color: LABEL_COLORS[k],
               opacity: hover && hover !== k ? 0.35 : 1, transition: 'opacity 0.15s',
