@@ -125,7 +125,7 @@ function ConsensusDivergingBar({ row, isMobile }) {
       </div>
 
       {/* Bar */}
-      <div style={{ position: 'relative', height: 34, marginBottom: 8 }}>
+      <div style={{ position: 'relative', height: 34, marginBottom: 16 }}>
         {/* Baseline track — grounds the centred blocks on a full-width rail. */}
         <div style={{
           position: 'absolute', top: '50%', left: 0, right: 0, height: 8,
@@ -191,13 +191,15 @@ function PriceTargetRange({ row, isMobile }) {
   // the zone's own width. So a narrow zone (price near an end) stays coloured
   // instead of cramming the whole gradient into a few px and going black.
   const D = 28;
+  const peak = isMobile ? 0.72 : 0.55;            // colour intensity at the price
+  const shadeMax = isMobile ? 0.42 : 0.55;        // max darkening at the outer edge
   const zoneBg = (rgb, w, currentLeft) => {
     const lift = Math.max(0, 1 - w / D);          // 0 for wide zones → ~1 for tiny
-    const cOut = (0.55 * lift).toFixed(3);        // outer colour alpha, lifted when narrow
-    const dark = (0.55 * (1 - lift)).toFixed(3);  // outer shade, eased off when narrow
+    const cOut = (peak * lift).toFixed(3);        // outer colour alpha, lifted when narrow
+    const dark = (shadeMax * (1 - lift)).toFixed(3); // outer shade, eased off when narrow
     const color = currentLeft
-      ? `linear-gradient(to right, rgba(${rgb},0.55), rgba(${rgb},${cOut}))`
-      : `linear-gradient(to right, rgba(${rgb},${cOut}), rgba(${rgb},0.55))`;
+      ? `linear-gradient(to right, rgba(${rgb},${peak}), rgba(${rgb},${cOut}))`
+      : `linear-gradient(to right, rgba(${rgb},${cOut}), rgba(${rgb},${peak}))`;
     const shade = currentLeft
       ? `linear-gradient(to right, rgba(255,255,255,0.18), rgba(0,0,0,${dark}))`
       : `linear-gradient(to right, rgba(0,0,0,${dark}), rgba(255,255,255,0.18))`;
