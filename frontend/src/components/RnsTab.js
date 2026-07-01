@@ -681,12 +681,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
             }}
           >
             <span style={{ display: "inline-flex", alignItems: "baseline", gap: 8 }}>
-              Last updated:{" "}
-              <span style={{ color: "#888" }}>{fmtAgo(lastUpdatedAt)}</span>
+              Last available update:{" "}
               {lastUpdatedAt && (
-                <span style={{ color: "#444", marginLeft: 6 }}>
-                  ({fmtTime(lastUpdatedAt)})
-                </span>
+                <span style={{ color: "#888" }}>{fmtTime(lastUpdatedAt)}</span>
               )}
               <button
                 type="button"
