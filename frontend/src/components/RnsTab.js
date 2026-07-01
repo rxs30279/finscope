@@ -245,7 +245,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const isNarrow = useMediaQuery("(max-width: 640px)");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [hours, setHours] = useState(72);
+  const [hours, setHours] = useState(24);
   const [minLlmScore, setMinLlmScore] = useState(50);
   const [search, setSearch] = useState("");
   // Bumped by the manual refresh button or the auto-poll to force a re-fetch.
