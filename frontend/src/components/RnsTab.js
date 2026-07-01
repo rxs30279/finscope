@@ -129,7 +129,7 @@ function SentimentBadge({ row }) {
   const map = {
     positive: { symbol: "▲", color: "#10b981" },
     negative: { symbol: "▼", color: "#ef4444" },
-    neutral:  { symbol: "—", color: "#444"    },
+    neutral:  { symbol: "—", color: "#60a5fa" },
   };
   const { symbol, color } = map[s];
   return (
