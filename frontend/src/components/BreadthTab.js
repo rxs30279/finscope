@@ -143,10 +143,12 @@ function BreadthGauge({ value }) {
 // (the FTSE 100 universe) so the full span represents 2 × max.
 const TRACK_SHADOW = [
   '0 2px 4px rgba(0,0,0,0.95)',              // cast shadow below the track
-  'inset 0 4px 9px rgba(0,0,0,0.92)',        // deep channel / recessed depth
+  'inset 0 3px 8px rgba(0,0,0,0.85)',        // channel / recessed depth
   'inset 0 -1px 2px rgba(255,255,255,0.06)',// inner bottom glint
 ].join(', ');
 const FILL_OVERLAY = 'linear-gradient(to bottom, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.04) 38%, rgba(0,0,0,0.32) 100%)';
+// Diagonal hatch for the empty track channel so it reads as textured "unfilled".
+const TRACK_PATTERN = 'repeating-linear-gradient(45deg, #101010 0, #101010 5px, #1a1a1a 5px, #1a1a1a 10px)';
 function DivergingBar({ leftLabel, leftValue, leftColor, rightLabel, rightValue, rightColor, max = 100 }) {
   const lp = (leftValue != null && leftValue > 0) ? Math.min(100, (leftValue / max) * 100) : 0;
   const rp = (rightValue != null && rightValue > 0) ? Math.min(100, (rightValue / max) * 100) : 0;
@@ -160,13 +162,13 @@ function DivergingBar({ leftLabel, leftValue, leftColor, rightLabel, rightValue,
       </div>
       <div style={{ display:'flex', height:26, gap:8 }}>
         {/* left bar — fill anchored to the centre, growing left */}
-        <div style={{ flex:1, background:'#0a0a0a', boxSizing:'border-box', borderRadius:3, display:'flex', justifyContent:'flex-end', overflow:'hidden', boxShadow:TRACK_SHADOW }}>
+        <div style={{ flex:1, background:TRACK_PATTERN, boxSizing:'border-box', borderRadius:3, display:'flex', justifyContent:'flex-end', overflow:'hidden', boxShadow:TRACK_SHADOW }}>
           <div style={{ width:`${lp}%`, height:'100%', background:leftColor, transition:'width .3s ease', position:'relative', overflow:'hidden', borderRadius:3 }}>
             <div style={{ position:'absolute', inset:0, background:FILL_OVERLAY, boxShadow:`inset 0 0 0 1px ${leftColor}, inset 0 0 14px 2px ${leftColor}, inset 0 0 6px 1px ${leftColor}, inset 0 0 2px ${leftColor}` }} />
           </div>
         </div>
         {/* right bar — fill anchored to the centre, growing right */}
-        <div style={{ flex:1, background:'#0a0a0a', boxSizing:'border-box', borderRadius:3, overflow:'hidden', boxShadow:TRACK_SHADOW }}>
+        <div style={{ flex:1, background:TRACK_PATTERN, boxSizing:'border-box', borderRadius:3, overflow:'hidden', boxShadow:TRACK_SHADOW }}>
           <div style={{ width:`${rp}%`, height:'100%', background:rightColor, transition:'width .3s ease', position:'relative', overflow:'hidden', borderRadius:3 }}>
             <div style={{ position:'absolute', inset:0, background:FILL_OVERLAY, boxShadow:`inset 0 0 0 1px ${rightColor}, inset 0 0 14px 2px ${rightColor}, inset 0 0 6px 1px ${rightColor}, inset 0 0 2px ${rightColor}` }} />
           </div>
@@ -303,9 +305,9 @@ export default function BreadthTab({ refreshKey }) {
           </div>
           {/* Desktop: absolute so it doesn't shrink the bar's centring region —
               keeps this bar aligned with the highs/lows bar across the 3-col row.
-              Mobile (stacked, short card): in normal flow below the bar so it
-              can't overlap it. */}
-          <div style={{ position:'absolute', left:16, bottom: isMobile ? 8 : 40 }}>
+              Mobile (stacked, short card): in normal flow below the bar with its
+              own vertical space so it can't overlap it. */}
+          <div style={isMobile ? { marginTop: 16, marginBottom: 4 } : { position:'absolute', left:16, bottom: 40 }}>
             <Toggle on={showAdLine} onChange={setShowAdLine} label={`${showAdLine ? 'Hide' : 'Show'} A/D line`} />
           </div>
           <CornerStamp>Current</CornerStamp>
