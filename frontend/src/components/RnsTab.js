@@ -254,7 +254,8 @@ export default function RnsTab({ refreshKey, onSelect }) {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API}/rns/latest?min_score=0&hours=${hours}&limit=500`)
+    const bust = manualRefresh > 0 ? `&_t=${Date.now()}` : "";
+    fetch(`${API}/rns/latest?min_score=0&hours=${hours}&limit=500${bust}`)
       .then((r) => r.json())
       .then((d) => {
         const data = Array.isArray(d) ? d : [];
