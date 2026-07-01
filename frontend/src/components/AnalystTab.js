@@ -9,11 +9,8 @@ import { fmt, fmtUKDate } from "@/lib/format";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import InfoDot from "@/components/InfoDot";
 
-const CONSENSUS_COLORS = {
-  Buy:  { bg: '#0d3320', color: '#10b981' },
-  Hold: { bg: '#1a1400', color: '#f59e0b' },
-  Sell: { bg: '#2a0d0d', color: '#ef4444' },
-};
+// Text colour for the consensus label in the caption line.
+const CONSENSUS_TEXT = { Buy: '#10b981', Hold: '#94a3b8', Sell: '#ef4444' };
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -25,109 +22,191 @@ const fmtTickDate = (s) => {
   return `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}`;
 };
 
-function ConsensusBadge({ value }) {
-  if (!value) return <span style={{ color: '#444' }}>—</span>;
-  const c = CONSENSUS_COLORS[value] || { bg: '#1a1a1a', color: '#94a3b8' };
-  return (
-    <span style={{
-      ...c, padding: '3px 10px', borderRadius: 2,
-      fontSize: 11, fontFamily: 'monospace', fontWeight: 700
-    }}>
-      {value}
-    </span>
-  );
-}
+// Rating buckets rendered outward from the neutral spine: mild (sell/buy) sit
+// inside next to Hold, strong ratings sit on the outer edges.
+const RATING_COLORS = {
+  strong_sell: '#b91c1c', sell: '#ef4444', hold: '#4b5563',
+  buy: '#10b981', strong_buy: '#059669',
+};
+const RATING_LABELS = {
+  strong_sell: 'Strong Sell', sell: 'Sell', hold: 'Hold',
+  buy: 'Buy', strong_buy: 'Strong Buy',
+};
+// Brighter, roughly luminance-matched tints for the labels — mild and strong
+// variants share a tint so the text reads at equal brightness (the block fills
+// still distinguish strong vs mild). More legible than the dark fill colours.
+const LABEL_COLORS = {
+  strong_sell: '#f87171', sell: '#f87171', hold: '#cbd5e1',
+  buy: '#34d399', strong_buy: '#34d399',
+};
 
-function ConsensusBar({ row }) {
+// Diverging consensus bar: Hold straddles a fixed centre spine, buys grow right,
+// sells grow left. Each analyst-share maps to half the container width, so an
+// all-one-side book fills exactly to that edge and the spine stays put at 50%.
+function ConsensusDivergingBar({ row, isMobile }) {
+  const [hover, setHover] = useState(null);
   const total = row.total_analysts || 0;
   if (!total) return <div style={{ color: '#444', fontSize: 12 }}>No consensus data</div>;
-  const segments = [
-    { key: 'strong_buy',   label: 'Strong Buy',   color: '#059669' },
-    { key: 'buy',          label: 'Buy',           color: '#10b981' },
-    { key: 'hold',         label: 'Hold',          color: '#f59e0b' },
-    { key: 'sell',         label: 'Sell',          color: '#ef4444' },
-    { key: 'strong_sell',  label: 'Strong Sell',   color: '#b91c1c' },
-  ];
+
+  const counts = {
+    strong_sell: row.strong_sell || 0, sell: row.sell || 0, hold: row.hold || 0,
+    buy: row.buy || 0, strong_buy: row.strong_buy || 0,
+  };
+
+  // Lay non-empty blocks left→right (bearish→bullish), each sized to its share
+  // of the total, with a small gap between them, filling a target fraction of
+  // the card. Fill nearly the whole width on mobile so blocks don't get squished.
+  const ORDER = ['strong_sell', 'sell', 'hold', 'buy', 'strong_buy'];
+  const active = ORDER.filter((k) => counts[k] > 0);
+  const GAP = 1.2;                                   // container %
+  const fill = isMobile ? 98 : 52;                   // target width of the run
+  const scale = (fill - Math.max(0, active.length - 1) * GAP) / 100;
+  let x = 50 - fill / 2;                             // left edge, centred
+  const segs = active.map((k) => {
+    const width = (counts[k] / total) * 100 * scale;
+    const seg = { k, left: x, width };
+    x += width + GAP;
+    return seg;
+  });
+
+  const lowCoverage = total < 3;
+
   return (
     <div>
-      <div style={{ display: 'flex', height: 24, borderRadius: 3, overflow: 'hidden', marginBottom: 10 }}>
-        {segments.map(({ key, color }) => {
-          const pct = total ? ((row[key] || 0) / total * 100) : 0;
-          if (pct === 0) return null;
-          return (
-            <div key={key} style={{ width: `${pct}%`, background: color, transition: 'width 0.3s' }} />
-          );
-        })}
-      </div>
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        {segments.map(({ key, label, color }) => (
-          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontFamily: 'monospace' }}>
-            <div style={{ width: 8, height: 8, borderRadius: 1, background: color }} />
-            <span style={{ color: '#666' }}>{label}</span>
-            <span style={{ color: '#e5e5e5', fontWeight: 700 }}>{row[key] || 0}</span>
+      {/* Segment labels above the bar — every rating shown, each centred over
+          its block. Single line on desktop; staggered onto two rows on mobile
+          where narrow adjacent blocks would otherwise collide. */}
+      <div style={{ position: 'relative', height: isMobile ? 30 : 16, marginBottom: 2 }}>
+        {segs.map(({ k, left, width }, i) => (
+          <div
+            key={k}
+            style={{
+              position: 'absolute', left: `${left + width / 2}%`, top: isMobile && i % 2 ? 15 : 0,
+              transform: 'translateX(-50%)', whiteSpace: 'nowrap',
+              fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color: LABEL_COLORS[k],
+              opacity: hover && hover !== k ? 0.35 : 1, transition: 'opacity 0.15s',
+            }}
+          >
+            {counts[k]} {RATING_LABELS[k]}
           </div>
         ))}
-        <span style={{ color: '#444', fontSize: 11 }}>({total} analysts)</span>
+      </div>
+
+      {/* Bar */}
+      <div style={{ position: 'relative', height: 34, marginBottom: 8 }}>
+        {/* Baseline track — grounds the centred blocks on a full-width rail. */}
+        <div style={{
+          position: 'absolute', top: '50%', left: 0, right: 0, height: 8,
+          transform: 'translateY(-50%)', background: '#1c1c1c',
+          border: '1px solid #262626', borderRadius: 4,
+        }} />
+        {segs.map(({ k, left, width }) => (
+          <div
+            key={k}
+            onMouseEnter={() => setHover(k)}
+            onMouseLeave={() => setHover(null)}
+            style={{
+              position: 'absolute', top: 0, bottom: 0, left: `${left}%`, width: `${width}%`,
+              // Top highlight → base colour → bottom shade for a raised, glossy block.
+              background: 'linear-gradient(to bottom, rgba(255,255,255,0.32), rgba(255,255,255,0.04) 42%, rgba(0,0,0,0.32))',
+              backgroundColor: RATING_COLORS[k],
+              borderRadius: 2,
+              // Coloured glow + drop shadow + inset top highlight (constant, no hover change).
+              boxShadow: `0 0 9px ${RATING_COLORS[k]}66, 0 2px 5px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.35)`,
+              transition: 'left 0.3s, width 0.3s',
+              cursor: 'default',
+              filter: 'brightness(0.82)',
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Caption */}
+      <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#555' }}>
+        <span style={{ color: CONSENSUS_TEXT[row.consensus] || '#94a3b8', fontWeight: 700 }}>
+          {row.consensus || '—'}
+        </span>
+        {row.buy_pct != null && <> · {row.buy_pct.toFixed(1)}% bullish</>}
+        {' · '}{total} analysts
+        {lowCoverage && <span style={{ color: '#444' }}> · thin coverage</span>}
       </div>
     </div>
   );
 }
 
-function PriceTargetRange({ row }) {
+// Zoned range band: the analyst low→high range as a band split at the current
+// price into a red downside zone (low→current) and a green upside zone
+// (current→high), so the share of the range above/below today's price reads at
+// a glance. Mean & median are marked; their labels splay so they don't collide.
+function PriceTargetRange({ row, isMobile }) {
   const { price_target_low: low, price_target_high: high,
           price_target_mean: mean, price_target_median: median,
-          current_price: current } = row;
-  if (!low || !high || !current) return <div style={{ color: '#444', fontSize: 12 }}>No price target data</div>;
-  const range = high - low;
-  if (range <= 0) return null;
-  const pct  = (v) => Math.max(0, Math.min(100, ((v - low) / range * 100)));
-  const markers = [
-    { val: current, label: 'Current', color: '#6366f1' },
-    { val: mean,    label: 'Mean',    color: '#f97316' },
-    { val: median,  label: 'Median',  color: '#a855f7' },
-  ].filter(m => m.val);
+          current_price: current, upside_pct: upside } = row;
+  if (!low || !high || !current || high <= low) {
+    return <div style={{ color: '#444', fontSize: 12 }}>No price target data</div>;
+  }
+  const span = high - low;
+  const pos = (v) => Math.max(0, Math.min(100, ((v - low) / span) * 100));
+  // Constrain the band to a centred 75% of the card on desktop; use the full
+  // width on mobile where horizontal space is scarce.
+  const INSET = isMobile ? 0 : 12.5;
+  const X = (p) => INSET + p * (100 - 2 * INSET) / 100;   // 0..100 → 12.5..87.5
+  const cur = pos(current);
+  const upColor = upside == null ? '#94a3b8' : upside >= 0 ? '#10b981' : '#ef4444';
+
+  // Mean & median markers; splay their labels outward so near-equal values don't overlap.
+  const marks = [
+    median != null && { name: 'Median', val: median },
+    mean   != null && { name: 'Mean',   val: mean },
+  ].filter(Boolean).sort((a, b) => a.val - b.val);
+
+  const AX = 42;                                   // band centre (px)
+  const mono = { fontFamily: 'monospace', whiteSpace: 'nowrap', lineHeight: 1.5 };
+  const zone = { position: 'absolute', top: AX - 18, height: 36 };
+  const endLabel = { position: 'absolute', top: AX + 30, fontSize: 10, color: '#999', ...mono };
 
   return (
-    <div>
-      <div style={{ position: 'relative', height: 28, margin: '16px 0 32px' }}>
-        {/* Track */}
-        <div style={{
-          position: 'absolute', top: '50%', left: 0, right: 0,
-          height: 4, background: '#2a2a2a', transform: 'translateY(-50%)', borderRadius: 2
-        }} />
-        {/* Buy zone (low → mean) */}
-        <div style={{
-          position: 'absolute', top: '50%',
-          left: `${pct(low)}%`, width: `${pct(mean) - pct(low)}%`,
-          height: 4, background: '#10b98144', transform: 'translateY(-50%)'
-        }} />
-        {/* Markers — labels staggered (alternating rows) so close values don't collide */}
-        {[...markers]
-          .sort((a, b) => pct(a.val) - pct(b.val))
-          .map(({ val, label, color }, i) => (
-          <div key={label} style={{
-            position: 'absolute', top: '50%', left: `${pct(val)}%`,
-            transform: 'translate(-50%, -50%)', zIndex: 2 - (i % 2),
+    <div style={{ position: 'relative', height: 112, marginTop: 12 }}>
+      {/* Downside / upside zones (split at current) */}
+      <div style={{ ...zone, left: `${X(0)}%`, width: `${X(cur) - X(0)}%`, background: 'linear-gradient(to right, rgba(185,28,28,0), rgba(185,28,28,0.55)), linear-gradient(to right, rgba(0,0,0,0.55), rgba(255,255,255,0.18)), linear-gradient(#0a0a0a, #0a0a0a)', borderRadius: '2px 0 0 2px', boxShadow: '0 0 8px #b91c1c55, 0 2px 5px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.3)' }} />
+      <div style={{ ...zone, left: `${X(cur)}%`, width: `${X(100) - X(cur)}%`, background: 'linear-gradient(to right, rgba(5,150,105,0.55), rgba(5,150,105,0)), linear-gradient(to right, rgba(255,255,255,0.18), rgba(0,0,0,0.55)), linear-gradient(#0a0a0a, #0a0a0a)', borderRadius: '0 2px 2px 0', boxShadow: '0 0 8px #05966955, 0 2px 5px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.3)' }} />
+
+      {/* Mean & median ticks + splayed labels */}
+      {marks.map((m, i) => (
+        <div key={m.name}>
+          <div style={{ position: 'absolute', top: AX - 18, height: 36, left: `${X(pos(m.val))}%`, width: 2, transform: 'translateX(-50%)', background: '#f59e0b', boxShadow: '0 0 6px #f59e0baa', zIndex: 2 }} />
+          <div style={{
+            position: 'absolute', top: 4, left: `${X(pos(m.val))}%`, fontSize: 10, color: '#f59e0b', fontWeight: 700, ...mono,
+            transform: marks.length > 1 && i === 0 ? 'translateX(-100%)' : 'none',
+            paddingRight: marks.length > 1 && i === 0 ? 5 : 0,
+            paddingLeft:  marks.length > 1 && i === 0 ? 0 : 5,
+            textAlign:    marks.length > 1 && i === 0 ? 'right' : 'left',
           }}>
-            <div style={{ width: 12, height: 12, borderRadius: '50%', background: color, border: '2px solid #0a0a0a' }} />
-            <div style={{
-              position: 'absolute', top: i % 2 ? 30 : 16, left: '50%', transform: 'translateX(-50%)',
-              fontSize: 9, color, fontFamily: 'monospace', whiteSpace: 'nowrap'
-            }}>
-              {label}<br />{val?.toFixed(0)}p
-            </div>
+            {m.name} {m.val.toFixed(0)}p
           </div>
-        ))}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#444', fontFamily: 'monospace' }}>
-        <span>Low: {low?.toFixed(0)}p</span>
-        {row.upside_pct != null && (
-          <span style={{ color: row.upside_pct >= 0 ? '#10b981' : '#ef4444', fontWeight: 700 }}>
-            {row.upside_pct >= 0 ? '+' : ''}{row.upside_pct?.toFixed(1)}% to mean target
-          </span>
+        </div>
+      ))}
+
+      {/* Current price marker */}
+      <div style={{ position: 'absolute', top: AX - 22, height: 44, left: `${X(cur)}%`, width: 2, transform: 'translateX(-50%)', background: upColor, borderRadius: 1, boxShadow: `0 0 8px ${upColor}`, zIndex: 3 }} />
+      <div style={{ position: 'absolute', top: AX + 20, left: `${X(cur)}%`, transform: 'translateX(-50%)', borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderBottom: `5px solid ${upColor}`, zIndex: 3 }} />
+      {/* Current readout under the marker */}
+      <div style={{
+        position: 'absolute', top: AX + 30, left: `${X(cur)}%`, fontSize: 10, ...mono,
+        // Anchor left/right when the price is near an edge so the label stays on-screen.
+        transform: cur < 15 ? 'none' : cur > 85 ? 'translateX(-100%)' : 'translateX(-50%)',
+        textAlign: cur < 15 ? 'left' : cur > 85 ? 'right' : 'center',
+      }}>
+        <span style={{ color: '#999' }}>Current {current.toFixed(0)}p</span>
+        {upside != null && (
+          <><br /><span style={{ color: upColor, fontWeight: 700 }}>{upside >= 0 ? '+' : ''}{upside.toFixed(1)}% to mean</span></>
         )}
-        <span>High: {high?.toFixed(0)}p</span>
       </div>
+
+      {/* Range endpoints — desktop only (crowds the current label on mobile).
+          Also dropped when the current marker sits too near that end to collide. */}
+      {!isMobile && cur > 22 && <span style={{ ...endLabel, left: `${INSET}%` }}>Low {low.toFixed(0)}p</span>}
+      {!isMobile && cur < 78 && <span style={{ ...endLabel, right: `${INSET}%`, textAlign: 'right' }}>High {high.toFixed(0)}p</span>}
     </div>
   );
 }
@@ -200,31 +279,16 @@ export default function AnalystTab({ symbol }) {
 
   return (
     <div>
-      {/* Header row: consensus label + key numbers */}
-      <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 20, flexWrap: 'wrap' }}>
-        <ConsensusBadge value={latest.consensus} />
-        {latest.buy_pct != null && (
-          <span style={{ color: '#94a3b8', fontSize: 12, fontFamily: 'monospace' }}>
-            {latest.buy_pct?.toFixed(1)}% bullish
-          </span>
-        )}
-        {latest.total_analysts != null && (
-          <span style={{ color: '#555', fontSize: 12, fontFamily: 'monospace' }}>
-            {latest.total_analysts} analysts
-          </span>
-        )}
-      </div>
-
       {/* Panel 1: Consensus bar */}
       <div style={cardStyle}>
         <p style={titleStyle}>Analyst Consensus</p>
-        <ConsensusBar row={latest} />
+        <ConsensusDivergingBar row={latest} isMobile={isMobile} />
       </div>
 
       {/* Panel 2: Price target range */}
       <div style={cardStyle}>
         <p style={titleStyle}>Price Target Range</p>
-        <PriceTargetRange row={latest} />
+        <PriceTargetRange row={latest} isMobile={isMobile} />
       </div>
 
       {/* Panels 3 + 3b: trend charts side by side (stack on mobile) */}
