@@ -108,6 +108,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
   const [quarterly, setQuarterly] = useState<any[]>([]);
   const [valuation, setValuation] = useState<any>(null);
   const [tab, setTab] = useState(initialTab || "chart");
+  const [descExpanded, setDescExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const isMobile = useIsMobile();
 
@@ -219,9 +220,18 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
     </a>
   ) : null;
 
+  const descIsLong = (meta?.description?.length || 0) > 300;
   const description = meta?.description ? (
     <p style={{ color: "#94a3b8", fontSize: 13, maxWidth: 680, lineHeight: 1.7, margin: 0 }}>
-      {meta.description.slice(0, 300)}{meta.description.length > 300 ? "…" : ""}
+      {descExpanded || !descIsLong ? meta.description : `${meta.description.slice(0, 300)}…`}
+      {descIsLong && (
+        <span
+          onClick={() => setDescExpanded((v) => !v)}
+          style={{ color: "#a78bfa", cursor: "pointer", marginLeft: 6, whiteSpace: "nowrap" }}
+        >
+          {descExpanded ? "less" : "more"}
+        </span>
+      )}
     </p>
   ) : null;
 
