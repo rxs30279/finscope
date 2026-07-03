@@ -1070,6 +1070,7 @@ _SYMBOL_GROUPS = {
     "VSVS.L": "Specialty Industrial Machinery",   # steel-industry supplier, tagged "Steel" (not a miner)
     "BNZL.L": "Industrial Distribution",          # B2B distributor, tagged "Food Distribution"
     "DCC.L": "Industrial Distribution",           # distribution/support-services group, tagged Oil & Gas
+    "HLN.L": "Household & Personal Products",     # consumer health (Sensodyne/Panadol) — staples comps, tagged "Drug Manufacturers - Specialty & Generic"
 }
 
 
@@ -1149,8 +1150,11 @@ def compute_and_store_valuations():
     peer_basis distinguishes *why* there's no estimate, so the UI isn't stuck
     saying "not enough peers" for a bank that was never eligible in the first
     place: 'industry' (estimate produced), 'excluded_sector' (financials/REITs —
-    book/NAV-valued, no peer search even attempted), or 'insufficient' (eligible
-    company, but its industry has fewer than MIN_PEERS other members).
+    book/NAV-valued, no peer search even attempted), 'insufficient' (eligible
+    company, but its industry has fewer than MIN_PEERS other members), or
+    'out_of_range' (enough peers, but the implied value tripped the sanity
+    guards — e.g. Hikma at 5.4x vs a ~12x peer median implies +200%, past
+    SANITY_MAX_ABS_UPSIDE — so the number was suppressed as indefensible).
 
     Currency-safe without FX: the upside is a ratio of same-currency quantities
     (EBITDA/net_debt/market_cap share one reporting currency per company), mapped
@@ -1231,6 +1235,10 @@ def compute_and_store_valuations():
             if fv > 0 and abs(upside * 100) <= SANITY_MAX_ABS_UPSIDE:
                 fair_value = round(fv, 2)
                 upside_pct = round(upside * 100, 1)
+        if fair_value is None:
+            # Peers existed but the guards rejected the number — flag it so the
+            # UI doesn't misreport this as "not enough peers".
+            basis = "out_of_range"
         rows_out.append((sym, fair_value, cur_price_r, upside_pct, "EV/EBITDA",
                          basis, len(peer_vals), round(peer_median, 3),
                          round(own_mult, 3), False, peer_syms))

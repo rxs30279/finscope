@@ -70,6 +70,11 @@ def test_peer_group_symbol_override_wins():
     # yfinance tags Bunzl "Food Distribution"; override routes it to its real group.
     assert _peer_group("BNZL.L", "Food Distribution") == "Industrial Distribution"
 
+def test_peer_group_haleon_is_consumer_staples_not_pharma():
+    # Haleon is consumer health (Sensodyne/Panadol) — comps are ULVR/RKT, not
+    # AZN/GSK, despite its "Drug Manufacturers - Specialty & Generic" tag.
+    assert _peer_group("HLN.L", "Drug Manufacturers - Specialty & Generic") == "Household & Personal Products"
+
 def test_peer_group_none_industry():
     assert _peer_group("ABC.L", None) is None
 

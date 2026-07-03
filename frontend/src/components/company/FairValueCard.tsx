@@ -20,7 +20,7 @@ interface ValuationData {
   current_price: number | null;
   upside_pct: number | null;
   multiple_used: string | null;
-  peer_basis: string; // 'industry' | 'sector' | 'insufficient'
+  peer_basis: string; // 'industry' | 'excluded_sector' | 'insufficient' | 'out_of_range'
   peer_count: number;
   peers: Peer[];
   caution: boolean;
@@ -75,26 +75,35 @@ export default function FairValueCard({ val }: { val: ValuationData | null }) {
 
   // Empty state — no defensible peer-based estimate. peer_basis distinguishes
   // "this sector isn't modeled at all" (banks/insurers/REITs trade on book
-  // value, not EV/EBITDA — no peer search was ever attempted) from "this
-  // company's industry genuinely has too few peers."
+  // value, not EV/EBITDA — no peer search was ever attempted), "this company's
+  // industry genuinely has too few peers", and "peers were found but the
+  // implied value tripped the sanity guards" (e.g. a very cheap name vs a much
+  // richer peer median implies >150% upside — suppressed as indefensible).
   if (!val || val.fair_value == null || val.upside_pct == null || val.current_price == null) {
     const excludedSector = val?.peer_basis === "excluded_sector";
+    const outOfRange = val?.peer_basis === "out_of_range";
     return (
       <div style={card}>
         <div style={title}>Peer Fair Value Estimate</div>
         <div style={{ color: "#777", fontSize: 14, fontFamily: "monospace", marginTop: 10 }}>
           {excludedSector
             ? "No fair-value model for this sector."
-            : "Not enough comparable peers to estimate a fair value."}
+            : outOfRange
+              ? "Peer estimate outside defensible range."
+              : "Not enough comparable peers to estimate a fair value."}
         </div>
         <p style={disclaimer}>
           {excludedSector
             ? "Banks, insurers and REITs trade on book/NAV value, not EV/EBITDA — a peer-multiple estimate would be misleading, so none is shown."
-            : "Peer-multiple estimate — needs at least 3 comparable companies in the same industry. Too few here to be meaningful."}
+            : outOfRange
+              ? "This company's peer multiples imply a fair value beyond what this method can defend (over 150% from the current price, or a negative equity value) — usually a sign the peer group doesn't reflect its economics — so no estimate is shown."
+              : "Peer-multiple estimate — needs at least 3 comparable companies in the same industry. Too few here to be meaningful."}
         </p>
         {!excludedSector && !isMobile && val?.peers && val.peers.length > 0 && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 11, color: "#666", fontFamily: "monospace" }}>Only found:</div>
+            <div style={{ fontSize: 11, color: "#666", fontFamily: "monospace" }}>
+              {outOfRange ? "Peers used:" : "Only found:"}
+            </div>
             <PeerDropdown peers={val.peers} />
           </div>
         )}
