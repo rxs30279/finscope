@@ -77,8 +77,8 @@ const FV_BANDS: { lo: number; hi: number; norm: [number, number]; color: string;
   { lo: 25, hi: 50, norm: [0, 25], color: "#16d96b", label: "Very Cheap" },
   { lo: 10, hi: 25, norm: [25, 40], color: "#7ed321", label: "Cheap" },
   { lo: -10, hi: 10, norm: [40, 60], color: "#9ca3af", label: "Near Fair" },
-  { lo: -25, hi: -10, norm: [60, 75], color: "#ff7a14", label: "Overvalued" },
-  { lo: -50, hi: -25, norm: [75, 100], color: "#ff2e3f", label: "Very Overvalued" },
+  { lo: -25, hi: -10, norm: [60, 75], color: "#ff7a14", label: "Expensive" },
+  { lo: -50, hi: -25, norm: [75, 100], color: "#ff2e3f", label: "Very Expensive" },
 ];
 function fvBandIndex(up: number) {
   const clamped = Math.max(-50, Math.min(50, up));
