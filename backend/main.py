@@ -1016,6 +1016,8 @@ def compute_and_store_scores():
 MIN_PEERS = 3  # genuine industry peers required (a 3-name median still resists one outlier)
 MAX_NET_DEBT_TO_MKT_CAP = 1.0  # leverage cap → equity-bridge amplification <= ~2x
 SANITY_MAX_ABS_UPSIDE = 150.0  # final backstop (percent) against data glitches
+MAX_PEER_MULTIPLE = 40.0  # ceiling: beyond this it's a depressed-EBITDA artifact, not pricing
+PEER_TRIM_RATIO = 3.0  # relative fences: drop peers >3x or <1/3x the group median
 # Sectors with no meaningful EV/EBITDA (book/NAV-valued). Raw GICS names as stored
 # in company_metadata.sector (see backend/sectors.py); _is_financial also catches
 # bank/insurance naming as a belt-and-braces.
@@ -1161,6 +1163,32 @@ def _peer_median(vals):
     return statistics.median(vals)
 
 
+def _trim_peer_multiples(syms, vals):
+    """Drop junk multiples from a peer set before the median is taken,
+    returning the surviving (symbols, values) parallel lists.
+
+    The median resists ONE outlier but not a cluster: Tech Hardware's median
+    sat at ~34x because four members had collapsed EBITDA (40-50x artifacts).
+    Two passes:
+      1. Absolute ceiling (MAX_PEER_MULTIPLE) — a multiple that high isn't
+         market pricing, it's a distressed denominator. This is the only pass
+         that works when the junk is the majority, so it runs first.
+      2. Median-relative fences (PEER_TRIM_RATIO) on the survivors — catches
+         mid-range misfits an absolute cap can't (a 33x test-systems maker
+         among 6x car dealerships, a 0.7x cash-pile airline among 9x leisure
+         names) while staying scale-free across cheap (oil ~3x) and expensive
+         (instruments ~25x) groups. The median element always survives its own
+         fences, so this pass never empties the set.
+    """
+    kept = [(s, v) for s, v in zip(syms, vals) if v <= MAX_PEER_MULTIPLE]
+    if not kept:
+        return [], []
+    med = statistics.median(v for _, v in kept)
+    kept = [(s, v) for s, v in kept
+            if med / PEER_TRIM_RATIO <= v <= med * PEER_TRIM_RATIO]
+    return [s for s, _ in kept], [v for _, v in kept]
+
+
 def _fair_value_upside(peer_median, r, _f):
     """Currency-safe fractional upside (fair_value / current_price - 1) via the
     EV/EBITDA equity bridge.
@@ -1185,10 +1213,12 @@ def compute_and_store_valuations():
 
     Fair value = peer-median EV/EBITDA applied via the equity bridge, for the
     narrow subset where that is defensible (see _valuation_eligible). Peers are
-    true peers only — the same yfinance industry, no sector fallback — and only
-    when at least MIN_PEERS valid peers exist; otherwise no fair value is stored
-    rather than a sector-wide median masquerading as a peer group. A final
-    SANITY_MAX_ABS_UPSIDE backstop suppresses glitch extremes.
+    true peers only — the same yfinance industry, no sector fallback — with junk
+    multiples trimmed before the median (see _trim_peer_multiples), and only
+    when at least MIN_PEERS surviving peers exist; otherwise no fair value is
+    stored rather than a sector-wide median masquerading as a peer group. A
+    final SANITY_MAX_ABS_UPSIDE backstop suppresses glitch extremes. The stored
+    peer_symbols are the peers actually used (post-trim).
 
     peer_basis distinguishes *why* there's no estimate, so the UI isn't stuck
     saying "not enough peers" for a bank that was never eligible in the first
@@ -1263,7 +1293,8 @@ def compute_and_store_valuations():
                              basis, 0, None, None, False, []))
             continue
 
-        peer_syms, peer_vals = _peer_values(sym, _peer_group(sym, r.get("industry")))
+        peer_syms, peer_vals = _trim_peer_multiples(
+            *_peer_values(sym, _peer_group(sym, r.get("industry"))))
         basis = "industry"
         if len(peer_vals) < MIN_PEERS:
             rows_out.append((sym, None, cur_price_r, None, "EV/EBITDA",

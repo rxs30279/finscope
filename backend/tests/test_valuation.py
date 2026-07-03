@@ -2,7 +2,8 @@ import sys, os, pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import (
     _valuation_eligible, _own_ev_ebitda, _peer_median, _fair_value_upside,
-    _peer_group, MAX_NET_DEBT_TO_MKT_CAP,
+    _peer_group, _trim_peer_multiples, MAX_NET_DEBT_TO_MKT_CAP,
+    MAX_PEER_MULTIPLE,
 )
 
 
@@ -124,6 +125,49 @@ def test_peer_median_odd():
 
 def test_peer_median_resists_single_extreme():
     assert _peer_median([8, 9, 10, 11, 1000]) == 10
+
+
+# ── _trim_peer_multiples (junk multiples out before the median) ─────────────────
+
+def _trim(vals):
+    syms = [f"S{i}.L" for i in range(len(vals))]
+    return _trim_peer_multiples(syms, vals)
+
+def test_trim_leaves_normal_group_alone():
+    syms, vals = _trim([8.0, 9.5, 11.0, 13.0])
+    assert vals == [8.0, 9.5, 11.0, 13.0]
+    assert syms == ["S0.L", "S1.L", "S2.L", "S3.L"]
+
+def test_trim_ceiling_drops_depressed_ebitda_artifacts():
+    # Fevara-class values (collapsed EBITDA) go regardless of the group shape.
+    _, vals = _trim([8.0, 9.5, 11.0, MAX_PEER_MULTIPLE + 1, 1020.0])
+    assert vals == [8.0, 9.5, 11.0]
+
+def test_trim_ceiling_works_when_junk_is_the_majority():
+    # The Tech Hardware case: a cluster of 40-50x artifacts made the raw median
+    # ~27x; relative fences alone can't fix a contaminated median, the absolute
+    # ceiling running first can.
+    _, vals = _trim([11.6, 14.1, 18.1, 27.3, 44.5, 49.2, 49.9])
+    assert vals == [11.6, 14.1, 18.1, 27.3]
+
+def test_trim_relative_fence_drops_high_misfit():
+    # A 33x test-systems maker among ~6x car dealerships: below the absolute
+    # ceiling but >3x the group median.
+    _, vals = _trim([4.2, 6.8, 8.6, 33.0])
+    assert vals == [4.2, 6.8, 8.6]
+
+def test_trim_relative_fence_drops_low_misfit():
+    # A 0.7x cash-pile outlier among ~9x leisure names.
+    _, vals = _trim([0.7, 8.0, 9.3, 13.9])
+    assert vals == [8.0, 9.3, 13.9]
+
+def test_trim_keeps_syms_and_vals_parallel():
+    syms, vals = _trim([0.7, 8.0, 50.0, 9.3])
+    assert syms == ["S1.L", "S3.L"]
+    assert vals == [8.0, 9.3]
+
+def test_trim_all_junk_returns_empty():
+    assert _trim([500.0, 1020.0]) == ([], [])
 
 
 # ── _fair_value_upside (currency-safe EV/EBITDA bridge) ─────────────────────────
