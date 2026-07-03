@@ -1021,6 +1021,26 @@ SANITY_MAX_ABS_UPSIDE = 150.0  # final backstop (percent) against data glitches
 # bank/insurance naming as a belt-and-braces.
 _EXCLUDED_SECTORS = {"Financial Services", "Real Estate"}
 
+# Financial firms and investment trusts that yfinance tags with an *operating*
+# sector, so the sector/naming checks miss them. All are Financials in the LSE's
+# official ICB classification (issuer list, cross-checked 2026-07).
+_EXCLUDED_SYMBOLS = {
+    "XPS.L",   # XPS Pensions — pensions consulting/admin, tagged Consumer Cyclical "Personal Services"
+    "IBT.L",   # International Biotechnology Trust — a fund, tagged Healthcare "Biotechnology"
+    "UKW.L",   # Greencoat UK Wind — renewables fund, tagged Utilities
+    "TRIG.L",  # Renewables Infrastructure Group — renewables fund, tagged Utilities
+}
+
+
+def _valuation_excluded(r):
+    """True when a company has no meaningful EV/EBITDA basis: financials/REITs
+    by sector or naming, plus the symbol-level exceptions above. Applied both to
+    the subject company (no estimate) and to peer candidates (a trust's multiple
+    must not sit in an operating peer group's median)."""
+    sector = r.get("sector") or ""
+    return (sector in _EXCLUDED_SECTORS or _is_financial(r)
+            or r.get("symbol") in _EXCLUDED_SYMBOLS)
+
 # yfinance over-splits some industries, stranding true peers below MIN_PEERS
 # (e.g. AZN + GSK alone in "Drug Manufacturers - General"; SHEL + BP alone in
 # "Oil & Gas Integrated"). Merge the over-split ones into a single analytical peer
@@ -1071,6 +1091,9 @@ _SYMBOL_GROUPS = {
     "BNZL.L": "Industrial Distribution",          # B2B distributor, tagged "Food Distribution"
     "DCC.L": "Industrial Distribution",           # distribution/support-services group, tagged Oil & Gas
     "HLN.L": "Household & Personal Products",     # consumer health (Sensodyne/Panadol) — staples comps, tagged "Drug Manufacturers - Specialty & Generic"
+    "HLMA.L": "Scientific & Technical Instruments",  # safety/health sensor maker, tagged "Conglomerates"; ICB: Electronic Equipment & Parts
+    "BAB.L": "Aerospace & Defense",               # defence services, tagged "Engineering & Construction"; ICB: Aerospace & Defence
+    "MRO.L": "Aerospace & Defense",               # pure aero since the GKN breakup, tagged "Specialty Industrial Machinery"; ICB: Aerospace & Defence
 }
 
 
@@ -1093,8 +1116,7 @@ def _valuation_eligible(r, _f):
     comment above). Financials/REITs, loss-makers and highly-levered names return
     None and get no estimate.
     """
-    sector = r.get("sector") or ""
-    if sector in _EXCLUDED_SECTORS or _is_financial(r):
+    if _valuation_excluded(r):
         return None
     ni = _f(r.get("net_income"))
     ebitda = _f(r.get("ebitda"))
@@ -1186,12 +1208,17 @@ def compute_and_store_valuations():
 
     def _peer_values(self_sym, group):
         """(symbols, values) of active members of the same peer group with a
-        valid (>0) EV/EBITDA, parallel lists in matching order."""
+        valid (>0) EV/EBITDA, parallel lists in matching order. Excluded
+        companies (financials/trusts) can't serve as peers either — today's
+        yfinance industry tags happen not to collide, but that's luck, not a
+        guarantee (e.g. a fintech tagged "Software - Application")."""
         if not group:
             return [], []
         syms, vals = [], []
         for o in universe:
             if o["symbol"] == self_sym:
+                continue
+            if _valuation_excluded(o):
                 continue
             if _peer_group(o["symbol"], o.get("industry")) != group:
                 continue
@@ -1209,9 +1236,7 @@ def compute_and_store_valuations():
 
         own_mult = _valuation_eligible(r, _f)
         if own_mult is None:
-            sector = r.get("sector") or ""
-            excluded = sector in _EXCLUDED_SECTORS or _is_financial(r)
-            basis = "excluded_sector" if excluded else "insufficient"
+            basis = "excluded_sector" if _valuation_excluded(r) else "insufficient"
             rows_out.append((sym, None, cur_price_r, None, None,
                              basis, 0, None, None, False, []))
             continue

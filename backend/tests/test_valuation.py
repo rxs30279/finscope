@@ -36,6 +36,12 @@ def test_excluded_by_is_financial_naming():
     # _is_financial catches bank/insurance naming even if sector isn't the GICS one.
     assert _valuation_eligible(_ok_row(sector="Insurance - Diversified"), _f) is None
 
+def test_excluded_by_symbol():
+    # Financial firms / investment trusts that yfinance tags with an operating
+    # sector — caught by _EXCLUDED_SYMBOLS, not the sector checks.
+    assert _valuation_eligible(_ok_row(symbol="XPS.L", sector="Consumer Cyclical"), _f) is None
+    assert _valuation_eligible(_ok_row(symbol="UKW.L", sector="Utilities"), _f) is None
+
 def test_excluded_loss_maker():
     assert _valuation_eligible(_ok_row(net_income=-1e7), _f) is None
 
@@ -74,6 +80,14 @@ def test_peer_group_haleon_is_consumer_staples_not_pharma():
     # Haleon is consumer health (Sensodyne/Panadol) — comps are ULVR/RKT, not
     # AZN/GSK, despite its "Drug Manufacturers - Specialty & Generic" tag.
     assert _peer_group("HLN.L", "Drug Manufacturers - Specialty & Generic") == "Household & Personal Products"
+
+def test_peer_group_icb_validated_overrides():
+    # Overrides confirmed against the LSE's official ICB classification (2026-07):
+    # Halma is an electronics/sensors maker, not a "Conglomerate"; Babcock and
+    # Melrose are Aerospace & Defence, not construction/machinery.
+    assert _peer_group("HLMA.L", "Conglomerates") == "Scientific & Technical Instruments"
+    assert _peer_group("BAB.L", "Engineering & Construction") == "Aerospace & Defense"
+    assert _peer_group("MRO.L", "Specialty Industrial Machinery") == "Aerospace & Defense"
 
 def test_peer_group_none_industry():
     assert _peer_group("ABC.L", None) is None
