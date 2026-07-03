@@ -241,7 +241,22 @@ def valuation(symbol: str = Query(...), response: Response = None):
     )
     if not rows:
         return {"symbol": symbol, "peer_basis": "insufficient", "fair_value": None}
-    return rows[0]
+    result = rows[0]
+    # peer_symbols only stores tickers; look up display names for the dropdown
+    # (single cheap keyed lookup, same pattern as /api/sector-constituents).
+    peer_syms = result.get("peer_symbols") or []
+    if peer_syms:
+        name_rows = query(
+            "SELECT symbol, name FROM company_metadata WHERE symbol = ANY(%s)",
+            (peer_syms,),
+        )
+        names = {r["symbol"]: r["name"] for r in name_rows}
+        result["peers"] = [
+            {"symbol": s, "name": names.get(s, s)} for s in peer_syms
+        ]
+    else:
+        result["peers"] = []
+    return result
 
 
 def _piotroski_score(row):
@@ -1128,13 +1143,21 @@ def compute_and_store_valuations():
     narrow subset where that is defensible (see _valuation_eligible). Peers are
     true peers only — the same yfinance industry, no sector fallback — and only
     when at least MIN_PEERS valid peers exist; otherwise no fair value is stored
-    (peer_basis 'insufficient') rather than a sector-wide median masquerading as a
-    peer group. A final SANITY_MAX_ABS_UPSIDE backstop suppresses glitch extremes.
+    rather than a sector-wide median masquerading as a peer group. A final
+    SANITY_MAX_ABS_UPSIDE backstop suppresses glitch extremes.
+
+    peer_basis distinguishes *why* there's no estimate, so the UI isn't stuck
+    saying "not enough peers" for a bank that was never eligible in the first
+    place: 'industry' (estimate produced), 'excluded_sector' (financials/REITs —
+    book/NAV-valued, no peer search even attempted), or 'insufficient' (eligible
+    company, but its industry has fewer than MIN_PEERS other members).
 
     Currency-safe without FX: the upside is a ratio of same-currency quantities
     (EBITDA/net_debt/market_cap share one reporting currency per company), mapped
-    onto the GBp quote price only for the displayed fair value. Run daily after the
-    price refresh. Returns a summary.
+    onto the GBp quote price only for the displayed fair value. The symbols behind
+    peer_count are also stored (peer_symbols), so the UI can name the peer group
+    rather than just show a count. Run daily after the price refresh. Returns a
+    summary.
     """
     universe = query(
         """
@@ -1158,10 +1181,11 @@ def compute_and_store_valuations():
         return float(x) if x is not None else None
 
     def _peer_values(self_sym, group):
-        """Valid (>0) EV/EBITDA values for active members of the same peer group."""
+        """(symbols, values) of active members of the same peer group with a
+        valid (>0) EV/EBITDA, parallel lists in matching order."""
         if not group:
-            return []
-        vals = []
+            return [], []
+        syms, vals = [], []
         for o in universe:
             if o["symbol"] == self_sym:
                 continue
@@ -1169,8 +1193,9 @@ def compute_and_store_valuations():
                 continue
             v = _f(o.get("ev_to_ebitda"))
             if v is not None and v > 0:
+                syms.append(o["symbol"])
                 vals.append(v)
-        return vals
+        return syms, vals
 
     rows_out = []
     for r in universe:
@@ -1180,16 +1205,19 @@ def compute_and_store_valuations():
 
         own_mult = _valuation_eligible(r, _f)
         if own_mult is None:
+            sector = r.get("sector") or ""
+            excluded = sector in _EXCLUDED_SECTORS or _is_financial(r)
+            basis = "excluded_sector" if excluded else "insufficient"
             rows_out.append((sym, None, cur_price_r, None, None,
-                             "insufficient", 0, None, None, False))
+                             basis, 0, None, None, False, []))
             continue
 
-        peer_vals = _peer_values(sym, _peer_group(sym, r.get("industry")))
+        peer_syms, peer_vals = _peer_values(sym, _peer_group(sym, r.get("industry")))
         basis = "industry"
         if len(peer_vals) < MIN_PEERS:
             rows_out.append((sym, None, cur_price_r, None, "EV/EBITDA",
                              "insufficient", len(peer_vals), None,
-                             round(own_mult, 3), False))
+                             round(own_mult, 3), False, peer_syms))
             continue
 
         peer_median = _peer_median(peer_vals)
@@ -1205,7 +1233,7 @@ def compute_and_store_valuations():
                 upside_pct = round(upside * 100, 1)
         rows_out.append((sym, fair_value, cur_price_r, upside_pct, "EV/EBITDA",
                          basis, len(peer_vals), round(peer_median, 3),
-                         round(own_mult, 3), False))
+                         round(own_mult, 3), False, peer_syms))
 
     pool = get_pool()
     conn = pool.getconn()
@@ -1217,7 +1245,7 @@ def compute_and_store_valuations():
             "INSERT INTO valuation_estimates"
             " (symbol, fair_value, current_price, upside_pct, multiple_used,"
             "  peer_basis, peer_count, peer_median_multiple, own_multiple, caution,"
-            "  computed_at)"
+            "  peer_symbols, computed_at)"
             " VALUES %s"
             " ON CONFLICT (symbol) DO UPDATE SET"
             "   fair_value           = EXCLUDED.fair_value,"
@@ -1229,9 +1257,10 @@ def compute_and_store_valuations():
             "   peer_median_multiple = EXCLUDED.peer_median_multiple,"
             "   own_multiple         = EXCLUDED.own_multiple,"
             "   caution              = EXCLUDED.caution,"
+            "   peer_symbols         = EXCLUDED.peer_symbols,"
             "   computed_at          = now()",
             rows_out,
-            template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())",
+            template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())",
             page_size=1000,
         )
         conn.commit()

@@ -1,10 +1,19 @@
 "use client";
 
+import Link from "next/link";
+import { companyHref } from "@/lib/company";
+import { useIsMobile } from "@/hooks/useMediaQuery";
+
 // Peer-relative fair value for the Valuation tab. Fed by /api/valuation: the
 // company's price vs the fair value implied by its peers' median multiple.
 // Deliberately shows an empty state rather than a number when peers are too thin
 // (peer_basis === 'insufficient' or no fair_value) — a median of one or two
 // names is noise, not a valuation.
+
+interface Peer {
+  symbol: string;
+  name: string;
+}
 
 interface ValuationData {
   fair_value: number | null;
@@ -13,7 +22,28 @@ interface ValuationData {
   multiple_used: string | null;
   peer_basis: string; // 'industry' | 'sector' | 'insufficient'
   peer_count: number;
+  peers: Peer[];
   caution: boolean;
+}
+
+function PeerDropdown({ peers }: { peers: Peer[] }) {
+  if (!peers || peers.length === 0) return null;
+  return (
+    <details style={{ marginTop: 6 }}>
+      <summary style={{ fontSize: 11, color: "#888", fontFamily: "monospace", cursor: "pointer" }}>
+        View peer companies ({peers.length})
+      </summary>
+      <ul style={{ margin: "6px 0 0", padding: 0, listStyle: "none" }}>
+        {peers.map((p) => (
+          <li key={p.symbol} style={{ fontSize: 11, fontFamily: "monospace", padding: "3px 0" }}>
+            <Link href={companyHref(p.symbol, "valuation")} style={{ color: "#999", textDecoration: "none" }}>
+              {p.name}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 const card: React.CSSProperties = {
@@ -39,18 +69,35 @@ const disclaimer: React.CSSProperties = {
 const px = (v: number) => `${Math.round(v)}p`;
 
 export default function FairValueCard({ val }: { val: ValuationData | null }) {
-  // Empty state — no defensible peer-based estimate.
+  // Peer breakdown is desktop-only — a secondary detail not worth the vertical
+  // space it costs on a phone-width Valuation tab.
+  const isMobile = useIsMobile();
+
+  // Empty state — no defensible peer-based estimate. peer_basis distinguishes
+  // "this sector isn't modeled at all" (banks/insurers/REITs trade on book
+  // value, not EV/EBITDA — no peer search was ever attempted) from "this
+  // company's industry genuinely has too few peers."
   if (!val || val.fair_value == null || val.upside_pct == null || val.current_price == null) {
+    const excludedSector = val?.peer_basis === "excluded_sector";
     return (
       <div style={card}>
         <div style={title}>Peer Fair Value Estimate</div>
         <div style={{ color: "#777", fontSize: 14, fontFamily: "monospace", marginTop: 10 }}>
-          Not enough comparable peers to estimate a fair value.
+          {excludedSector
+            ? "No fair-value model for this sector."
+            : "Not enough comparable peers to estimate a fair value."}
         </div>
         <p style={disclaimer}>
-          Peer-multiple estimate — needs at least 3 comparable companies in the same
-          industry. Too few here to be meaningful.
+          {excludedSector
+            ? "Banks, insurers and REITs trade on book/NAV value, not EV/EBITDA — a peer-multiple estimate would be misleading, so none is shown."
+            : "Peer-multiple estimate — needs at least 3 comparable companies in the same industry. Too few here to be meaningful."}
         </p>
+        {!excludedSector && !isMobile && val?.peers && val.peers.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 11, color: "#666", fontFamily: "monospace" }}>Only found:</div>
+            <PeerDropdown peers={val.peers} />
+          </div>
+        )}
       </div>
     );
   }
@@ -94,6 +141,7 @@ export default function FairValueCard({ val }: { val: ValuationData | null }) {
       <div style={{ fontSize: 11, color: "#777", fontFamily: "monospace", marginTop: 8 }}>
         Based on {val.peer_count} {val.peer_basis} {val.peer_count === 1 ? "peer" : "peers"} · {val.multiple_used}
       </div>
+      {!isMobile && <PeerDropdown peers={val.peers} />}
 
       {val.caution && (
         <div style={{ fontSize: 11, color: "#fbbf24", fontFamily: "monospace", marginTop: 6 }}>
