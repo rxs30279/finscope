@@ -448,7 +448,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
             <div>
               <div style={{ fontSize: 10, color: "#666", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
                 Risk Score
-                <InfoDot text={"Risk Score 1–10, lower is safer\n\nBlends two inputs:\n\n  • Altman Z-Score — bankruptcy-distress:\n      Z ≥ 3.0 → low risk (safe)\n      Z ≤ 1.0 → high risk (distress)\n      in between scales linearly\n\n  • Share-price volatility — annualised;\n     more volatile means higher risk.\n\nThe two are weighted — 60% Altman (inverted), 40% volatility — then rounded to the nearest whole number.\n\nBanks & insurers: the Altman Z is invalid, so it is dropped and the score uses volatility (60%) + ROE quality (40%) instead."} placement="bottom-right" />
+                <InfoDot text={"Risk Score 1–10, lower is safer\n\nEach company is scored by the model that fits its business:\n\n  • General — Altman Z-Score (60%) + volatility (40%).\n      Z ≥ 3.0 safe · Z ≤ 1.0 distress\n\n  • Asset-heavy (utilities, REITs, telecoms, miners, and low asset-turnover names like payment processors) — Altman Z″ (40%; drops the asset-turnover term: Z″ ≥ 2.6 safe · ≤ 1.1 distress) + debt service from interest cover & net-debt/EBITDA (30%) + volatility (30%).\n\n  • Banks — ROE quality (30%), equity/assets leverage (25%), price-to-book (20%), volatility (25%).\n\n  • Insurers — ROE (35%), price-to-book (25%), volatility (40%).\n\n  • Other financials — volatility (60%) + ROE (40%).\n\n  • Investment trusts — volatility only.\n\nMissing inputs hand their weight to the remaining components."} placement="bottom-right" />
               </div>
               {snap.risk_score == null ? (
                 <span style={{ fontSize: 28, fontFamily: "monospace", fontWeight: 700, color: "#444" }}>—</span>
@@ -459,7 +459,20 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
               )}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, color: "#888", fontSize: 12, fontFamily: "monospace" }}>
-              <span>Altman Z: {snap.altman_z != null ? snap.altman_z.toFixed(2) : "—"}</span>
+              {snap.risk_model === "trust" ? (
+                <span>Investment trust — volatility only</span>
+              ) : ["bank", "insurer", "financial"].includes(snap.risk_model) ? (
+                <span>
+                  {snap.risk_model === "bank" ? "Bank model: ROE · leverage · P/B"
+                    : snap.risk_model === "insurer" ? "Insurer model: ROE · P/B"
+                    : "Financial: ROE quality"} (Altman N/A)
+                </span>
+              ) : (
+                <span>Altman {snap.risk_model === "asset_heavy" ? "Z″" : "Z"}: {snap.altman_z != null ? snap.altman_z.toFixed(2) : "—"}</span>
+              )}
+              {snap.risk_model === "asset_heavy" && snap.risk_components?.debt_service != null && (
+                <span>Debt service: {snap.risk_components.debt_service}/10</span>
+              )}
               <span>Volatility: {snap.volatility_annualised != null ? `${snap.volatility_annualised}% ann.` : "—"}</span>
             </div>
           </div>

@@ -277,27 +277,34 @@ The score awards up to 2 points for each of five business-quality measures. For 
 
 **What it measures:** A composite assessment of how likely you are to suffer a large, permanent loss — blending the company's **financial-distress risk** with its **share-price volatility**. Lower is safer.
 
-**How it is calculated — two different paths:**
+**How it is calculated — every company is routed to the model that fits its business:**
 
-The app uses **two different recipes** depending on what kind of company it is, because the standard distress model (the Altman Z-Score) does not work for banks and insurers.
+One distress recipe cannot fit a supermarket, a regulated water company, a bank and an investment trust — the standard Altman Z-Score was calibrated on manufacturers and mis-reads anything whose balance sheet is structurally large or leveraged by design. The app therefore classifies each company (from its sector, industry and measured asset turnover) into one of **six models**:
 
-**Path 1 — Ordinary companies (60% Altman Z-Score + 40% Volatility):**
+| Model | Who | Recipe |
+|---|---|---|
+| **General** | Most companies | 60% Altman Z-Score + 40% volatility |
+| **Asset-heavy** | Utilities, REITs/property, energy, miners, telecoms — plus any company turning over less than 0.4× its assets (hotel groups, goodwill-heavy names, and float-carrying payment fintechs like Boku) | 40% Altman Z″ + 30% debt service + 30% volatility |
+| **Bank** | Industry contains "Banks" | 30% ROE quality + 25% leverage (equity/assets) + 20% price-to-book + 25% volatility |
+| **Insurer** | Industry contains "Insurance" | 35% ROE + 25% price-to-book + 40% volatility |
+| **Other financial** | Asset managers, capital markets, credit services | 60% volatility + 40% ROE |
+| **Investment trust** | Closed-end funds (no sector/industry classification) | Volatility only |
 
-The **Altman Z-Score** was developed in 1968 to predict corporate bankruptcy. It combines several balance-sheet and earnings ratios into a single number; a Z above 3.0 indicates a financially safe company, below ~1.8 suggests distress risk. The app converts the Z to a 1–10 component, computes a separate volatility component, and blends them 60/40.
+**Why the special cases:**
 
-**Path 2 — Financial companies, i.e. banks and insurers (60% Volatility + 40% ROE):**
+- **Asset-heavy:** the classic Z punishes low asset turnover, so a regulated water company or REIT reads as "distressed" no matter how stable it is. The **Z″ variant** (Altman's own non-manufacturer model) drops the turnover term, and a **debt-service** component (interest cover and net-debt/EBITDA) asks the question that actually matters for these businesses: *can it service its structurally large debt?*
+- **Banks & insurers:** deposits and policy liabilities are leverage by design — Altman wrongly flags even the safest bank as near-bankrupt. Banks are instead scored on profitability (ROE, blended with its multi-year median), capital (equity/assets — a CET1 proxy), and the market's own verdict (a bank below ~0.6× book is being priced for balance-sheet doubt), plus volatility.
+- **Investment trusts:** a closed-end fund's accounts look like a failing manufacturer's to any Altman variant, so only volatility is used.
 
-> **Why financials are scored differently:** A bank's or insurer's balance sheet is **leverage by design** — customer deposits and insurance policy liabilities are huge "debts" that are entirely normal for the business. Feed those into the Altman model and every term collapses, wrongly flagging even the safest bank as on the brink of bankruptcy (a risk score of 9 or 10). So for financials the app **drops Altman entirely** and instead scores them on **price volatility (60%)** plus a **Return-on-Equity quality component (40%)** — a profitable, stable bank scores low-risk; a loss-making, volatile one scores high-risk. If ROE is missing, the score falls back to volatility alone.
+The Health tab labels which model produced the score.
 
-The app detects a financial by its sector name (anything containing "financ", "bank", or "insurance"). On the Health tab, financials show **no Altman gauge** because it is not used for them.
+**Worked example (an insurer):** Aviva has annualised volatility of ~22% (volatility component 4), a through-cycle ROE component of ~5 and trades above book (price-to-book component 1). Insurer risk = round(0.35 × 5 + 0.25 × 1 + 0.40 × 4) = **4** — a moderate, sensible reading, instead of the false "10" the Altman model would have produced.
 
-**Worked example (an insurer):** Aviva has annualised volatility of ~22% (volatility component 4) and ROE of ~12% (ROE component ≈ 3.6 → 4). Financial risk = round(0.6 × 4 + 0.4 × 4) = **4** — a moderate, sensible reading, instead of the false "10" the Altman model would have produced.
-
-**What to look for:** For capital preservation, filter for Risk Score ≤ 4. Scores of 7+ warrant serious investigation into the balance sheet (ordinary companies) or the earnings stability (financials) before investing.
+**What to look for:** For capital preservation, filter for Risk Score ≤ 4. Scores of 7+ warrant serious investigation into the balance sheet (general/asset-heavy companies) or the earnings stability (financials) before investing.
 
 > **Under the hood — Risk Score (1–10)**
 >
-> **Volatility component** (used in both paths): annualised volatility `σ = stdev(daily log returns) × √252`, using the sample standard deviation over up to the last 252 daily closes (needs at least 63 closes, else blank). Mapped to 1–10 by absolute thresholds:
+> **Volatility component** (used in every model): annualised volatility `σ = stdev(daily log returns) × √252`, using the sample standard deviation over up to the last 252 daily closes (needs at least 63 closes, else blank). Daily returns are capped at ±25% so a suspension/relisting price gap cannot masquerade as volatility. Mapped to 1–10 by absolute thresholds:
 >
 > | Ann. volatility | Component |
 > |---|---|
@@ -312,16 +319,19 @@ The app detects a financial by its sector name (anything containing "financ", "b
 > | < 60% | 9 |
 > | ≥ 60% | 10 |
 >
-> **Altman component** (ordinary companies only): the app builds the Z from stored data, treating working capital (the X1 term) as 0 because it is unavailable, using book equity (market cap ÷ price-to-book) as a retained-earnings proxy, and operating income (operating margin × revenue) as the EBIT proxy: `Z = 1.4·(equity/assets) + 3.3·(EBIT/assets) + 0.6·(mktcap/liabilities) + 1.0·(revenue/assets)`. Then Z→component: `Z ≥ 3.0 → 1`, `Z ≤ 1.0 → 10`, linear between as `round(1 + (3.0 − Z) × 4.5)`.
+> **Altman terms** are built from the real stored balance sheet: X1 = working capital/assets, X2 = retained earnings/assets (book equity if unreported), X3 = operating income/assets, X4 = market cap/(assets − equity), X5 = revenue/assets.
+> - **Classic Z** (general): `Z = 1.2·X1 + 1.4·X2 + 3.3·X3 + 0.6·X4 + 1.0·X5`; component: `Z ≥ 3.0 → 1`, `Z ≤ 1.0 → 10`, linear between.
+> - **Z″** (asset-heavy): `Z″ = 6.56·X1 + 3.26·X2 + 6.72·X3 + 1.05·X4` (no turnover term); component: `Z″ ≥ 2.6 → 1`, `Z″ ≤ 1.1 → 10`, linear between.
 >
-> **ROE component** (financials only): `ROE ≥ 15% → 2`, `ROE ≤ 0% → 10`, linear between as `round(2 + (0.15 − ROE) × (8 / 0.15))`. Floored at 2 because ROE alone is a coarse proxy.
+> **Debt-service component** (asset-heavy): average of two legs — interest coverage (`≥ 6× → 1`, `≤ 0.5× → 10`) and net-debt/EBITDA (`≤ 1 → 1`, `≥ 8 → 10`; genuine net cash → 1). A missing leg is simply dropped.
 >
-> **Final blend (clamped to 1–10):**
-> - Ordinary: `round(0.6 × Altman_component + 0.4 × Vol_component)`
-> - Financial: `round(0.6 × Vol_component + 0.4 × ROE_component)`
-> - Either path falls back to whichever single component is available if the other is missing.
+> **ROE component** (financial models): computed on the average of TTM ROE and its multi-year median; `ROE ≥ 15% → 2`, `ROE ≤ 0% → 10`, linear between. Floored at 2 because ROE alone is a coarse proxy.
+>
+> **Bank extras:** leverage `equity/assets ≥ 10% → 1`, `≤ 3% → 10`; price-to-book `≥ 1.0× → 1`, `≤ 0.35× → 10` (also used for insurers).
+>
+> **Final blend (clamped to 1–10):** the weighted average of the model's components, with any missing component's weight redistributed across the rest.
 
-**Academic reference:** See Appendix A — Altman (1968). Note: Altman himself excluded financial firms from his model, which is why this app does too.
+**Academic reference:** See Appendix A — Altman (1968). Note: Altman himself excluded financial firms from his model — which is why this app scores them differently — and published the Z″ variant for non-manufacturers, which the asset-heavy model uses.
 
 ---
 
@@ -565,7 +575,7 @@ Focuses on balance sheet and financial risk:
 
 - **Current Ratio trend** — Is the ability to meet short-term obligations improving or worsening?
 - **Net Debt** — Total debt minus cash. Negative net debt (more cash than debt) is an extremely healthy position.
-- **Altman Z-Score** — See the Risk Score section (3.2). The visual risk gauge shows at a glance whether the company is in the safe, grey, or distress zone. **Note:** this gauge appears only for ordinary companies. **Banks and insurers do not show an Altman gauge** because the model is invalid for leveraged balance sheets — their risk is scored from volatility + ROE instead (see §3.2).
+- **Altman Z-Score** — See the Risk Score section (3.2). The visual risk gauge shows at a glance whether the company is in the safe, grey, or distress zone. **Note:** the card labels which risk model applies — general companies show the classic Z, asset-heavy companies (utilities, REITs, telecoms, miners, low asset-turnover names) show the **Z″ variant** with its own bands plus a debt-service reading, while **banks, insurers, other financials and investment trusts show no Altman gauge** because the model is invalid for their balance sheets — see §3.2 for what each is scored on instead.
 - **Debt/Equity trend** — Is leverage increasing (risk rising) or falling (risk reducing)?
 - **Dividend Data link** — For dividend payers where a clean stored yield is not available, a **"Dividend Data" link** is shown so you can check the company's dividend history directly.
 

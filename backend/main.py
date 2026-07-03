@@ -407,79 +407,156 @@ def _value_score(r):
 import math as _math
 
 
-def _altman_z(row, total_assets):
-    """Compute Altman Z-Score from a ttm_financials row + total_assets.
+def _lin(x, safe, risky):
+    """Map x onto a 1-10 risk component, linear between safe (→1) and risky (→10).
 
-    X1 (working capital) is treated as 0 (conservative — unavailable from stored data).
-    X2 uses book equity as a proxy for retained earnings.
-    X3 uses operating income (operating_margin * revenue) as EBIT proxy.
-    Returns None if insufficient data to compute any meaningful score.
+    Direction-agnostic: works whether safe < risky (net-debt/EBITDA) or
+    safe > risky (interest coverage, Altman Z). None in → None out.
     """
-    if not total_assets or total_assets <= 0:
+    if x is None:
         return None
+    frac = (x - safe) / (risky - safe)
+    if frac <= 0:
+        return 1
+    if frac >= 1:
+        return 10
+    return round(1 + frac * 9)
 
+
+def _weighted_blend(components):
+    """Blend (component, weight) pairs into a 1-10 score.
+
+    Weights are renormalised over the non-None components, so a missing input
+    redistributes its weight instead of dragging the score down. Returns None
+    when every component is None.
+    """
+    avail = [(c, w) for c, w in components if c is not None]
+    if not avail:
+        return None
+    total = sum(w for _, w in avail)
+    return max(1, min(10, round(sum(c * w for c, w in avail) / total)))
+
+
+_ASSET_HEAVY_SECTORS = {"Utilities", "Real Estate", "Energy", "Basic Materials"}
+# Below this revenue/total_assets the classic Z-Score is out of its calibration
+# domain: asset/goodwill-heavy names outside the sectors above (Whitbread,
+# Ocado, BATS) and float-heavy fintechs (Boku carries merchant float like a
+# bank but is filed under Technology) all read as "distressed manufacturers".
+_ASSET_HEAVY_TURNOVER = 0.4
+
+
+def _is_financial(row):
+    """True for banks/insurers/financials by sector naming.
+
+    Kept for the fair-value eligibility check (_valuation_eligible); the risk
+    score itself now routes through _classify_risk_model below, which splits
+    this group into bank / insurer / financial.
+    """
+    sector = (row.get("sector") or "").lower()
+    return "financ" in sector or "bank" in sector or "insurance" in sector
+
+
+def _classify_risk_model(row):
+    """Route a company to the risk model that fits its business.
+
+    Order matters: investment trusts (Yahoo gives them no sector/industry)
+    first, banks/insurers by industry before the broad financial-sector
+    catch-all, then asset-heavy by sector, telecom industry, or measured
+    asset turnover. See docs/superpowers/specs/2026-07-03-risk-score-v2-design.md.
+    """
+    sector = (row.get("sector") or "").lower()
+    industry = (row.get("industry") or "").lower()
+    if not sector and not industry:
+        return "trust"
+    if "bank" in industry:
+        return "bank"
+    if "insur" in industry:
+        return "insurer"
+    if "financ" in sector or "bank" in sector or "insurance" in sector:
+        return "financial"
+    if row.get("sector") in _ASSET_HEAVY_SECTORS or "telecom" in industry:
+        return "asset_heavy"
+    revenue, ta = row.get("revenue"), row.get("total_assets")
+    if revenue is not None and ta and ta > 0 and revenue / ta < _ASSET_HEAVY_TURNOVER:
+        return "asset_heavy"
+    return "general"
+
+
+def _altman_terms(row):
+    """X1-X5 ratios from real ttm_financials balance-sheet fields.
+
+    Returns a dict holding only the genuinely computable terms (a missing
+    term simply contributes nothing — conservative, since omitting a positive
+    term understates safety), or None when total_assets is unusable.
+    """
+    ta = row.get("total_assets")
+    if not ta or ta <= 0:
+        return None
+    terms = {}
+    wc = row.get("working_capital")
+    if wc is not None:
+        terms["x1"] = wc / ta
+    retained, equity = row.get("retained_earnings"), row.get("total_equity")
+    if retained is not None:
+        terms["x2"] = retained / ta
+    elif equity is not None:
+        terms["x2"] = equity / ta
+    oi = row.get("operating_income")
+    if oi is not None:
+        terms["x3"] = oi / ta
     mc = row.get("market_cap")
+    if mc and equity is not None and ta - equity > 0:
+        terms["x4"] = mc / (ta - equity)
     revenue = row.get("revenue")
-    op_margin = row.get("operating_margin")
-    p2b = row.get("price_to_book")
+    if revenue is not None:
+        terms["x5"] = revenue / ta
+    return terms or None
 
-    z = 0.0
-    computed_terms = 0
 
-    # X2 = book_equity / total_assets  (proxy for retained earnings / total_assets)
-    book_equity = None
-    if mc and p2b and p2b > 0:
-        book_equity = mc / p2b
-        z += 1.4 * (book_equity / total_assets)
-        computed_terms += 1
+_Z_WEIGHTS = {"x1": 1.2, "x2": 1.4, "x3": 3.3, "x4": 0.6, "x5": 1.0}
+# Altman Z'' (non-manufacturers): drops asset turnover (X5) and reweights, so
+# structurally asset-heavy balance sheets aren't read as distress.
+_ZDD_WEIGHTS = {"x1": 6.56, "x2": 3.26, "x3": 6.72, "x4": 1.05}
 
-    # X3 = EBIT / total_assets  (operating income as EBIT proxy)
-    if op_margin is not None and revenue:
-        ebit = op_margin * revenue
-        z += 3.3 * (ebit / total_assets)
-        computed_terms += 1
 
-    # X4 = market_cap / total_liabilities
-    if book_equity is not None:
-        total_liabilities = total_assets - book_equity
-        if total_liabilities > 0:
-            z += 0.6 * (mc / total_liabilities)
-            computed_terms += 1
-
-    # X5 = revenue / total_assets
-    if revenue:
-        z += 1.0 * (revenue / total_assets)
-        computed_terms += 1
-
-    if computed_terms == 0:
+def _z_score(terms, weights):
+    """Weighted Altman score over whichever terms are available."""
+    if not terms:
         return None
-
-    return round(z, 3)
+    used = [k for k in weights if k in terms]
+    if not used:
+        return None
+    return round(sum(weights[k] * terms[k] for k in used), 3)
 
 
 def _z_to_risk(z):
-    """Map Altman Z to 1-10 risk component. Lower Z = higher risk.
+    """Classic Altman Z → 1-10 risk. Z >= 3.0 safe, <= 1.0 distress."""
+    return _lin(z, 3.0, 1.0)
 
-    Z >= 3.0 → 1 (safe), Z <= 1.0 → 10 (distress), linear between.
-    """
-    if z is None:
-        return None
-    if z >= 3.0:
-        return 1
-    if z <= 1.0:
-        return 10
-    # Linear: z=3.0→1, z=1.0→10. Slope = (10-1)/(1.0-3.0) = -4.5
-    return round(1 + (3.0 - z) * 4.5)
+
+def _zdd_to_risk(z):
+    """Altman Z'' → 1-10 risk. Z'' >= 2.6 safe, <= 1.1 distress."""
+    return _lin(z, 2.6, 1.1)
+
+
+# Winsorise daily log returns: suspension/relisting gaps otherwise print 800%+
+# "volatility" (FXPO, SAVE) and pin the component at 10 regardless of the real
+# trading range.
+_VOL_RETURN_CAP = 0.25
 
 
 def _annualised_vol(closes):
     """Compute annualised volatility from a list of closes (oldest first).
 
-    Returns annualised std of log returns, or None if fewer than 2 prices.
+    Annualised std of winsorised daily log returns, or None if fewer than
+    2 prices.
     """
     if len(closes) < 2:
         return None
-    log_returns = [_math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    log_returns = [
+        max(-_VOL_RETURN_CAP, min(_VOL_RETURN_CAP, _math.log(closes[i] / closes[i - 1])))
+        for i in range(1, len(closes))
+    ]
     n = len(log_returns)
     mean = sum(log_returns) / n
     variance = sum((r - mean) ** 2 for r in log_returns) / (n - 1) if n > 1 else 0.0
@@ -501,31 +578,6 @@ def _vol_to_score(vol):
     return 10
 
 
-def _blend_risk(altman_component, vol_component):
-    """Combine Altman (60%) and volatility (40%) components into 1-10 score.
-
-    Falls back to whichever component is available. Returns None if both are None.
-    """
-    if altman_component is not None and vol_component is not None:
-        return max(1, min(10, round(0.6 * altman_component + 0.4 * vol_component)))
-    if altman_component is not None:
-        return max(1, min(10, altman_component))
-    if vol_component is not None:
-        return max(1, min(10, vol_component))
-    return None
-
-
-def _is_financial(row):
-    """True for banks/insurers/financials, where the Altman Z-Score is invalid.
-
-    Altman explicitly excluded financial firms: their balance sheets are mostly
-    leverage by design (deposits, policy liabilities), so every Altman term
-    collapses toward zero and the score wrongly flags them as distressed.
-    """
-    sector = (row.get("sector") or "").lower()
-    return "financ" in sector or "bank" in sector or "insurance" in sector
-
-
 def _roe_to_risk(roe):
     """Map return on equity to a 1-10 risk component for financials.
 
@@ -542,19 +594,42 @@ def _roe_to_risk(roe):
     return round(2 + (0.15 - roe) * (8 / 0.15))
 
 
-def _financial_risk(roe_component, vol_component):
-    """Risk for financials: 60% volatility + 40% ROE/quality, no Altman.
+def _roe_blend(row):
+    """Average of TTM ROE and its multi-year median — a through-cycle quality
+    read, so one flattering or ugly IFRS year can't dominate."""
+    vals = [v for v in (row.get("roe"), row.get("roe_median")) if v is not None]
+    return sum(vals) / len(vals) if vals else None
 
-    Falls back to whichever component is available (volatility-only when ROE is
-    missing); returns None if neither is available.
+
+def _debt_service_component(row):
+    """1-10 debt-service risk from interest coverage + net-debt/EBITDA.
+
+    The right lens for structurally leveraged balance sheets — distinguishes
+    Severn Trent (large but serviceable debt) from Tullow (not). Averages
+    whichever legs are available: net cash → 1; EBITDA <= 0 drops the
+    ND/EBITDA leg (negative interest coverage already carries that signal).
+
+    Coverage band: regulated utilities structurally run 2-3x cover, so "safe"
+    starts at 6x rather than the sub-1x that actually signals distress.
     """
-    if roe_component is not None and vol_component is not None:
-        return max(1, min(10, round(0.6 * vol_component + 0.4 * roe_component)))
-    if vol_component is not None:
-        return max(1, min(10, vol_component))
-    if roe_component is not None:
-        return max(1, min(10, roe_component))
-    return None
+    legs = []
+    ic = row.get("interest_coverage")
+    if ic is not None:
+        legs.append(_lin(ic, 6.0, 0.5))
+    nd, ebitda = row.get("net_debt"), row.get("ebitda")
+    # updater.py derives net_debt = st_debt + lt_debt - cash even when both
+    # debt fields are NULL, so a missing balance sheet prints as "net cash"
+    # (PHP: -cash with real 48% LTV). Only trust nd <= 0 when debt was reported.
+    debt_reported = row.get("st_debt") is not None or row.get("lt_debt") is not None
+    if nd is not None:
+        if nd <= 0:
+            if debt_reported:
+                legs.append(1)
+        elif ebitda is not None and ebitda > 0:
+            legs.append(_lin(nd / ebitda, 1.0, 8.0))
+    if not legs:
+        return None
+    return round(sum(legs) / len(legs))
 
 
 # PEGY growth is capped so a one-off recovery bounce (e.g. +150% off a depressed
@@ -697,30 +772,37 @@ def _attach_piotroski(results):
 
 
 def _attach_risk_score(results):
-    """Add risk_score (1-10), altman_z, and volatility_annualised to each result row.
+    """Add risk_score (1-10), risk_model, altman_z, volatility_annualised and
+    risk_components to each result row.
 
-    Fetches total_assets from annual_financials and price history in two bulk queries.
-    risk_score = blend of Altman Z component (60%) and volatility component (40%).
+    Sector-aware (docs/superpowers/specs/2026-07-03-risk-score-v2-design.md):
+    each company routes to one model — general (classic Z + vol), asset_heavy
+    (Z'' + debt service + vol), bank, insurer, financial, trust. Two bulk
+    queries: ttm_financials + company_metadata supply every fundamental input
+    (callers only need a 'symbol' key on each row), price_history supplies
+    volatility. altman_z holds the classic Z for general rows and Z'' for
+    asset_heavy rows — risk_model tells the UI which scale applies.
     """
     if not results:
         return results
 
     symbols = [r["symbol"] for r in results]
 
-    # 1. Fetch most recent total_assets per symbol from annual_financials
-    ta_rows = query(
+    # 1. Fundamental inputs + sector/industry for model routing
+    fin_rows = query(
         """
-        WITH ranked AS (
-            SELECT company_symbol, total_assets,
-                   ROW_NUMBER() OVER (PARTITION BY company_symbol ORDER BY period_end_date DESC) AS rn
-            FROM annual_financials
-            WHERE company_symbol = ANY(%s)
-        )
-        SELECT company_symbol, total_assets FROM ranked WHERE rn = 1
+        SELECT t.company_symbol, m.sector, m.industry,
+               t.market_cap, t.price_to_book, t.revenue, t.operating_income,
+               t.working_capital, t.retained_earnings, t.total_equity,
+               t.total_assets, t.interest_coverage, t.net_debt, t.ebitda,
+               t.st_debt, t.lt_debt, t.roe, t.roe_median
+        FROM ttm_financials t
+        LEFT JOIN company_metadata m ON m.symbol = t.company_symbol
+        WHERE t.company_symbol = ANY(%s)
     """,
         (symbols,),
     )
-    total_assets_map = {r["company_symbol"]: r["total_assets"] for r in ta_rows}
+    fin_map = {r["company_symbol"]: r for r in fin_rows}
 
     # 2. Fetch up to 252 most recent closes per symbol, oldest-first for log-return ordering
     #    rn=1 is the latest date; ORDER BY rn DESC puts oldest (largest rn) first.
@@ -745,29 +827,78 @@ def _attach_risk_score(results):
     for r in price_rows:
         closes_map.setdefault(r["symbol"], []).append(float(r["close"]))
 
-    # 3. Compute and attach scores
+    # 3. Route each symbol to its model, compute and attach
     for r in results:
         sym = r["symbol"]
-        ta = total_assets_map.get(sym)
+        f = fin_map.get(sym) or {}
 
         closes = closes_map.get(sym, [])
         vol = _annualised_vol(closes) if len(closes) >= 63 else None
-        vol_component = _vol_to_score(vol)
+        vol_c = _vol_to_score(vol)
 
-        if _is_financial(r):
-            # Altman is invalid for financials — use volatility + ROE quality.
-            roe = r.get("roe")
-            if roe is None:
-                roe = r.get("roe_median")
-            r["risk_score"] = _financial_risk(_roe_to_risk(roe), vol_component)
-            r["altman_z"] = None
-        else:
-            z = _altman_z(r, ta)
-            altman_component = _z_to_risk(z)
-            r["risk_score"] = _blend_risk(altman_component, vol_component)
-            r["altman_z"] = z
+        # No ttm row at all → no sector/industry to route on; "general" keeps
+        # the row from being mistaken for a trust (whose signature is a real
+        # row with no classification).
+        model = _classify_risk_model(f) if f else "general"
+        z_display = None
+        components = {"volatility": vol_c}
 
+        if model == "trust":
+            # Closed-end funds: any Altman flavour reads their balance sheet
+            # as a failing manufacturer's. Volatility is the only stored signal.
+            score = _weighted_blend([(vol_c, 1.0)])
+        elif model == "bank":
+            eq, ta = f.get("total_equity"), f.get("total_assets")
+            leverage = eq / ta if (eq is not None and ta and ta > 0) else None
+            components["roe"] = _roe_to_risk(_roe_blend(f))
+            # equity/assets is a CET1 proxy: UK banks span ~5-14%, the ~3.25%
+            # regulatory leverage floor anchors the risky end.
+            components["leverage"] = _lin(leverage, 0.10, 0.03)
+            # A bank below ~0.6x book is the market pricing balance-sheet doubt.
+            components["price_to_book"] = _lin(f.get("price_to_book"), 1.0, 0.35)
+            score = _weighted_blend([
+                (components["roe"], 0.30),
+                (components["leverage"], 0.25),
+                (components["price_to_book"], 0.20),
+                (vol_c, 0.25),
+            ])
+        elif model == "insurer":
+            # ROE demoted vs banks (IFRS-17 noise); equity/assets is
+            # meaningless against policy liabilities so it's not used.
+            components["roe"] = _roe_to_risk(_roe_blend(f))
+            components["price_to_book"] = _lin(f.get("price_to_book"), 1.0, 0.35)
+            score = _weighted_blend([
+                (components["roe"], 0.35),
+                (components["price_to_book"], 0.25),
+                (vol_c, 0.40),
+            ])
+        elif model == "financial":
+            # Asset managers etc. — asset-light, the v1 formula is honest here.
+            components["roe"] = _roe_to_risk(_roe_blend(f))
+            score = _weighted_blend([(vol_c, 0.6), (components["roe"], 0.4)])
+        elif model == "asset_heavy":
+            z_display = _z_score(_altman_terms(f), _ZDD_WEIGHTS)
+            components["altman"] = _zdd_to_risk(z_display)
+            components["debt_service"] = _debt_service_component(f)
+            score = _weighted_blend([
+                (components["altman"], 0.4),
+                (components["debt_service"], 0.3),
+                (vol_c, 0.3),
+            ])
+        else:  # general
+            z_display = _z_score(_altman_terms(f), _Z_WEIGHTS)
+            components["altman"] = _z_to_risk(z_display)
+            score = _weighted_blend([(components["altman"], 0.6), (vol_c, 0.4)])
+
+        r["risk_score"] = score
+        r["risk_model"] = model
+        # Clamp for display sanity — tiny asset bases print absurd Z values
+        # (EEE.L: Z=1402). The 1-10 mapping saturates long before the clamp.
+        r["altman_z"] = (
+            max(-10.0, min(30.0, z_display)) if z_display is not None else None
+        )
         r["volatility_annualised"] = round(vol * 100, 1) if vol is not None else None
+        r["risk_components"] = components
 
     return results
 
@@ -785,11 +916,11 @@ def compute_and_store_scores():
     no longer shifts with the active filter (it used to rank within the filtered
     result set). Returns a summary dict.
     """
+    # The scorers bulk-fetch their own inputs keyed by symbol, so the universe
+    # is just the symbol list (risk additionally re-joins ttm + metadata itself).
     universe = query(
         """
-        SELECT m.symbol, m.sector,
-               t.market_cap, t.revenue, t.operating_margin, t.price_to_book,
-               t.roe, t.roe_median
+        SELECT m.symbol
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
         ORDER BY t.market_cap DESC NULLS LAST
@@ -809,6 +940,7 @@ def compute_and_store_scores():
             r.get("momentum_score"),
             r.get("piotroski_score"),
             r.get("risk_score"),
+            r.get("risk_model"),
             r.get("altman_z"),
             r.get("volatility_annualised"),
         )
@@ -823,18 +955,19 @@ def compute_and_store_scores():
         psycopg2.extras.execute_values(
             cur,
             "INSERT INTO screener_scores"
-            " (symbol, momentum_score, piotroski_score, risk_score, altman_z,"
-            "  volatility_annualised, computed_at)"
+            " (symbol, momentum_score, piotroski_score, risk_score, risk_model,"
+            "  altman_z, volatility_annualised, computed_at)"
             " VALUES %s"
             " ON CONFLICT (symbol) DO UPDATE SET"
             "   momentum_score        = EXCLUDED.momentum_score,"
             "   piotroski_score       = EXCLUDED.piotroski_score,"
             "   risk_score            = EXCLUDED.risk_score,"
+            "   risk_model            = EXCLUDED.risk_model,"
             "   altman_z              = EXCLUDED.altman_z,"
             "   volatility_annualised = EXCLUDED.volatility_annualised,"
             "   computed_at           = now()",
             rows,
-            template="(%s, %s, %s, %s, %s, %s, now())",
+            template="(%s, %s, %s, %s, %s, %s, %s, now())",
             page_size=1000,
         )
         conn.commit()
@@ -1204,7 +1337,7 @@ def screener(
                t.net_margin_median, t.roe_median, t.roic_median,
                a.consensus, a.buy_pct, a.upside_pct, a.total_analysts, a.revision_score,
                a.eps_growth_next_yr, a.eps_est_current_yr,
-               s.momentum_score, s.piotroski_score, s.risk_score,
+               s.momentum_score, s.piotroski_score, s.risk_score, s.risk_model,
                s.altman_z, s.volatility_annualised,
                COALESCE(p.latest_close, t.period_end_price) AS current_price
         FROM ttm_financials t
