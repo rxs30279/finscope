@@ -1107,6 +1107,30 @@ def _peer_group(symbol, industry):
     return _INDUSTRY_GROUPS.get(industry, industry)
 
 
+def _own_ev_ebitda(r, _f):
+    """EV/EBITDA computed from the same stored fields the equity bridge uses:
+    (market_cap + net_debt) / EBITDA, all one reporting currency.
+
+    Deliberately NOT yfinance's enterpriseToEbitda — that field routinely
+    disagrees with these inputs (different EBITDA normalization/date; RR.L reads
+    22.5x there but ~13x here), and mixing the two flipped verdicts: a company
+    whose own multiple sat above the peer median could still read "undervalued"
+    because the bridge silently used the cheaper implied multiple. One
+    definition for the subject, the peers and the bridge keeps the estimate
+    monotonic: own above median always reads overvalued. Returns None when the
+    inputs are missing or EV is non-positive (net cash exceeding market cap).
+    """
+    ebitda = _f(r.get("ebitda"))
+    mkt = _f(r.get("market_cap"))
+    net_debt = _f(r.get("net_debt"))
+    if ebitda is None or ebitda <= 0 or mkt is None or mkt <= 0 or net_debt is None:
+        return None
+    ev = mkt + net_debt
+    if ev <= 0:
+        return None
+    return ev / ebitda
+
+
 def _valuation_eligible(r, _f):
     """Return the company's own EV/EBITDA when it's a defensible fair-value fit,
     else None.
@@ -1128,10 +1152,7 @@ def _valuation_eligible(r, _f):
     net_debt = _f(r.get("net_debt"))
     if net_debt is not None and net_debt > MAX_NET_DEBT_TO_MKT_CAP * mkt:
         return None
-    ev_ebitda = _f(r.get("ev_to_ebitda"))
-    if ev_ebitda is None or ev_ebitda <= 0:
-        return None
-    return ev_ebitda
+    return _own_ev_ebitda(r, _f)
 
 
 def _peer_median(vals):
@@ -1188,7 +1209,7 @@ def compute_and_store_valuations():
     universe = query(
         """
         SELECT m.symbol, m.sector, m.industry,
-               t.ev_to_ebitda, t.ebitda, t.net_debt, t.market_cap, t.net_income,
+               t.ebitda, t.net_debt, t.market_cap, t.net_income,
                COALESCE(p.latest_close, t.period_end_price) AS current_price
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
@@ -1208,7 +1229,8 @@ def compute_and_store_valuations():
 
     def _peer_values(self_sym, group):
         """(symbols, values) of active members of the same peer group with a
-        valid (>0) EV/EBITDA, parallel lists in matching order. Excluded
+        valid computed EV/EBITDA (see _own_ev_ebitda — same definition as the
+        subject and the bridge), parallel lists in matching order. Excluded
         companies (financials/trusts) can't serve as peers either — today's
         yfinance industry tags happen not to collide, but that's luck, not a
         guarantee (e.g. a fintech tagged "Software - Application")."""
@@ -1222,8 +1244,8 @@ def compute_and_store_valuations():
                 continue
             if _peer_group(o["symbol"], o.get("industry")) != group:
                 continue
-            v = _f(o.get("ev_to_ebitda"))
-            if v is not None and v > 0:
+            v = _own_ev_ebitda(o, _f)
+            if v is not None:
                 syms.append(o["symbol"])
                 vals.append(v)
         return syms, vals

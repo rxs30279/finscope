@@ -1,8 +1,8 @@
 import sys, os, pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import (
-    _valuation_eligible, _peer_median, _fair_value_upside, _peer_group,
-    MAX_NET_DEBT_TO_MKT_CAP,
+    _valuation_eligible, _own_ev_ebitda, _peer_median, _fair_value_upside,
+    _peer_group, MAX_NET_DEBT_TO_MKT_CAP,
 )
 
 
@@ -12,8 +12,9 @@ def _f(x):
 
 def _ok_row(**over):
     # Profitable, non-financial, low-leverage company — the eligible base case.
+    # Own multiple is computed from these fields: (5e9 + 1e9) / 9e8 = 6.667x.
     row = {"sector": "Industrials", "net_income": 4e8, "ebitda": 9e8,
-           "market_cap": 5e9, "net_debt": 1e9, "ev_to_ebitda": 8.5}
+           "market_cap": 5e9, "net_debt": 1e9}
     row.update(over)
     return row
 
@@ -21,10 +22,10 @@ def _ok_row(**over):
 # ── _valuation_eligible (EV/EBITDA-only safe subset) ────────────────────────────
 
 def test_eligible_profitable_nonfinancial_low_leverage():
-    assert _valuation_eligible(_ok_row(), _f) == 8.5
+    assert _valuation_eligible(_ok_row(), _f) == pytest.approx(6e9 / 9e8)
 
 def test_eligible_net_cash_is_fine():
-    assert _valuation_eligible(_ok_row(net_debt=-2e8), _f) == 8.5
+    assert _valuation_eligible(_ok_row(net_debt=-2e8), _f) == pytest.approx(4.8e9 / 9e8)
 
 def test_excluded_financial_sector():
     assert _valuation_eligible(_ok_row(sector="Financial Services"), _f) is None
@@ -56,10 +57,33 @@ def test_excluded_high_leverage():
 def test_eligible_at_leverage_cap():
     # Exactly at the cap is allowed.
     row = _ok_row(market_cap=1e9, net_debt=MAX_NET_DEBT_TO_MKT_CAP * 1e9)
-    assert _valuation_eligible(row, _f) == 8.5
+    assert _valuation_eligible(row, _f) == pytest.approx(2e9 / 9e8)
 
-def test_excluded_missing_ev_ebitda():
-    assert _valuation_eligible(_ok_row(ev_to_ebitda=None), _f) is None
+def test_excluded_missing_net_debt():
+    # The bridge needs net_debt; without it neither the own multiple nor the
+    # upside is computable, so the company is ineligible up front.
+    assert _valuation_eligible(_ok_row(net_debt=None), _f) is None
+
+def test_excluded_negative_enterprise_value():
+    # Net cash exceeding market cap → EV <= 0, no meaningful multiple.
+    assert _valuation_eligible(_ok_row(market_cap=1e9, net_debt=-2e9), _f) is None
+
+
+# ── _own_ev_ebitda (one multiple definition for subject, peers and bridge) ──────
+
+def test_own_multiple_matches_bridge_inputs():
+    # (market_cap + net_debt) / EBITDA — not yfinance's enterpriseToEbitda.
+    assert _own_ev_ebitda({"ebitda": 100, "net_debt": 200, "market_cap": 800}, _f) == pytest.approx(10.0)
+
+def test_verdict_is_monotonic_in_own_vs_median():
+    # own above median must read overvalued, below must read undervalued —
+    # guaranteed only because the own multiple and the bridge share inputs
+    # (mixing in yfinance's enterpriseToEbitda flipped RR.L's verdict).
+    row = {"ebitda": 100, "net_debt": 200, "market_cap": 800}
+    own = _own_ev_ebitda(row, _f)
+    assert _fair_value_upside(own, row, _f) == pytest.approx(0.0)
+    assert _fair_value_upside(own + 2, row, _f) > 0
+    assert _fair_value_upside(own - 2, row, _f) < 0
 
 
 # ── _peer_group (industry merges + per-symbol overrides) ────────────────────────
