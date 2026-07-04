@@ -1,7 +1,7 @@
 import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import os
 import re
 import statistics
+from datetime import timezone
+from email.utils import format_datetime
 from market import router as market_router
 from prices import router as prices_router, _attach_momentum, _trailing_streak
 from analysts import router as analysts_router
@@ -1811,7 +1813,7 @@ def watchlist(symbols: str, response: Response = None):
 
 
 @app.get("/api/help-doc")
-def help_doc(slug: str = "user-manual"):
+def help_doc(request: Request, slug: str = "user-manual"):
     """Stream a stored app document (default: the user manual) from Postgres.
 
     The bytes live in app_documents (see migration 003), served with the stored
@@ -1819,14 +1821,38 @@ def help_doc(slug: str = "user-manual"):
     in the new tab the Tool Manual link opens; anything else downloads as an
     attachment. Stored in the DB rather than as a static file because Vercel's
     Python runtime has no persistent local filesystem to serve from.
+
+    Caching: the URL is stable across manual updates, so a plain long max-age let
+    clients (notably mobile Safari / a home-screen PWA) keep serving an old cover
+    forever with no way to notice a newer upload. Instead we tag each response
+    with an ETag/Last-Modified derived from updated_at and tell clients to always
+    revalidate (max-age=0, must-revalidate). Unchanged docs still get a cheap 304
+    (no 2 MB re-download); a re-uploaded manual changes the ETag and is fetched
+    fresh immediately.
     """
     rows = query(
-        "SELECT filename, content_type, data FROM app_documents WHERE slug = %s",
+        "SELECT filename, content_type, data, updated_at FROM app_documents WHERE slug = %s",
         (slug,),
     )
     if not rows:
         raise HTTPException(404, "Document not found")
     row = rows[0]
+
+    # Validator keyed on the upsert timestamp — it advances on every re-upload
+    # (upload_help_doc.py sets updated_at = NOW()), so a new manual = a new ETag.
+    updated_at = row["updated_at"].astimezone(timezone.utc)
+    etag = f'"{slug}-{int(updated_at.timestamp())}"'
+    cache_headers = {
+        "Cache-Control": "public, max-age=0, must-revalidate",
+        "ETag": etag,
+        "Last-Modified": format_datetime(updated_at, usegmt=True),
+    }
+
+    # Conditional request: if the client already holds this exact version, skip
+    # the body. Browsers echo the ETag back in If-None-Match on every revalidate.
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=cache_headers)
+
     data = row["data"]
     # psycopg2 hands BYTEA back as a memoryview; FastAPI's Response wants bytes.
     if isinstance(data, memoryview):
@@ -1838,7 +1864,7 @@ def help_doc(slug: str = "user-manual"):
         media_type=ctype,
         headers={
             "Content-Disposition": f'{disposition}; filename="{row["filename"]}"',
-            "Cache-Control": "public, max-age=3600",
+            **cache_headers,
         },
     )
 
