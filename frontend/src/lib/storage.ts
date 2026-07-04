@@ -1,3 +1,5 @@
+import { DEFAULT_SCREENER_COLUMN_PREFS } from "./screenerColumns";
+
 export const WATCHLIST_KEY = "stock_screener_watchlist";
 
 export const loadWatchlist = (): string[] => {
@@ -179,6 +181,10 @@ export interface ScreenerState {
   filters: Record<string, string>;
   selectModes: Record<string, string>;
   scoreFilters: Record<string, string>;
+  // Per-column metric filters (keyed by column key): the chosen threshold value
+  // and the dropdown mode ("" | preset value | "custom"), mirroring filters/selectModes.
+  colFilters: Record<string, string>;
+  colFilterModes: Record<string, string>;
   tableView: string;
   sortCol: string | null;
   sortDir: "asc" | "desc";
@@ -200,5 +206,34 @@ export const saveScreenerState = (state: ScreenerState): void => {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SCREENER_STATE_KEY, JSON.stringify(state));
+  } catch {}
+};
+
+// Screener column-visibility preference. Kept as its own key (not folded into
+// SCREENER_STATE_KEY) because it's edited from the Settings page and is a
+// display preference, not filter/sort/view state. Merges saved values over the
+// defaults so a newly-added column still gets a sensible default. Same shape as
+// loadChartPrefs above.
+export const SCREENER_COLUMNS_KEY = "stock_screener_screener_columns_v1";
+export type ScreenerColumnPrefs = Record<string, boolean>;
+
+export const loadScreenerColumns = (): ScreenerColumnPrefs => {
+  if (typeof window === "undefined") return { ...DEFAULT_SCREENER_COLUMN_PREFS };
+  try {
+    const raw = window.localStorage.getItem(SCREENER_COLUMNS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return {
+      ...DEFAULT_SCREENER_COLUMN_PREFS,
+      ...(parsed && typeof parsed === "object" ? parsed : {}),
+    };
+  } catch {
+    return { ...DEFAULT_SCREENER_COLUMN_PREFS };
+  }
+};
+
+export const saveScreenerColumns = (prefs: ScreenerColumnPrefs): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SCREENER_COLUMNS_KEY, JSON.stringify(prefs));
   } catch {}
 };

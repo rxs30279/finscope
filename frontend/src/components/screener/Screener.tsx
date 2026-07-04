@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { API } from "@/lib/api";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
-import { loadScreenerState, saveScreenerState } from "@/lib/storage";
+import { loadScreenerState, saveScreenerState, loadScreenerColumns } from "@/lib/storage";
+import { SCREENER_TOGGLE_COLUMNS, DEFAULT_SCREENER_COLUMN_PREFS, filterScale, blankNaMetrics } from "@/lib/screenerColumns";
 import { useRefresh } from "@/app/providers";
 import HybridSelect from "@/components/company/HybridSelect";
 import SectorDropdown from "./SectorDropdown";
@@ -12,30 +13,26 @@ import StarButton from "./StarButton";
 import ScorePill from "./ScorePill";
 import PageHeader from "@/components/layout/PageHeader";
 
-const EMPTY_FILTERS = { sector: "", exclude_sectors: "", ftse_index: "", min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "", consensus: "", min_upside_pct: "" };
-const EMPTY_MODES = { min_market_cap: "", max_pe: "", min_roe: "", min_revenue_growth: "" };
-const EMPTY_SCORE_FILTERS = { min_momentum: "", min_quality: "", min_value: "", max_risk: "", max_pegy: "" };
+// P/E, ROE, Rev Growth and PEGY are no longer fixed filters here — they're
+// generated per-column in the Advanced panel from the enabled table columns
+// (see colFilters). What remains are the non-column filters: sector/index/market
+// cap (always-on columns) plus the analyst filters (consensus, upside).
+const EMPTY_FILTERS = { sector: "", exclude_sectors: "", ftse_index: "", min_market_cap: "", consensus: "", min_upside_pct: "" };
+const EMPTY_MODES = { min_market_cap: "" };
+const EMPTY_SCORE_FILTERS = { min_momentum: "", min_quality: "", min_value: "", max_risk: "" };
 
-const FUND_COLS = [
-  ["Symbol", false, "symbol"], ["Name", false, "name"], ["Sector", false, "sector"],
-  ["Index", false, "ftse_index"], ["Mkt Cap", true, "market_cap"], ["P/E", true, "price_to_earnings"],
-  ["P/B", true, "price_to_book"], ["ROE", true, "roe"], ["Rev Grwth", true, "revenue_growth"],
-  ["D/E", true, "debt_to_equity"], ["PEGY", true, "pegy"], ["Mom", true, "momentum_score"],
-  ["Qual", true, "quality_score"], ["Value", true, "value_score"], ["Risk", true, "risk_score"],
-];
-// Full column names, shown as a hover tooltip on the abbreviated headers.
+// FUND_COLS is now built per-render inside the component (it depends on the
+// user's chosen columns). See `fundCols` useMemo below.
+// Full column names, shown as a hover tooltip on the abbreviated headers. The
+// toggleable-column titles are spread from the shared config so labels/tooltips
+// live in one place; the always-on columns stay literal here.
 const COL_TITLES: Record<string, string> = {
   symbol: "Ticker symbol",
   name: "Company name",
   sector: "ICB sector",
   ftse_index: "FTSE index membership",
   market_cap: "Market capitalisation",
-  price_to_earnings: "Price-to-earnings ratio",
-  price_to_book: "Price-to-book ratio",
-  roe: "Return on equity",
-  revenue_growth: "Revenue growth (year-on-year)",
-  debt_to_equity: "Debt-to-equity ratio",
-  pegy: "Price/earnings-to-growth-and-yield ratio",
+  ...Object.fromEntries(SCREENER_TOGGLE_COLUMNS.map((c) => [c.key, c.title])),
   momentum_score: "Momentum score (0–10)",
   quality_score: "Quality score (0–10)",
   value_score: "Value score (0–10, higher = cheaper)",
@@ -67,6 +64,16 @@ const ANALYST_COLS = [
   ["Rev Score", true, "revision_score", 100],
 ];
 
+// Human label for a committed custom column-filter value, matching the preset
+// option style (e.g. "FCF Mgn > 12%"), so the dropdown keeps the metric's
+// identity instead of collapsing to a bare "Custom…".
+const fmtColFilterLabel = (c: (typeof SCREENER_TOGGLE_COLUMNS)[number], raw: string): string => {
+  const n = parseFloat(raw);
+  if (isNaN(n)) return "";
+  const disp = c.format === "pct" ? `${+(n * 100).toFixed(2)}%` : c.format === "pct_direct" ? `${n}%` : `${n}`;
+  return `${c.label} ${c.filter.dir === "min" ? ">" : "<"} ${disp}`;
+};
+
 interface Props {
   onSelect: (symbol: string, tab?: string) => void;
   highlightSymbol?: string | null;
@@ -82,9 +89,19 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [scoreFilters, setScoreFilters] = useState(EMPTY_SCORE_FILTERS);
+  // Per-column metric filters, keyed by column key. `colFilters` holds the chosen
+  // threshold (in the column's stored units); `colFilterModes` holds the dropdown
+  // mode ("" | preset value | "custom"). Only applied for currently-enabled
+  // columns, so disabling a column removes its filter.
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  const [colFilterModes, setColFilterModes] = useState<Record<string, string>>({});
   const [tableView, setTableView] = useState("fundamentals");
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Which optional fundamental columns are shown (chosen on the Settings page).
+  // Initialised to the defaults — not `{}` — so SSR and the first client paint
+  // both show the default 6-column view before hydration reads localStorage.
+  const [enabledCols, setEnabledCols] = useState<Record<string, boolean>>(DEFAULT_SCREENER_COLUMN_PREFS);
   // Hydrate persisted filters/sort/view on mount (in an effect, not a lazy
   // initializer, so SSR and first client render agree). `hydrated` then gates the
   // save effect so the empty defaults don't overwrite saved state before load.
@@ -115,17 +132,20 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
       for (const k of Object.keys(sf)) if (k in saved) (next as any)[k] = saved[k];
       return next;
     });
+    if (s.colFilters) setColFilters(s.colFilters);
+    if (s.colFilterModes) setColFilterModes(s.colFilterModes);
     if (s.tableView) setTableView(s.tableView);
     if (s.sortCol !== undefined) setSortCol(s.sortCol);
     if (s.sortDir) setSortDir(s.sortDir);
     if (s.showAdvanced) setShowAdvanced(s.showAdvanced);
+    setEnabledCols(loadScreenerColumns());
     setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    saveScreenerState({ filters, selectModes, scoreFilters, tableView, sortCol, sortDir, showAdvanced });
-  }, [hydrated, filters, selectModes, scoreFilters, tableView, sortCol, sortDir, showAdvanced]);
+    saveScreenerState({ filters, selectModes, scoreFilters, colFilters, colFilterModes, tableView, sortCol, sortDir, showAdvanced });
+  }, [hydrated, filters, selectModes, scoreFilters, colFilters, colFilterModes, tableView, sortCol, sortDir, showAdvanced]);
 
   useEffect(() => {
     fetch(`${API}/filters`).then((r) => r.json()).then(setFilterOpts);
@@ -175,7 +195,13 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     setLoading(true);
     fetch(`${API}/screener?limit=1000`)
       .then((r) => r.json())
-      .then((d) => { setResults(Array.isArray(d) ? d : []); setLoading(false); })
+      .then((d) => {
+        // Null out metrics that aren't meaningful for a row's sector (e.g. FCF
+        // figures for banks) so they show "—" and don't sort/filter on junk.
+        const arr = (Array.isArray(d) ? d : []).map(blankNaMetrics);
+        setResults(arr);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, []);
 
@@ -210,8 +236,28 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   const handleCustomCommit = (key: string, rawValue: number, parse: (n: number) => number) => {
     update(key, String(parse(rawValue)));
   };
-  const clearFilters = () => { setFilters(EMPTY_FILTERS); setSelectModes(EMPTY_MODES); setScoreFilters(EMPTY_SCORE_FILTERS); };
+  // Per-column filter handlers. Presets store the option value directly; custom
+  // input is scaled into the column's stored units (pct columns: 15 → 0.15).
+  const handleColSelect = (key: string, mode: string) => {
+    setColFilterModes((m) => ({ ...m, [key]: mode }));
+    if (mode !== "custom") setColFilters((f) => ({ ...f, [key]: mode }));
+  };
+  const handleColCustom = (key: string, rawValue: number, scale: number) => {
+    setColFilters((f) => ({ ...f, [key]: String(rawValue / scale) }));
+  };
+  const clearFilters = () => {
+    setFilters(EMPTY_FILTERS); setSelectModes(EMPTY_MODES); setScoreFilters(EMPTY_SCORE_FILTERS);
+    setColFilters({}); setColFilterModes({});
+  };
   const updateScore = (k: string, v: string) => setScoreFilters((sf) => ({ ...sf, [k]: v }));
+
+  // The user's enabled optional columns, in the fixed master order. Declared
+  // before `displayed` because the per-column filters apply only to enabled
+  // columns (disabling a column drops its filter).
+  const visibleToggleCols = useMemo(
+    () => SCREENER_TOGGLE_COLUMNS.filter((c) => enabledCols[c.key] ?? c.defaultEnabled),
+    [enabledCols],
+  );
 
   const watchlistSet = watchlist instanceof Set ? watchlist : new Set(watchlist || []);
   const displayed = results.filter((r) => {
@@ -225,18 +271,26 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
       else if (r.ftse_index !== f.ftse_index) return false;
     }
     if (f.min_market_cap && (r.market_cap == null || r.market_cap < +f.min_market_cap)) return false;
-    if (f.max_pe && (r.price_to_earnings == null || r.price_to_earnings <= 0 || r.price_to_earnings > +f.max_pe)) return false;
-    if (f.min_roe && (r.roe == null || r.roe < +f.min_roe)) return false;
-    if (f.min_revenue_growth && (r.revenue_growth == null || r.revenue_growth < +f.min_revenue_growth)) return false;
     if (f.consensus && r.consensus !== f.consensus) return false;
     if (f.min_upside_pct && (r.upside_pct == null || r.upside_pct < +f.min_upside_pct)) return false;
-    // Score filters (already client-side before this change).
+    // Per-column metric filters — applied only for currently-enabled columns, so
+    // a filter disappears (stops filtering) when its column is turned off.
+    for (const c of visibleToggleCols) {
+      const raw = colFilters[c.key];
+      if (!raw) continue;
+      const t = parseFloat(raw);
+      if (isNaN(t)) continue;
+      const v = r[c.key];
+      if (v == null) return false;
+      if (c.filter.dir === "min") { if (v < t) return false; }
+      else if (v > t || (c.filter.positiveOnly && v <= 0)) return false;
+    }
+    // Score filters (always-on columns).
     const sf = scoreFilters;
     if (sf.min_momentum && (r.momentum_score == null || r.momentum_score < +sf.min_momentum)) return false;
     if (sf.min_quality && (r.quality_score == null || r.quality_score < +sf.min_quality)) return false;
     if (sf.min_value && (r.value_score == null || r.value_score < +sf.min_value)) return false;
     if (sf.max_risk && (r.risk_score == null || r.risk_score > +sf.max_risk)) return false;
-    if (sf.max_pegy && (r.pegy == null || r.pegy > +sf.max_pegy)) return false;
     return true;
   });
 
@@ -254,10 +308,13 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     setScreenMatches(new Set(syms));
   });
 
-  const hasActiveFilters = Object.values(filters).some((v) => v !== "") || Object.values(scoreFilters).some((v) => v !== "");
+  // Only enabled columns' filters count as active (a lingering filter on a
+  // now-hidden column shouldn't light up "Clear" or the Advanced dot).
+  const activeColFilters = visibleToggleCols.some((c) => colFilters[c.key]);
+  const hasActiveFilters = Object.values(filters).some((v) => v !== "") || Object.values(scoreFilters).some((v) => v !== "") || activeColFilters;
   // Accent a filter control when it has a value, so active filters are obvious.
   const selStyle = (active: boolean) => (active ? { ...S.select, ...S.selectActive } : S.select);
-  const hasAdvancedFilters = filters.max_pe || filters.min_roe || filters.min_revenue_growth || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_value || scoreFilters.max_risk || scoreFilters.max_pegy;
+  const hasAdvancedFilters = activeColFilters || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_value || scoreFilters.max_risk || filters.consensus || filters.min_upside_pct;
 
   const handleSort = (key: string) => {
     if (sortCol === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
@@ -271,6 +328,19 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     if (typeof av === "string") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
     return sortDir === "asc" ? av - bv : bv - av;
   });
+
+  // Header column spec for the fundamentals view: the always-on left columns,
+  // then the chosen optional columns, then the 4 always-on score pills.
+  const fundCols = useMemo(
+    () => [
+      ["Symbol", false, "symbol"], ["Name", false, "name"], ["Sector", false, "sector"],
+      ["Index", false, "ftse_index"], ["Mkt Cap", true, "market_cap"],
+      ...visibleToggleCols.map((c) => [c.label, true, c.key]),
+      ["Mom", true, "momentum_score"], ["Qual", true, "quality_score"],
+      ["Value", true, "value_score"], ["Risk", true, "risk_score"],
+    ],
+    [visibleToggleCols],
+  );
 
   return (
     <div>
@@ -311,21 +381,30 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
       {showAdvanced && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-          {[["min_momentum", "Momentum", [["4","Mom ≥ 4"],["6","Mom ≥ 6"],["8","Mom ≥ 8"]]],["min_quality","Quality",[["4","Quality ≥ 4"],["6","Quality ≥ 6"],["8","Quality ≥ 8"]]],["min_value","Value",[["4","Value ≥ 4"],["6","Value ≥ 6"],["8","Value ≥ 8"]]],["max_risk","Risk",[["3","Risk ≤ 3"],["5","Risk ≤ 5"],["7","Risk ≤ 7"]]],["max_pegy","PEGY",[["1","PEGY ≤ 1"],["1.5","PEGY ≤ 1.5"],["2","PEGY ≤ 2"]]]].map(([k, label, opts]: any) => (
+          {/* One metric filter per enabled table column, in master order. */}
+          {visibleToggleCols.map((c) => (
+            <HybridSelect
+              key={c.key}
+              active={!!colFilters[c.key]}
+              selectMode={colFilterModes[c.key] || ""}
+              onSelectChange={(mode) => handleColSelect(c.key, mode)}
+              onCustomCommit={(v) => handleColCustom(c.key, v, filterScale(c.format))}
+              placeholder={c.label}
+              inputWidth={75}
+              customLabel={colFilterModes[c.key] === "custom" ? fmtColFilterLabel(c, colFilters[c.key] || "") : undefined}
+            >
+              <option value="">Any {c.label}</option>
+              {c.filter.presets.map(([lbl, val]) => <option key={val} value={val}>{lbl}</option>)}
+            </HybridSelect>
+          ))}
+          {/* Always-on composite score filters. */}
+          {[["min_momentum", "Momentum", [["4","Mom ≥ 4"],["6","Mom ≥ 6"],["8","Mom ≥ 8"]]],["min_quality","Quality",[["4","Quality ≥ 4"],["6","Quality ≥ 6"],["8","Quality ≥ 8"]]],["min_value","Value",[["4","Value ≥ 4"],["6","Value ≥ 6"],["8","Value ≥ 8"]]],["max_risk","Risk",[["3","Risk ≤ 3"],["5","Risk ≤ 5"],["7","Risk ≤ 7"]]]].map(([k, label, opts]: any) => (
             <select key={k} style={selStyle(!!(scoreFilters as any)[k])} value={(scoreFilters as any)[k]} onChange={(e) => updateScore(k, e.target.value)}>
               <option value="">{label}</option>
               {opts.map(([v, l]: any) => <option key={v} value={v}>{l}</option>)}
             </select>
           ))}
-          <HybridSelect active={!!filters.max_pe} selectMode={selectModes.max_pe} onSelectChange={(mode) => handleSelectMode("max_pe", mode)} onCustomCommit={(v) => handleCustomCommit("max_pe", v, (n) => n)} placeholder="P/E" inputWidth={65}>
-            <option value="">Any P/E</option><option value="15">P/E &lt; 15</option><option value="25">P/E &lt; 25</option><option value="40">P/E &lt; 40</option>
-          </HybridSelect>
-          <HybridSelect active={!!filters.min_roe} selectMode={selectModes.min_roe} onSelectChange={(mode) => handleSelectMode("min_roe", mode)} onCustomCommit={(v) => handleCustomCommit("min_roe", v, (n) => n / 100)} placeholder="ROE %" inputWidth={75}>
-            <option value="">Any ROE</option><option value="0.1">ROE &gt; 10%</option><option value="0.15">ROE &gt; 15%</option><option value="0.2">ROE &gt; 20%</option>
-          </HybridSelect>
-          <HybridSelect active={!!filters.min_revenue_growth} selectMode={selectModes.min_revenue_growth} onSelectChange={(mode) => handleSelectMode("min_revenue_growth", mode)} onCustomCommit={(v) => handleCustomCommit("min_revenue_growth", v, (n) => n / 100)} placeholder="Growth %" inputWidth={85}>
-            <option value="">Any Rev Growth</option><option value="0.05">Rev Growth &gt; 5%</option><option value="0.1">Rev Growth &gt; 10%</option><option value="0.2">Rev Growth &gt; 20%</option>
-          </HybridSelect>
+          {/* Analyst filters (independent of the fundamentals columns). */}
           <select style={selStyle(!!filters.consensus)} value={filters.consensus} onChange={(e) => update("consensus", e.target.value)}>
             <option value="">All Consensus</option><option value="Buy">Buy</option><option value="Hold">Hold</option><option value="Sell">Sell</option>
           </select>
@@ -360,10 +439,10 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           <table style={{ ...S.table, minWidth: tableView === "analysts" ? 700 : 900, ...(tableView === "analysts" ? { tableLayout: "fixed" as const } : {}) }}>
             <thead>
               <tr>
-                {(tableView === "fundamentals" ? FUND_COLS : ANALYST_COLS).map(([h, num, key, width]: any) => {
+                {(tableView === "fundamentals" ? fundCols : ANALYST_COLS).map(([h, num, key, width]: any) => {
                   const isScore = SCORE_KEYS.has(key);
                   return (
-                    <th key={h} onClick={() => handleSort(key)} title={COL_TITLES[key] || h} style={{ ...S.th, textAlign: isScore ? "center" : num ? "right" : "left", cursor: "pointer", userSelect: "none", color: sortCol === key ? "#fb923c" : "#f97316", ...(isScore ? { width: SCORE_COL_WIDTH } : {}), ...(width ? { width } : {}), ...(key === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
+                    <th key={key} onClick={() => handleSort(key)} title={COL_TITLES[key] || h} style={{ ...S.th, textAlign: isScore ? "center" : num ? "right" : "left", cursor: "pointer", userSelect: "none", color: sortCol === key ? "#fb923c" : "#f97316", ...(isScore ? { width: SCORE_COL_WIDTH } : {}), ...(width ? { width } : {}), ...(key === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
                       {h}{sortCol === key ? (sortDir === "desc" ? " ▼" : " ▲") : ""}
                     </th>
                   );
@@ -395,12 +474,11 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                     <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.market_cap, "currency", r.currency)}</td>
                     {tableView === "fundamentals" ? (
                       <>
-                        <td style={{ ...S.tdNum, color: r.price_to_earnings < 15 ? "#10b981" : r.price_to_earnings > 40 ? "#ef4444" : "#ccc" }}>{fmt(r.price_to_earnings, "ratio")}</td>
-                        <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.price_to_book, "ratio")}</td>
-                        <td style={{ ...S.tdNum, color: gc(r.roe) }}>{fmt(r.roe, "pct")}</td>
-                        <td style={{ ...S.tdNum, color: gc(r.revenue_growth) }}>{fmt(r.revenue_growth, "pct")}</td>
-                        <td style={{ ...S.tdNum, color: r.debt_to_equity > 2 ? "#ef4444" : "#ccc" }}>{fmt(r.debt_to_equity, "ratio")}</td>
-                        <td style={{ ...S.tdNum, color: r.pegy == null ? "#444" : r.pegy < 1 ? "#10b981" : r.pegy <= 2 ? "#f59e0b" : "#ef4444" }}>{r.pegy ?? "—"}</td>
+                        {visibleToggleCols.map((c) => (
+                          <td key={c.key} style={{ ...S.tdNum, color: c.color ? c.color(r[c.key]) : "#ccc" }}>
+                            {c.render ? c.render(r[c.key]) : fmt(r[c.key], c.format)}
+                          </td>
+                        ))}
                         {[["momentum_score", false], ["quality_score", false], ["value_score", false], ["risk_score", true]].map(([k, invert]: any) => (
                           <td key={k} style={{ ...S.tdNum, textAlign: "center", width: SCORE_COL_WIDTH, ...(k === "momentum_score" ? { borderLeft: "1px solid #2a2a2a" } : {}) }}>
                             <ScorePill value={r[k]} invert={invert} />

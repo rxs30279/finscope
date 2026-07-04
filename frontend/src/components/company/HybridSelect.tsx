@@ -11,7 +11,18 @@ interface Props {
   placeholder?: string;
   inputWidth?: number;
   active?: boolean;
+  // Human label for a committed custom value (e.g. "FCF Mgn > 12%"). When
+  // provided, a committed custom value shows as this labelled option instead of
+  // the bare "Custom…", and the number input collapses. Omit to keep the legacy
+  // behaviour (input stays visible, option reads "Custom…") — used by callers
+  // like the market-cap filter that don't supply a label.
+  customLabel?: string;
 }
+
+// Sentinel select value for "a custom value is committed and shown as a label".
+// Distinct from "custom" (which means "the input is open") so that re-selecting
+// the current committed option still fires onChange and reopens the input.
+const COMMITTED = "__custom_committed__";
 
 export default function HybridSelect({
   selectMode,
@@ -21,29 +32,46 @@ export default function HybridSelect({
   placeholder,
   inputWidth = 80,
   active = false,
+  customLabel,
 }: Props) {
   const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
   const isCustom = selectMode === "custom";
+  // Show the committed label (instead of an open input) once a value is in and
+  // we're not actively editing it.
+  const showCommitted = isCustom && !editing && !!customLabel;
+  const showInput = isCustom && !showCommitted;
 
   const commit = () => {
     const n = parseFloat(draft);
-    if (!isNaN(n)) onCustomCommit(n);
+    if (!isNaN(n)) {
+      onCustomCommit(n);
+      setEditing(false);
+    }
   };
 
   return (
     <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
       <select
         style={{ ...S.select, ...(active ? S.selectActive : {}) }}
-        value={selectMode}
+        value={showCommitted ? COMMITTED : selectMode}
         onChange={(e) => {
-          setDraft("");
-          onSelectChange(e.target.value);
+          const v = e.target.value;
+          if (v === COMMITTED) return; // already the current value; no-op
+          if (v === "custom") {
+            setDraft("");
+            setEditing(true);
+          } else {
+            setEditing(false);
+          }
+          onSelectChange(v);
         }}
       >
         {children}
         <option value="custom">Custom…</option>
+        {showCommitted && <option value={COMMITTED}>{customLabel}</option>}
       </select>
-      {isCustom && (
+      {showInput && (
         <input
           type="number"
           placeholder={placeholder}

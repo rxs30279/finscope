@@ -208,7 +208,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <div style={{ position: "relative", flexShrink: 0 }}>
               <button
                 onClick={() => setToolsOpen((v) => !v)}
-                title="Tools & refresh"
+                title="Settings & refresh"
                 style={{
                   background: "#1a1a1a",
                   color: priceRefreshing ? "#f97316" : "#999",
@@ -225,7 +225,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 }}
               >
                 <span className={priceRefreshing ? "spinning" : ""}>⚙</span>
-                Tools ▾
+                Settings ▾
               </button>
               {toolsOpen && (
                 <>
@@ -245,6 +245,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
                     >
                       📖 Tool Manual Download
                     </a>
+                    <Link
+                      href="/settings/screener"
+                      onClick={() => setToolsOpen(false)}
+                      style={{ display: "block", padding: "10px 14px", color: pathname === "/settings/screener" ? "#f97316" : "#e5e5e5", fontFamily: "monospace", fontSize: 11, textDecoration: "none", borderBottom: "1px solid #1f1f1f" }}
+                    >
+                      🧮 Screener Settings
+                    </Link>
                     {isAdmin && (
                       <button
                         onClick={() => { handleRefresh(); setToolsOpen(false); }}
@@ -367,6 +374,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
             >
               Tool Manual Download
             </a>
+            <Link
+              href="/settings/screener"
+              onClick={() => setMobileMenuOpen(false)}
+              style={{
+                display: "block", padding: "12px 20px",
+                background: pathname === "/settings/screener" ? "#1f1200" : "none",
+                color: pathname === "/settings/screener" ? "#f97316" : "#999",
+                fontSize: 13, fontFamily: "monospace",
+                fontWeight: pathname === "/settings/screener" ? 700 : 400,
+                textDecoration: "none",
+              }}
+            >
+              Screener Settings
+            </Link>
             <div style={{ borderTop: "1px solid #1f1f1f", marginTop: 12, paddingTop: 12 }}>
               <Link
                 href="/donate"
