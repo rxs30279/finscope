@@ -534,6 +534,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               textDecoration: "none",
               borderBottom: "1px dotted #3a3a3a",
               overflowWrap: "anywhere",
+              fontSize: 13,
             }}
           >
             {r.headline}
@@ -541,11 +542,11 @@ export default function RnsTab({ refreshKey, onSelect }) {
           <KeywordTags hits={r.keyword_hits} />
           {r.llm_thesis && (
             <div
-              style={{ marginTop: 6, color: "#888", fontSize: 11, lineHeight: 1.4 }}
+              style={{ marginTop: 6, color: "#888", fontSize: 12, lineHeight: 1.4 }}
             >
               {r.llm_thesis}
               {r.llm_risks && (
-                <div style={{ marginTop: 3, color: "#5a5a5a", fontSize: 10 }}>
+                <div style={{ marginTop: 3, color: "#5a5a5a", fontSize: 11 }}>
                   <span style={{ color: "#ef4444" }}>risk:</span> {r.llm_risks}
                 </div>
               )}
@@ -643,6 +644,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
             color: "#e5e5e5",
             textDecoration: "none",
             borderBottom: "1px dotted #3a3a3a",
+            fontSize: 13,
           }}
         >
           {r.headline}
@@ -653,14 +655,14 @@ export default function RnsTab({ refreshKey, onSelect }) {
             style={{
               marginTop: 6,
               color: "#888",
-              fontSize: 11,
+              fontSize: 12,
               lineHeight: 1.4,
               maxWidth: 600,
             }}
           >
             {r.llm_thesis}
             {r.llm_risks && (
-              <div style={{ marginTop: 3, color: "#5a5a5a", fontSize: 10 }}>
+              <div style={{ marginTop: 3, color: "#5a5a5a", fontSize: 11 }}>
                 <span style={{ color: "#ef4444" }}>risk:</span> {r.llm_risks}
               </div>
             )}
