@@ -302,6 +302,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   return (
                     <div
                       key={r.symbol}
+                      // preventDefault stops the mousedown from blurring the
+                      // input: otherwise the 200ms blur timer can unmount the
+                      // dropdown before mouseup, and a slow click is lost.
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => highlightInScreener(r.symbol)}
                       title={screenedOut ? "Hidden by your current screener filters" : undefined}
                       style={{ ...S.dropdownItem, opacity: screenedOut ? 0.5 : 1 }}

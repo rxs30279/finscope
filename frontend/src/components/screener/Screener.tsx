@@ -116,8 +116,11 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   // Publish the set of symbols passing the current filters so the nav search can
   // flag a result that's been screened out (clicking it would otherwise scroll to
   // a row that isn't there). `matchKeyRef` dedupes so we only push on real change.
-  const { setScreenMatches } = useRefresh();
+  const { setScreenMatches, setHighlightSymbol } = useRefresh();
   const matchKeyRef = useRef<string | null>(null);
+  // Local copy of the searched symbol, kept for row styling after the context
+  // value is consumed (cleared) by the scroll effect below.
+  const [highlighted, setHighlighted] = useState<string | null>(null);
 
   useEffect(() => {
     const s = loadScreenerState();
@@ -175,18 +178,31 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   // effect runs, which would cancel an inline scrollIntoView (the prod-only
   // "search doesn't scroll" bug — masked locally by dev timing). Retrying a few
   // frames also covers the row not being laid out yet on the first frame.
+  // The context value is one-shot: it lives in the root-layout provider, so if
+  // left in place it survives navigation, and a later search for the *same*
+  // symbol becomes a silent no-op (setState to the identical value bails out,
+  // and router.push("/screener") is inert when already there). It's therefore
+  // cleared once consumed — after the scroll lands, or once the universe is
+  // loaded and the row provably isn't in it (screened out). Not cleared while
+  // results are still loading: the re-run on `results` arrival does the scroll.
   useEffect(() => {
     if (!highlightSymbol) return;
+    setHighlighted(highlightSymbol);
     let raf = 0;
     let tries = 0;
     const tick = () => {
       const el = document.getElementById("row-" + highlightSymbol);
-      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
-      if (tries++ < 30) raf = requestAnimationFrame(tick);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightSymbol(null);
+        return;
+      }
+      if (tries++ < 30) { raf = requestAnimationFrame(tick); return; }
+      if (results.length > 0) setHighlightSymbol(null);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [highlightSymbol, results]);
+  }, [highlightSymbol, results, setHighlightSymbol]);
 
   // Fetch the full universe once. All filtering is done client-side (below), so
   // this is a single canonical request → one Vercel edge cache key shared by all
@@ -465,7 +481,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
             </thead>
             <tbody>
               {sorted.map((r, i) => {
-                const isHighlighted = r.symbol === highlightSymbol;
+                const isHighlighted = r.symbol === highlighted;
                 const baseBg = isHighlighted ? "#2d1e00" : i % 2 === 0 ? "#1e293b" : "#162032";
                 return (
                   <tr key={r.symbol} id={"row-" + r.symbol} onClick={() => onSelect(r.symbol)} style={{ background: baseBg, cursor: "pointer", scrollSnapAlign: "start", boxShadow: isHighlighted ? "inset 3px 0 0 #f97316" : "none" }} onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")} onMouseLeave={(e) => (e.currentTarget.style.background = baseBg)}>
