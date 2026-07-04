@@ -208,6 +208,20 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
     ];
   })();
 
+  // The bars are floating [low, high] ranges that can dip below zero (a loss).
+  // Recharts anchors a hidden axis at 0 by default, which squashes the negative
+  // extent against the baseline instead of drawing it to scale — so we pin the
+  // domain explicitly to the true min/max, padding the loss side to leave room
+  // for its label.
+  const wfDomain = (() => {
+    if (!waterfall) return undefined;
+    const vals = waterfall.flatMap((d) => d.range as number[]);
+    const lo = Math.min(0, ...vals);
+    const hi = Math.max(0, ...vals);
+    const pad = (hi - lo) * 0.07 || 1;
+    return [lo < 0 ? lo - pad : lo, hi] as [number, number];
+  })();
+
   const tabs = ["chart", "overview", "financials", "valuation", "health", "growth", "analysts", "news"];
 
   const descriptors = (
@@ -359,7 +373,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={waterfall} margin={{ top: 24, right: 10, bottom: 5, left: 4 }} barCategoryGap="12%">
                   <XAxis dataKey="name" tick={isMobile ? <WrapTick /> : { fontSize: 12, fill: "#cbd5e1" }} interval={0} tickLine={false} axisLine={{ stroke: "#334155" }} {...(isMobile ? { height: 48 } : {})} />
-                  <YAxis hide />
+                  <YAxis hide domain={wfDomain} />
                   <Tooltip
                     cursor={{ fill: "#ffffff08" }}
                     contentStyle={S.tooltip}
@@ -367,14 +381,21 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
                     formatter={(_v: any, _n: any, p: any) => [fmt(p?.payload?.amount, "currency", fcur), p?.payload?.name]}
                     labelFormatter={() => ""}
                   />
+                  <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3" />
                   <Bar dataKey="range" radius={[2, 2, 0, 0]}>
                     {waterfall.map((d, i) => <Cell key={i} fill={d.fill} />)}
                     <LabelList
                       dataKey="amount"
                       content={(props: any) => {
-                        const { x, y, width, value } = props;
+                        const { x, y, width, height, value } = props;
+                        // A loss bar hangs below zero and recharts reports it with
+                        // a negative height (y is the bottom edge), so derive the
+                        // top edge explicitly and always sit the label just above
+                        // it — on top of the bar, never inside. Colour the loss red.
+                        const neg = value < 0;
+                        const top = Math.min(y, y + height);
                         return (
-                          <text x={x + width / 2} y={y - 6} textAnchor="middle" fill="#e5e7eb" fontSize={12} fontFamily="monospace">
+                          <text x={x + width / 2} y={top - 6} textAnchor="middle" fill={neg ? "#f87171" : "#e5e7eb"} fontSize={12} fontFamily="monospace">
                             {fmt(value, "currency", fcur)}
                           </text>
                         );
