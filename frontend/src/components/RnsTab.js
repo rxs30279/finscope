@@ -258,6 +258,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const weekend = isWeekendNow();
   const [hours, setHours] = useState(() => (isWeekendNow() ? 72 : 24));
   const [minLlmScore, setMinLlmScore] = useState(50);
+  const [minMarketCap, setMinMarketCap] = useState(0);
   const [search, setSearch] = useState("");
   // Bumped by the manual refresh button or the auto-poll to force a re-fetch.
   const [manualRefresh, setManualRefresh] = useState(0);
@@ -345,6 +346,12 @@ export default function RnsTab({ refreshKey, onSelect }) {
     if (minLlmScore > 0) {
       r = r.filter((x) => x.llm_score != null && x.llm_score >= minLlmScore);
     }
+    // Market-cap floor. Rows with an unknown cap (not yet backfilled, or no
+    // Yahoo key configured) can't be confirmed above the floor, so they drop
+    // out once a floor is set.
+    if (minMarketCap > 0) {
+      r = r.filter((x) => x.market_cap != null && x.market_cap >= minMarketCap);
+    }
     // Ranked rows first (by llm_score desc), then unranked (by published_at desc)
     r = [...r].sort((a, b) => {
       const aR = a.llm_score != null,
@@ -355,7 +362,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
       return new Date(b.published_at) - new Date(a.published_at);
     });
     return r;
-  }, [rows, search, minLlmScore]);
+  }, [rows, search, minLlmScore, minMarketCap]);
 
   const ranked = useMemo(() => rows.filter((r) => r.llm_score != null), [rows]);
 
@@ -809,6 +816,27 @@ export default function RnsTab({ refreshKey, onSelect }) {
             </select>
           </div>
         );
+        const capDropdown = (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <span style={{ fontSize: 10, color: "#555", letterSpacing: 1, textTransform: "uppercase", fontFamily: "monospace" }}>
+              Min Cap
+            </span>
+            <select
+              value={minMarketCap}
+              onChange={(e) => setMinMarketCap(Number(e.target.value))}
+              style={{ background: "#0a0a0a", color: "#e5e5e5", border: "1px solid #2a2a2a", padding: "4px 8px", fontFamily: "monospace", fontSize: 11, borderRadius: 2 }}
+            >
+              <option value={0}>Any</option>
+              <option value={10e6}>£10M+</option>
+              <option value={50e6}>£50M+</option>
+              <option value={100e6}>£100M+</option>
+              <option value={250e6}>£250M+</option>
+              <option value={1e9}>£1B+</option>
+              <option value={5e9}>£5B+</option>
+              <option value={10e9}>£10B+</option>
+            </select>
+          </div>
+        );
         const scoreCount = (
           <span style={{ fontFamily: "monospace", whiteSpace: "nowrap", textAlign: "right" }}>
             <span style={{ fontSize: 11, color: "#888" }}>AI </span>
@@ -842,8 +870,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
         );
         return isMobile ? (
           <div style={{ ...S.card, marginBottom: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
               {windowDropdown}
+              {capDropdown}
               <span style={{ marginLeft: "auto" }}>{scoreCount}</span>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -855,6 +884,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
         ) : (
           <div style={{ ...S.card, marginBottom: 16, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
             {windowDropdown}
+            {capDropdown}
             <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "1 1 220px", minWidth: 160 }}>
               {sliderLabel}
               {sliderInput}
