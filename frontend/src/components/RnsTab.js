@@ -91,6 +91,14 @@ function fmtAgo(iso) {
   return `${days}d ago`;
 }
 
+// The LSE doesn't publish RNS at the weekend, so a 24h window on Sat/Sun is
+// empty. Detect it so we can (a) default to a wider window that reaches back
+// past Friday's close and (b) explain the gap to the user.
+function isWeekendNow() {
+  const day = new Date().getDay(); // 0 = Sun, 6 = Sat
+  return day === 0 || day === 6;
+}
+
 const _NEG_CATS = new Set([
   "profit_warning", "going_concern", "liquidation", "delisting", "suspension",
 ]);
@@ -245,7 +253,10 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const isNarrow = useMediaQuery("(max-width: 640px)");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [hours, setHours] = useState(24);
+  // No RNS is published at the weekend, so a 24h window on Sat/Sun shows
+  // nothing. Default to 72h then, which reaches back past Friday's close.
+  const weekend = isWeekendNow();
+  const [hours, setHours] = useState(() => (isWeekendNow() ? 72 : 24));
   const [minLlmScore, setMinLlmScore] = useState(50);
   const [search, setSearch] = useState("");
   // Bumped by the manual refresh button or the auto-poll to force a re-fetch.
@@ -753,6 +764,27 @@ export default function RnsTab({ refreshKey, onSelect }) {
           </span>
         }
       />
+
+      {/* Weekend note — the LSE publishes no RNS on Sat/Sun, so we widen the
+          default window to surface Friday's announcements instead. */}
+      {weekend && (
+        <div
+          style={{
+            ...S.card,
+            marginBottom: 16,
+            padding: "10px 14px",
+            borderLeft: "3px solid #60a5fa",
+            color: "#94a3b8",
+            fontFamily: "monospace",
+            fontSize: 11,
+            lineHeight: 1.5,
+          }}
+        >
+          <span style={{ color: "#60a5fa", fontWeight: 700 }}>Weekend:</span>{" "}
+          the LSE publishes no RNS on Saturdays or Sundays. Showing older
+          announcements — the window has been widened past Friday's close.
+        </div>
+      )}
 
       {/* Controls */}
       {(() => {
