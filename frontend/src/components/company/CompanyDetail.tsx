@@ -15,6 +15,8 @@ import FairValueCard from "./FairValueCard";
 import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
+import StarButton from "@/components/screener/StarButton";
+import { useWatchlist } from "@/app/providers";
 
 // The waterfall's category labels ("Cost of Revenue", "Other Expenses", …) are
 // too wide to sit horizontally on mobile without overlapping. Rather than rotate
@@ -111,6 +113,8 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
   const [descExpanded, setDescExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const isMobile = useIsMobile();
+  const { defaultMembers, toggleWatchlist } = useWatchlist();
+  const starred = defaultMembers.has(symbol);
 
   useEffect(() => { setTab(initialTab || "chart"); }, [symbol, initialTab]);
 
@@ -235,6 +239,21 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
     </p>
   ) : null;
 
+  // Split the name so the last word and the ★ can be wrapped in a nowrap unit —
+  // that keeps the star glued to the final word instead of dropping to its own line.
+  const displayName = meta?.name || symbol;
+  const nameWords = displayName.split(" ");
+  const nameLastWord = nameWords.pop() as string;
+  const nameHead = nameWords.join(" ");
+  const nameStar = (
+    <span style={{ whiteSpace: "nowrap" }}>
+      {nameLastWord}
+      <span style={{ position: "relative", top: -5, marginLeft: 6, display: "inline-flex", verticalAlign: "middle" }}>
+        <StarButton active={starred} onClick={() => toggleWatchlist(symbol)} size={22} />
+      </span>
+    </span>
+  );
+
   return (
     <div>
       {/* Header */}
@@ -251,9 +270,14 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
                 </div>
               </div>
             </div>
-            {/* Match the logo's vertical span (marginTop 9 + 64h) so the name sits on its midline */}
-            <div style={{ marginTop: 9, minHeight: 64, marginLeft: 84, display: "flex", alignItems: "center" }}>
-              <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 22, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
+            {/* Match the logo's vertical span (marginTop 9 + 64h) so the name sits on its midline.
+                Just a small right gutter so the name wraps naturally across the full available width
+                (no artificial narrowing); the ★ trails the name inline, glued to the last word. */}
+            <div style={{ marginTop: 9, minHeight: 64, marginLeft: 84, marginRight: 8, display: "flex", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 22, color: "#f1f5f9" }}>
+                {nameHead && nameHead + " "}
+                {nameStar}
+              </h2>
             </div>
           </div>
           {description}
@@ -265,7 +289,12 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
             <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 10 }}>
               <LogoBadge symbol={symbol} paysDividend={paysDividend} />
               <div>
-                <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
+                  <span style={{ position: "relative", top: -5, display: "inline-flex" }}>
+                    <StarButton active={starred} onClick={() => toggleWatchlist(symbol)} size={20} />
+                  </span>
+                </div>
                 <div style={{ marginTop: 5 }}>{descriptors}</div>
                 {dividendLink && <div style={{ marginTop: 8 }}>{dividendLink}</div>}
               </div>
