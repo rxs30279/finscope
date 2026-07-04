@@ -372,8 +372,21 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           <option value="10000000000">£10B+</option>
           <option value="50000000000">£50B+</option>
         </HybridSelect>
-        <button onClick={() => setShowAdvanced((v) => !v)} style={{ ...S.select, cursor: "pointer", color: showAdvanced || hasAdvancedFilters ? "#f97316" : "#888", borderColor: hasAdvancedFilters ? "#f97316" : "#2a2a2a" }}>
-          Advanced {showAdvanced ? "▲" : "▼"}{hasAdvancedFilters ? " ●" : ""}
+        <button
+          onClick={() => setShowAdvanced((v) => !v)}
+          style={{
+            ...S.select,
+            cursor: "pointer",
+            fontWeight: 600,
+            // Always wear an orange accent so it reads as the primary way in to
+            // richer filtering, not just another dropdown. Fill solid once the
+            // panel is open or filters are set.
+            ...(showAdvanced || hasAdvancedFilters
+              ? { background: "#f97316", border: "1px solid #f97316", color: "#0a0a0a" }
+              : { background: "rgba(249,115,22,0.1)", border: "1px solid rgba(249,115,22,0.4)", color: "#fb923c" }),
+          }}
+        >
+          ⚙ Advanced {showAdvanced ? "▲" : "▼"}{hasAdvancedFilters ? " ●" : ""}
         </button>
         {hasActiveFilters && (
           <button onClick={clearFilters} style={{ ...S.select, cursor: "pointer", color: "#ef4444", borderColor: "#3a1a1a" }}>Clear filters ✕</button>
