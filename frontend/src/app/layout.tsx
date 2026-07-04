@@ -5,6 +5,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { WatchlistProvider, RefreshProvider } from "./providers";
+import { PostHogProvider } from "./posthog-provider";
 import AppShell from "@/components/layout/AppShell";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
 
@@ -120,11 +121,13 @@ export default function RootLayout({
             ]),
           }}
         />
-        <WatchlistProvider>
-          <RefreshProvider>
-            <AppShell>{children}</AppShell>
-          </RefreshProvider>
-        </WatchlistProvider>
+        <PostHogProvider>
+          <WatchlistProvider>
+            <RefreshProvider>
+              <AppShell>{children}</AppShell>
+            </RefreshProvider>
+          </WatchlistProvider>
+        </PostHogProvider>
         <Analytics />
         <SpeedInsights />
       </body>
