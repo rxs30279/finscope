@@ -108,7 +108,8 @@ When you open Alpha Move AI you see:
 
 ![The home page — the Screener table with its filter bar across the top and the live market sidebar down the left.](manual_assets/shots/Home%20Page.png)
 
-- **Top navigation bar** — **Screener**, **Trending**, **Watchlist**, **Analysts**, **RNS News**, **Subscribe**, and **Markets**. On narrow screens (tablets and phones) the links collapse into a **☰ hamburger** menu. The **Markets** link opens a single combined page that stacks the Cross-Asset Monitor, Fear & Greed Index, Market Breadth, and Sector Rotation panels (see [Sections 5–6](#5-sector-analysis)).
+- **Top navigation bar** — **Screener**, **Trending**, **Watchlist**, **Analysts**, **RNS News**, **RNS Email**, and **Markets**. On narrow screens (tablets and phones) the links collapse into a **☰ hamburger** menu. The **Markets** link opens a single combined page that stacks the Cross-Asset Monitor, Fear & Greed Index, Market Breadth, and Sector Rotation panels (see [Sections 5–6](#5-sector-analysis)).
+- **⚙ Settings menu** — a gear dropdown at the far right of the navigation bar (in the hamburger menu on mobile). It holds **Screener Settings** — where you choose which fundamental columns appear in the Screener table (see [§3.1](#31-understanding-the-columns)) — and a link to download this manual.
 - **Left sidebar** — a live pulse of the market: a London Stock Exchange open/closed clock, benchmark returns, ICB sector strength, the UK and US fear gauges, and a **▦ Heatmap** link to the Sector Heatmap. See [Section 10](#10-the-sidebar). Toggle the sidebar on or off using the icon at the top-left of the navigation bar.
 - **Main content area** — changes depending on which page you are on.
 - **Search bar** — type a company name or ticker symbol to jump straight to its detail page.
@@ -125,24 +126,67 @@ The Screener is the heart of the application. It displays a table of UK stocks w
 
 #### Fundamentals View
 
+The Fundamentals table has **three kinds of column**:
+
+1. **Fixed columns** that are always shown (identity and size).
+2. A **customisable block of fundamental metrics** in the middle — you choose which of 23 metrics appear (see *Customising the columns* below).
+3. The **four score pills** (Momentum, Quality, Value, Risk) that are always shown on the right and explained in [§3.2](#32-the-four-scores-explained).
+
+**Always-on columns**
+
 | Column | What it means | What to look for |
 |---|---|---|
+| **★ Star** | A small star icon at the start of each row. Click to add or remove the company from your **Watchlist** (see Section 3.6). | A gold star means the company is on your list |
 | **Symbol** | The stock's ticker code, e.g. `AZN.L`. The `.L` means London-listed. | — |
 | **Name** | Company name | — |
 | **Sector** | The industry the company operates in (ICB classification — see Appendix B) | Use to compare like-for-like |
 | **Index** | Which FTSE index the stock belongs to | Indicates size |
 | **Mkt Cap** | **Market Capitalisation** — the total stock market value of all shares. Calculated as: Share price × number of shares outstanding. A £10bn market cap is a large company. | Larger = more stable; smaller = more growth potential |
-| **P/E** | **Price-to-Earnings ratio** — how much investors pay for each £1 of profit. If a company earns £1 per share and trades at £20, its P/E is 20. A high P/E means investors expect strong future growth; a low P/E may mean the stock is cheap or the business is struggling. | Compare within the same sector; no universal "good" number |
-| **P/B** | **Price-to-Book ratio** — share price divided by the company's net asset value per share. P/B < 1 means you are buying £1 of assets for less than £1. | Useful for asset-heavy sectors like banks and property |
-| **ROE** | **Return on Equity** — net profit as a percentage of shareholders' equity. Measures how efficiently management uses your money. 15%+ is generally considered good. | Higher is better; look for consistency over several years |
-| **Rev Growth** | Year-on-year revenue growth percentage | Positive and growing is ideal |
-| **D/E** | **Debt-to-Equity ratio** — total debt divided by shareholders' equity. A D/E of 1.0 means the company has £1 of debt for every £1 of equity. A genuinely debt-free company shows **0** (not a blank). High D/E increases risk, especially when interest rates are high. | Lower is safer; context matters (utilities typically carry more debt) |
-| **PEGY** | **Price/Earnings divided by (Growth + Yield)**. A simple "value-for-money" check. See Section 3.5. | Below 1 = potentially great value; 1–2 = fair; above 2 = expensive for the growth |
 | **Momentum** | A score from 1–10 measuring price trend strength. See Section 3.2. | Higher score = stronger upward trend |
 | **Quality** | A score from 0–10 measuring the consistency and level of returns. See Section 3.2. | Higher is better |
 | **Value** | The **Piotroski F-Score** (0–9), a measure of financial health and value. See Section 3.2. | 7+ is strong; below 3 is weak |
 | **Risk** | A composite risk score from 1–10. See Section 3.2. | Lower is safer |
-| **★ Star** | A small star icon at the start of each row. Click to add or remove the company from your **Watchlist** (see Section 3.6). | A gold star means the company is on your list |
+
+**Default fundamental columns** — what you see out of the box (all of these can be turned off, and 17 more turned on):
+
+| Column | What it means | What to look for |
+|---|---|---|
+| **P/E** | **Price-to-Earnings ratio** — how much investors pay for each £1 of profit. If a company earns £1 per share and trades at £20, its P/E is 20. A high P/E means investors expect strong future growth; a low P/E may mean the stock is cheap or the business is struggling. | Compare within the same sector; no universal "good" number |
+| **Div Yield** | **Dividend Yield** — the annual dividend as a percentage of the share price. A 4% yield pays £4 a year for every £100 invested. | Higher pays you more to wait, but an unusually high yield can signal the market expects a cut |
+| **ROE** | **Return on Equity** — net profit as a percentage of shareholders' equity. Measures how efficiently management uses your money. 15%+ is generally considered good. | Higher is better; look for consistency over several years |
+| **Rev Growth** | Year-on-year revenue growth percentage | Positive and growing is ideal |
+| **D/E** | **Debt-to-Equity ratio** — total debt divided by shareholders' equity. A D/E of 1.0 means the company has £1 of debt for every £1 of equity. A company with **reported** zero debt shows **0**; a company whose debt figures aren't reported shows a dash (**—**) rather than a misleading 0. High D/E increases risk, especially when interest rates are high. | Lower is safer; context matters (utilities typically carry more debt) |
+| **PEGY** | **Price/Earnings divided by (Growth + Yield)**. A simple "value-for-money" check. See Section 3.5. | Below 1 = potentially great value; 1–2 = fair; above 2 = expensive for the growth |
+
+#### Customising the columns
+
+Open **Settings → Screener** to choose which fundamental metrics appear in the table. There are **23 metrics** to pick from, grouped by theme. Your choices are **saved in your browser**, so the table looks the same each time you return. Turning a column on also adds its matching filter to the Advanced filter panel (see [§3.3](#33-using-the-filters)), so the filters you have available always track the columns you can see.
+
+| Group | Metrics (✓ = shown by default) |
+|---|---|
+| **Valuation & Yield** | P/E ✓ · P/B · P/S · Div Yield ✓ · PEGY ✓ |
+| **Returns on Capital** | ROE ✓ · ROIC · ROCE · ROA |
+| **Margins** | Gross Margin · Operating Margin · Net Margin · FCF Margin |
+| **Growth** | Revenue Growth ✓ · EPS Growth · FCF Growth · Revenue 10y CAGR · EPS 10y CAGR |
+| **Leverage & Risk** | D/E ✓ · Current Ratio · Altman Z · Piotroski · Volatility |
+
+Plain-English meanings of the optional metrics not already covered above:
+
+- **P/B (Price-to-Book):** share price ÷ net asset value per share. Below 1 means you're buying £1 of assets for less than £1 — most useful for asset-heavy businesses like property.
+- **P/S (Price-to-Sales):** market value ÷ annual revenue. Handy for companies not yet consistently profitable.
+- **ROIC / ROCE / ROA:** three "return on capital" cousins of ROE. ROIC (invested capital) is the single best quality gauge; ROCE (capital employed) and ROA (total assets) are alternatives — higher is better on all three.
+- **Gross / Operating / Net / FCF Margin:** how much of each £1 of revenue survives as profit at successive stages (after direct costs, after running costs, after everything, and as actual cash respectively). Higher margins mean more pricing power and efficiency.
+- **EPS Growth / FCF Growth:** year-on-year growth in earnings per share and in free cash flow — the profit and cash equivalents of Revenue Growth.
+- **Revenue 10y / EPS 10y CAGR:** the *compound annual growth rate* over ten years — a long-run trend that smooths out single good or bad years.
+- **Current Ratio:** current assets ÷ current liabilities. Above 1 means the company can cover its short-term bills; a common liquidity check.
+- **Altman Z / Piotroski / Volatility:** the distress, financial-health and price-swing measures behind the Risk and Value scores, exposed as their own columns. Altman Z and Piotroski are explained in [§3.2](#32-the-four-scores-explained) (the Piotroski column shows the same 0–9 figure as the always-on **Value** pill); Volatility is annualised price volatility (lower = steadier).
+
+> **Why some cells show a dash (—).** A metric is left blank whenever it would be **misleading rather than informative** — the app hides it rather than showing a junk number you might sort or filter on by mistake:
+> - **Banks & insurers** hide free-cash-flow figures, gross margin, current ratio, ROIC/ROCE, D/E and Piotroski — a lender's balance sheet doesn't have the same "cost of goods", "current assets" or "invested capital" these assume (a bank's raw free-cash-flow number, for instance, swings wildly with deposit flows and is meaningless). Operating margin, net margin, P/S, ROE and P/B are kept.
+> - **Investment trusts and closed-end funds** hide almost every income-statement metric (P/S, all margins, all growth rates, ROIC/ROCE, current ratio, D/E, Piotroski, FCF). Their "revenue" is investment gains, which can swing by hundreds of percent year to year, so those figures aren't comparable to trading companies. Price-to-book, dividend yield, ROE and volatility remain meaningful and are kept.
+> - **Any company** hides a value that is mathematically degenerate — a negative price-to-book (from negative equity), a ratio distorted by tiny revenue, a growth figure exploded by a near-zero prior year, or the "phantom debt-free" D/E described above.
+>
+> This is deliberate data-cleaning, not missing data. A dash means "this measure doesn't sensibly apply to this company", so you're never comparing a bank's free-cash-flow margin against a manufacturer's.
 
 #### What is Equity?
 
@@ -341,26 +385,32 @@ The filter panel (above the screener table) lets you narrow the universe. Filter
 
 > **Your screen is remembered.** The filters, the column you sorted by, and whether you are in Fundamentals or Analyst view are all **persisted in your browser**. If you click into a company and press Back — or simply close the tab and return later — the Screener reloads with exactly the same shortlist you had set up, rather than resetting to defaults.
 
-#### Basic Filters
+#### Always-visible filters
+
+These three sit in the filter bar at all times:
 
 | Filter | Practical use |
 |---|---|
 | **Sector** | Focus on an industry you understand or that your research suggests is performing well. Click the **⊘** button next to a sector name in the dropdown to **exclude** it instead — see Section 3.7 |
 | **FTSE Index** | Filter by company size. FTSE 100 = the largest blue chips; FTSE 250 = mid-cap; FTSE 350 = both combined; FTSE SmallCap = smaller companies; **AIM 100** = the largest 100 companies on the Alternative Investment Market |
 | **Market Cap (min)** | Set a floor to exclude very small illiquid stocks |
-| **P/E (max)** | Exclude very expensive stocks. Setting to 25 focuses on reasonably valued companies |
-| **ROE (min)** | Set to 10% or 15% to find only profitable businesses |
-| **Revenue Growth (min)** | Set to 5% to find growing companies |
 
-#### Score-Based Filters
+#### The Advanced panel
+
+Click **Advanced ▼** to open a panel of finer filters. A small dot (**●**) appears on the button whenever any Advanced filter is active, so you can tell at a glance that a hidden filter is still narrowing your list. It holds two kinds of filter:
+
+**Score filters** — one for each of the four score pills:
 
 | Filter | Suggested starting value | Rationale |
 |---|---|---|
 | **Min Momentum** | 6 | Focus on stocks with above-average price trends |
 | **Min Quality** | 6 | Only businesses with strong returns and margins |
-| **Min Piotroski** | 6 | Financially healthy and improving |
+| **Min Value** | 6 | Financially healthy and improving (the Piotroski F-Score) |
 | **Max Risk** | 5 | Exclude higher-risk names |
-| **Max PEGY** | 1.5 | Keep only stocks priced fairly-or-cheaply for their growth and yield (options: ≤ 1, ≤ 1.5, ≤ 2). See [§3.5](#35-the-pegy-column). |
+
+**Column filters** — one filter is generated for **each fundamental column you have switched on** (see [§3.1](#31-understanding-the-columns)). If the P/E column is showing you get a *P/E max* filter; switch on ROE and a *ROE min* filter appears; and so on for Revenue Growth, PEGY, margins, leverage and the rest. Each offers quick preset thresholds (e.g. *P/E < 15 / < 25 / < 40*) plus a **Custom…** option to type your own number. Turning a column off removes its filter, so the filters available always match the columns you can see.
+
+> **Tip:** to filter on a metric, first make sure its column is enabled in **Settings → Screener**. A metric with no visible column has no filter. (For example, PEGY — [§3.5](#35-the-pegy-column) — is filterable because the PEGY column is on by default.)
 
 #### Analyst Filters (in Analyst View)
 
