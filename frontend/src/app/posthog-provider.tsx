@@ -22,6 +22,12 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
       capture_pageview: false,
       capture_pageleave: true,
       person_profiles: "identified_only",
+      // Session replay is left at posthog-js's default (disable_session_recording
+      // is false), so recordings capture once it's toggled on in PostHog →
+      // Settings → Session Replay. The 5-second minimum-duration filter and the
+      // billing limit are BOTH server-side settings there, not client init
+      // options in this SDK version. Text/inputs are masked by default, which we
+      // want for a finance app.
     });
   }, []);
 
