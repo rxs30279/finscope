@@ -25,7 +25,6 @@ export interface ScreenerColumnDef {
   format: ColumnFormat; // Passed to fmt() for the default cell text.
   defaultEnabled: boolean;
   filter: ColumnFilterDef; // Filter presets + direction (every toggleable column is numeric).
-  naSectors?: string[]; // Sectors where this metric is not meaningful — blanked to "—" (see blankNaMetrics).
   color?: (v: number | null | undefined) => string; // Cell text colour; omit => plain "#ccc".
   render?: (v: number | null | undefined) => string; // Overrides fmt()-based text (PEGY only).
 }
@@ -74,11 +73,11 @@ export const SCREENER_TOGGLE_COLUMNS: ScreenerColumnDef[] = [
   { key: "gross_margin", label: "Gross Mgn", title: "Gross margin", group: "Margins", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["Gross > 20%", "0.2"], ["Gross > 40%", "0.4"], ["Gross > 60%", "0.6"]] } },
   { key: "operating_margin", label: "Op Mgn", title: "Operating margin", group: "Margins", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["Op > 10%", "0.1"], ["Op > 20%", "0.2"], ["Op > 30%", "0.3"]] } },
   { key: "net_income_margin", label: "Net Mgn", title: "Net income margin", group: "Margins", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["Net > 5%", "0.05"], ["Net > 10%", "0.1"], ["Net > 20%", "0.2"]] } },
-  { key: "fcf_margin", label: "FCF Mgn", title: "Free cash flow margin", group: "Margins", format: "pct", defaultEnabled: false, color: gc, naSectors: ["Financials"], filter: { dir: "min", presets: [["FCF > 5%", "0.05"], ["FCF > 10%", "0.1"], ["FCF > 15%", "0.15"]] } },
+  { key: "fcf_margin", label: "FCF Mgn", title: "Free cash flow margin", group: "Margins", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["FCF > 5%", "0.05"], ["FCF > 10%", "0.1"], ["FCF > 15%", "0.15"]] } },
   // Growth
   { key: "revenue_growth", label: "Rev Grwth", title: "Revenue growth (year-on-year)", group: "Growth", format: "pct", defaultEnabled: true, color: gc, filter: { dir: "min", presets: [["Rev > 5%", "0.05"], ["Rev > 10%", "0.1"], ["Rev > 20%", "0.2"]] } },
   { key: "eps_diluted_growth", label: "EPS Grwth", title: "Diluted EPS growth (year-on-year)", group: "Growth", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["EPS > 5%", "0.05"], ["EPS > 10%", "0.1"], ["EPS > 20%", "0.2"]] } },
-  { key: "fcf_growth", label: "FCF Grwth", title: "Free cash flow growth (year-on-year)", group: "Growth", format: "pct", defaultEnabled: false, color: gc, naSectors: ["Financials"], filter: { dir: "min", presets: [["FCF > 5%", "0.05"], ["FCF > 10%", "0.1"], ["FCF > 20%", "0.2"]] } },
+  { key: "fcf_growth", label: "FCF Grwth", title: "Free cash flow growth (year-on-year)", group: "Growth", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["FCF > 5%", "0.05"], ["FCF > 10%", "0.1"], ["FCF > 20%", "0.2"]] } },
   { key: "revenue_cagr_10", label: "Rev 10y", title: "Revenue 10-year CAGR", group: "Growth", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["10y > 5%", "0.05"], ["10y > 10%", "0.1"], ["10y > 15%", "0.15"]] } },
   { key: "eps_cagr_10", label: "EPS 10y", title: "Diluted EPS 10-year CAGR", group: "Growth", format: "pct", defaultEnabled: false, color: gc, filter: { dir: "min", presets: [["10y > 5%", "0.05"], ["10y > 10%", "0.1"], ["10y > 15%", "0.15"]] } },
   // Leverage & risk
@@ -111,17 +110,7 @@ export const SCREENER_COLUMN_GROUPS: { group: string; columns: ScreenerColumnDef
     return acc;
   }, []);
 
-// Columns that carry a naSectors rule (precomputed so the per-row pass is cheap).
-const NA_METRIC_COLUMNS = SCREENER_TOGGLE_COLUMNS.filter((c) => c.naSectors && c.naSectors.length);
-
-// Null out metrics that aren't meaningful for a row's sector (e.g. free-cash-flow
-// figures for banks — see the NatWest FCF-growth case). Mutates and returns the
-// row. Applied once after fetch so display, sort and filter all treat the value
-// as missing ("—"), rather than blanking only the cell and letting a filter/sort
-// still act on the junk number. Mirrors Fair Value excluding financials.
-export const blankNaMetrics = <T extends { sector?: string | null }>(row: T): T => {
-  for (const c of NA_METRIC_COLUMNS) {
-    if (row.sector && c.naSectors!.includes(row.sector)) (row as any)[c.key] = null;
-  }
-  return row;
-};
+// Not-meaningful-metric blanking (e.g. FCF for banks, revenue ratios for
+// investment trusts) happens server-side in /api/screener
+// (_scrub_screener_metrics in backend/main.py), keyed on the risk model —
+// sector alone couldn't catch trusts, which Yahoo gives no sector at all.

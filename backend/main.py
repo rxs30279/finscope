@@ -9,6 +9,7 @@ import psycopg2.pool
 from typing import Optional
 from dotenv import load_dotenv
 import os
+import re
 import statistics
 from market import router as market_router
 from prices import router as prices_router, _attach_momentum, _trailing_streak
@@ -1359,6 +1360,130 @@ def compute_and_store_valuations():
         pool.putconn(conn)
 
 
+# ── Screener metric scrubbing ─────────────────────────────────────────────────
+# Closed-end funds that Yahoo files under Financial Services / Asset Management
+# come through _classify_risk_model as "financial"; catch them by name so their
+# investment-gain "revenue" doesn't screen as operating performance. Only ever
+# tested against financial-model rows, so fund-flavoured words that exist in
+# other sectors ("infrastructure") are safe here. Audited against the live
+# Asset Management/Capital Markets cohort (2026-07-04): "Ord"/"Income"/
+# "Infrastructure"/"Investments" appear exclusively in fund names there;
+# word-boundaried so Liontrust ("trust") and City of London Investment Group
+# (singular "Investment") don't match. Known escapees (Pershing Square, BH
+# Macro, Syncona, …) are left to the degenerate-value caps below.
+_TRUST_NAME_RE = re.compile(
+    r"\btrust\b|\bfund\b|\bvct\b|\bord\b|\bincome\b|\binvestments\b"
+    r"|\binfrastructure\b|investment company|inv\.? company|private equity",
+    re.I,
+)
+
+# Everything income-statement-derived is meaningless for a closed-end fund:
+# "revenue" is investment gains/losses (BRWM printed +1,158% revenue growth,
+# FEV a P/S of 1.6e-08), so margins, P/S and every growth rate are noise, and
+# Piotroski leans on the same fields. P/B, dividend yield, ROE/ROA and
+# volatility stay — those are the honest lenses for a trust.
+_TRUST_NA_FIELDS = (
+    "price_to_sales", "gross_margin", "operating_margin", "net_income_margin",
+    "fcf_margin", "revenue_growth", "eps_diluted_growth", "fcf_growth",
+    "revenue_cagr_10", "eps_cagr_10", "roic", "roce", "current_ratio",
+    "debt_to_equity", "piotroski_score", "fcf",
+)
+# Banks/insurers: FCF is meaningless (deposit/claims flows swamp it — the
+# NatWest +734% case), current assets/liabilities aren't reported so the
+# current ratio is absent or junk (TBCG: 2,462), D/E's numerator misses the
+# funding book entirely, and ROIC/ROCE have no sensible denominator. Piotroski
+# loses its liquidity/margin legs and reads structurally weak (Financials
+# median 3 vs 5 elsewhere) — blanked too. Operating/net margin and P/S are
+# kept: for a bank they behave like efficiency ratios and are comparable.
+_BANK_INSURER_NA_FIELDS = (
+    "fcf_margin", "fcf_growth", "fcf", "gross_margin", "current_ratio",
+    "roic", "roce", "debt_to_equity", "piotroski_score",
+)
+# Other financials (asset managers, capital markets, credit services): fee
+# revenue is real, so margins and growth stand; only the FCF lens is junk
+# (client/fund cash movements dominate the cash-flow statement).
+_FINANCIAL_NA_FIELDS = ("fcf_margin", "fcf_growth", "fcf")
+
+_NA_FIELDS_BY_MODEL = {
+    "trust": _TRUST_NA_FIELDS,
+    "bank": _BANK_INSURER_NA_FIELDS,
+    "insurer": _BANK_INSURER_NA_FIELDS,
+    "financial": _FINANCIAL_NA_FIELDS,
+}
+
+# Revenue below this (in the filing currency's base units) makes any revenue
+# ratio a shell-company artifact (AVCT: £113k revenue → -34,170% net margin).
+_MIN_RATIO_REVENUE = 1_000_000
+_REVENUE_RATIO_FIELDS = (
+    "price_to_sales", "gross_margin", "operating_margin",
+    "net_income_margin", "fcf_margin", "revenue_growth",
+)
+_GROWTH_CAP = 5.0  # |YoY growth| beyond ±500% is a base-effect artifact
+_CAGR_CAP = 1.0  # |10y CAGR| beyond ±100%/yr means a broken endpoint (MSI: +494%)
+_MAX_PS = 300.0  # no real business trades at P/S > 300 (cf. the P/E > 999 cap)
+_MAX_CURRENT_RATIO = 50.0  # beyond this it's client money / float, not liquidity
+
+
+def _scrub_screener_metrics(results):
+    """Null out metrics that are junk for a row before they can render, sort,
+    filter, or feed the quality/value scores.
+
+    Two passes per row: degenerate-value guards that apply to every company
+    (negative/zero denominators, shell-sized revenue, base-effect growth,
+    phantom debt-free D/E), then business-model blanking keyed on the stored
+    risk_model — falling back to _classify_risk_model when screener_scores
+    hasn't covered the row yet — plus the trust-name test above. Runs on the
+    raw rows straight from SQL, before _attach_pegy/_quality_score/_value_score
+    and before the GICS→ICB sector rename.
+    """
+    for r in results:
+        rev = r.get("revenue")
+        if rev is not None and rev < _MIN_RATIO_REVENUE:
+            for k in _REVENUE_RATIO_FIELDS:
+                r[k] = None
+        pb = r.get("price_to_book")
+        if pb is not None and pb <= 0:
+            r["price_to_book"] = None  # negative equity: P/B is undefined
+        ps = r.get("price_to_sales")
+        if ps is not None and (ps <= 0 or ps > _MAX_PS):
+            r["price_to_sales"] = None
+        cr = r.get("current_ratio")
+        if cr is not None and cr > _MAX_CURRENT_RATIO:
+            r["current_ratio"] = None  # QLT printed 115.9 (client money)
+        for k in ("revenue_growth", "eps_diluted_growth", "fcf_growth"):
+            v = r.get(k)
+            if v is not None and abs(v) > _GROWTH_CAP:
+                r[k] = None
+        for k in ("revenue_cagr_10", "eps_cagr_10"):
+            v = r.get(k)
+            if v is not None and abs(v) > _CAGR_CAP:
+                r[k] = None
+        # Historic rows derived D/E as (st+lt)/equity with absent debt fields
+        # coerced to 0, so unreported debt printed as a green "debt-free" 0.0
+        # (LLOY, NWG). Same phantom-net-cash trap as _debt_service_component:
+        # only trust a 0 when some debt field was actually reported. updater.py
+        # now writes NULL for new rows, but the upsert's COALESCE keeps old
+        # values, so the stored 0.0s never self-heal — scrub at the boundary.
+        if (
+            r.get("debt_to_equity") == 0
+            and r.get("st_debt") is None
+            and r.get("lt_debt") is None
+        ):
+            r["debt_to_equity"] = None
+
+        model = r.get("risk_model") or _classify_risk_model(r)
+        if model == "financial" and _TRUST_NAME_RE.search(r.get("name") or ""):
+            model = "trust"
+        fields = _NA_FIELDS_BY_MODEL.get(model)
+        if fields:
+            for k in fields:
+                r[k] = None
+
+        # Fetched only for the phantom-D/E check — not part of the response.
+        r.pop("st_debt", None)
+        r.pop("lt_debt", None)
+
+
 _screener_cache: dict = {}
 _SCREENER_TTL = 21600  # 6h — underlying data only refreshes once/day (matches edge s-maxage)
 
@@ -1438,9 +1563,9 @@ def screener(
         params.append(min_upside_pct)
     params.append(limit)
     sql = f"""
-        SELECT m.symbol, m.name, m.sector, m.country, m.exchange, m.ftse_index,
+        SELECT m.symbol, m.name, m.sector, m.industry, m.country, m.exchange, m.ftse_index,
                m.financial_currency, m.currency,
-               t.market_cap, t.revenue, t.net_income,
+               t.market_cap, t.revenue, t.net_income, t.st_debt, t.lt_debt,
                CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END as price_to_earnings,
                t.price_to_book, t.price_to_sales, t.roe, t.roa, t.roic, t.roce,
                t.gross_margin, t.operating_margin, t.net_income_margin,
@@ -1475,6 +1600,10 @@ def screener(
         LIMIT %s
     """
     results = query(sql, params)
+    # Scrub before anything reads the rows: junk metrics (trust "revenue",
+    # bank FCF, phantom D/E zeros, shell-company ratios) must not render, sort,
+    # filter, or leak into the quality/value scores computed below.
+    _scrub_screener_metrics(results)
     # momentum / piotroski / risk / altman_z / volatility now come precomputed via
     # the screener_scores JOIN (see compute_and_store_scores). quality_score,
     # value_score and pegy stay inline — they read only columns already in this

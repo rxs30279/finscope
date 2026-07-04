@@ -5,7 +5,7 @@ import { API } from "@/lib/api";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
 import { loadScreenerState, saveScreenerState, loadScreenerColumns } from "@/lib/storage";
-import { SCREENER_TOGGLE_COLUMNS, DEFAULT_SCREENER_COLUMN_PREFS, filterScale, blankNaMetrics } from "@/lib/screenerColumns";
+import { SCREENER_TOGGLE_COLUMNS, DEFAULT_SCREENER_COLUMN_PREFS, filterScale } from "@/lib/screenerColumns";
 import { useRefresh } from "@/app/providers";
 import HybridSelect from "@/components/company/HybridSelect";
 import SectorDropdown from "./SectorDropdown";
@@ -196,9 +196,10 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     fetch(`${API}/screener?limit=1000`)
       .then((r) => r.json())
       .then((d) => {
-        // Null out metrics that aren't meaningful for a row's sector (e.g. FCF
-        // figures for banks) so they show "—" and don't sort/filter on junk.
-        const arr = (Array.isArray(d) ? d : []).map(blankNaMetrics);
+        // Metrics that aren't meaningful for a row (FCF for banks, revenue
+        // ratios for trusts, …) arrive already nulled by the server, so they
+        // show "—" and never sort/filter on junk.
+        const arr = Array.isArray(d) ? d : [];
         setResults(arr);
         setLoading(false);
       })
