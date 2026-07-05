@@ -42,15 +42,15 @@ const pctColor = (v) =>
 const TIER_COLOR = { A: "#f87171", B: "#fbbf24", C: "#94a3b8" };
 
 const VET_STYLE = {
-  include: { color: "#10b981", bg: "#0d2318", label: "vet: include" },
-  caution: { color: "#f59e0b", bg: "#2a1c00", label: "vet: caution" },
-  exclude: { color: "#ef4444", bg: "#2a0d0d", label: "vet: exclude" },
+  include: { color: "#10b981", bg: "#0d2318", label: "manual screen: include" },
+  caution: { color: "#f59e0b", bg: "#2a1c00", label: "manual screen: caution" },
+  exclude: { color: "#ef4444", bg: "#2a0d0d", label: "manual screen: exclude" },
 };
 
 const S = {
   th: {
     textAlign: "left",
-    padding: "8px 14px",
+    padding: "10px 14px",
     background: "#0a0a0a",
     color: "#f97316",
     fontSize: 10,
@@ -65,12 +65,12 @@ const S = {
     userSelect: "none",
   },
   td: {
-    padding: "9px 14px",
+    padding: "18px 14px",
     borderBottom: "1px solid #1a1a1a",
     color: "#ccc",
     whiteSpace: "nowrap",
     fontFamily: "monospace",
-    fontSize: 12,
+    fontSize: 13,
   },
 };
 
@@ -97,29 +97,6 @@ function IndexBadge({ index }) {
   );
 }
 
-function StreakBadge({ streak }) {
-  if (!streak) return null;
-  const up = streak > 0;
-  const days = Math.abs(streak);
-  return (
-    <span
-      title={`${days} consecutive ${up ? "up" : "down"} day${days > 1 ? "s" : ""}`}
-      style={{
-        background: up ? "#0d2318" : "#2a0d0d",
-        color: up ? "#10b981" : "#ef4444",
-        border: `1px solid ${up ? "#10b98133" : "#ef444433"}`,
-        padding: "1px 6px",
-        borderRadius: 2,
-        fontSize: 10,
-        fontWeight: 700,
-      }}
-    >
-      {up ? "▲" : "▼"}
-      {days}d
-    </span>
-  );
-}
-
 // AI (LLM) score, coloured on the RNS page's bands.
 function ScoreCell({ value }) {
   if (value == null) return <span style={{ color: "#333" }}>—</span>;
@@ -129,13 +106,12 @@ function ScoreCell({ value }) {
     <span
       title="AI significance score (0–100)"
       style={{
-        color: colour,
         fontFamily: "monospace",
         fontSize: 12,
         fontWeight: 700,
       }}
     >
-      AI {value}
+      <span style={{ color: "#fff" }}>AI</span> <span style={{ color: colour }}>{value}</span>
     </span>
   );
 }
@@ -358,7 +334,7 @@ function PendingCard({ entry, onApprove, onReject }) {
       {st.llm_thesis && <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.45 }}>{st.llm_thesis}</div>}
       {vet && st.vet_rationale && (
         <div style={{ color: vet.color, fontSize: 11.5, lineHeight: 1.45, opacity: 0.9 }}>
-          <span style={{ fontWeight: 700 }}>Vet:</span> {st.vet_rationale}
+          <span style={{ fontWeight: 700 }}>Manual screen:</span> {st.vet_rationale}
         </div>
       )}
       <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
@@ -398,8 +374,7 @@ function AnalysisRow({ label, text, color = "#94a3b8" }) {
 const COLS = [
   { key: "name", label: "Stock", align: "left" },
   { key: "price", label: "Price", align: "right" },
-  { key: "day", label: "Day", align: "right" },
-  { key: "run", label: "Run", align: "right" },
+  { key: "pct_news", label: "Change", align: "right" },
   {
     key: "range",
     label: (
@@ -410,14 +385,12 @@ const COLS = [
     ),
     align: "left",
   },
-  { key: "date", label: "Date", align: "right" },
-  { key: "days", label: "Days", align: "right" },
-  { key: "m", label: "M", align: "center" },
-  { key: "q", label: "Q", align: "center" },
-  { key: "v", label: "V", align: "center" },
-  { key: "r", label: "R", align: "center" },
-  { key: "pct_news", label: "Since story", align: "right" },
-  { key: "fu", label: "Since ±", align: "right", noSort: true },
+  { key: "date", label: "Date added", align: "right" },
+  { key: "m", label: "Mom", align: "center" },
+  { key: "q", label: "Qual", align: "center" },
+  { key: "v", label: "Value", align: "center" },
+  { key: "r", label: "Risk", align: "center" },
+  { key: "fu", label: "Follow-up RNS", align: "right", noSort: true },
   { key: "signals", label: "News", align: "left", noSort: true },
 ];
 
@@ -432,8 +405,7 @@ export default function HighImpactRnsTab({ onSelect }) {
   const [sortCol, setSortCol] = useState("pct_news");
   const [sortDir, setSortDir] = useState("desc");
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
-  const [expanded, setExpanded] = useState(() => new Set());
-  const [analysisOpen, setAnalysisOpen] = useState(() => new Set());
+  const [openStory, setOpenStory] = useState(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
 
   const symbols = useMemo(() => rows.map((r) => r.symbol), [rows]);
@@ -498,11 +470,6 @@ export default function HighImpactRnsTab({ onSelect }) {
     return live != null ? live : r.current_price;
   };
   const isLive = (r) => liveQuotes[r.symbol] != null;
-  const dayPct = (r) => {
-    const p = priceOf(r);
-    if (p == null || !r.prev_close) return null;
-    return (p / r.prev_close - 1) * 100;
-  };
   const rangePos = (r) => {
     const p = priceOf(r);
     if (p == null || r.high_52w == null || r.low_52w == null) return null;
@@ -515,11 +482,8 @@ export default function HighImpactRnsTab({ onSelect }) {
     switch (sortCol) {
       case "name": return r.name || r.symbol;
       case "price": return priceOf(r);
-      case "day": return dayPct(r);
-      case "run": return r.streak;
       case "range": return rangePos(r);
       case "date": return r.story?.published_at ? new Date(r.story.published_at).getTime() : null;
-      case "days": return r.days_since_news;
       case "m": return r.momentum_score;
       case "q": return r.quality_score;
       case "v": return r.value_score;
@@ -575,15 +539,8 @@ export default function HighImpactRnsTab({ onSelect }) {
     [refetch],
   );
 
-  const toggleExpand = (id) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-
-  const toggleAnalysis = (id) =>
-    setAnalysisOpen((prev) => {
+  const toggleStory = (id) =>
+    setOpenStory((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
@@ -598,7 +555,7 @@ export default function HighImpactRnsTab({ onSelect }) {
     <div>
       <PageHeader
         title="High Impact RNS"
-        subtitle="A curated showcase of high-impact, positive RNS stories — each tracked for a month to show whether the signal played out."
+        subtitle="A curated showcase of high-impact, positive RNS stories — each tracked to determine the effect of positive news on the share price."
         right={
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
             {loading ? "loading…" : `${rows.length} tracked`}
@@ -643,7 +600,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                         <th
                           key={c.key}
                           onClick={c.noSort ? undefined : () => toggleSort(c.key)}
-                          style={{ ...S.th, textAlign: c.align, cursor: c.noSort ? "default" : "pointer", color: active ? "#fbbf24" : "#f97316" }}
+                          style={{ ...S.th, textAlign: "center", cursor: c.noSort ? "default" : "pointer", color: active ? "#fbbf24" : "#f97316" }}
                         >
                           {c.label}
                           {active ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
@@ -654,13 +611,11 @@ export default function HighImpactRnsTab({ onSelect }) {
                 </thead>
                 <tbody>
                   {sorted.map((r, i) => {
-                    const dp = dayPct(r);
                     const live = isLive(r);
                     const baseBg = i % 2 === 0 ? "#1e293b" : "#162032";
                     const st = r.story || {};
                     const dl = daysLeft(r);
-                    const isExpanded = expanded.has(r.showcase_id);
-                    const isAnalysisOpen = analysisOpen.has(r.showcase_id);
+                    const isStoryOpen = openStory.has(r.showcase_id);
                     const vet = st.vet_verdict ? VET_STYLE[st.vet_verdict] : null;
                     return (
                       <Fragment key={r.showcase_id}>
@@ -668,15 +623,38 @@ export default function HighImpactRnsTab({ onSelect }) {
                           onClick={() => onSelect && onSelect(r.symbol)}
                           style={{ cursor: "pointer", background: baseBg }}
                         >
-                          {/* Stock — ticker + name + index badge */}
+                          {/* Stock — caret + ticker + name + index badge */}
                           <td style={S.td}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
-                                <IndexBadge index={r.ftse_index} />
-                              </div>
-                              <div style={{ color: "#64748b", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {r.name}
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleStory(r.showcase_id);
+                                }}
+                                title={isStoryOpen ? "Hide story & analysis" : "Show story & analysis"}
+                                style={{
+                                  background: "transparent",
+                                  border: "none",
+                                  color: isStoryOpen ? "#f97316" : "#3b82f6",
+                                  cursor: "pointer",
+                                  fontSize: 10,
+                                  padding: 0,
+                                  lineHeight: 1,
+                                  flexShrink: 0,
+                                  transform: isStoryOpen ? "rotate(90deg)" : "none",
+                                  transition: "transform 0.12s ease",
+                                }}
+                              >
+                                ▶
+                              </button>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
+                                  <IndexBadge index={r.ftse_index} />
+                                </div>
+                                <div style={{ color: "#64748b", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {r.name}
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -687,14 +665,9 @@ export default function HighImpactRnsTab({ onSelect }) {
                             <span style={{ color: "#f1f5f9", fontWeight: 700 }}>{fmtPounds(priceOf(r))}</span>
                           </td>
 
-                          {/* Day change % */}
-                          <td style={{ ...S.td, textAlign: "right", color: pctColor(dp), fontWeight: 700 }}>
-                            {dp == null ? "—" : `${dp >= 0 ? "+" : ""}${dp.toFixed(2)}%`}
-                          </td>
-
-                          {/* Streak run */}
-                          <td style={{ ...S.td, textAlign: "right" }}>
-                            {r.streak ? <StreakBadge streak={r.streak} /> : <span style={{ color: "#3a3a3a" }}>—</span>}
+                          {/* Change — % since the story */}
+                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(r.pct_since_news) }}>
+                            {r.pct_since_news == null ? "—" : `${r.pct_since_news >= 0 ? "+" : ""}${r.pct_since_news.toFixed(1)}%`}
                           </td>
 
                           {/* Trend + 52w range */}
@@ -709,14 +682,9 @@ export default function HighImpactRnsTab({ onSelect }) {
                             </div>
                           </td>
 
-                          {/* Date of the impact story */}
-                          <td style={{ ...S.td, textAlign: "right" }} title="Date of the impact news story">
+                          {/* Date the pick was added to the showcase */}
+                          <td style={{ ...S.td, textAlign: "right" }} title="Date the pick was added">
                             <span style={{ color: "#cbd5e1" }}>{fmtDate(st.published_at)}</span>
-                          </td>
-
-                          {/* Days since the impact story */}
-                          <td style={{ ...S.td, textAlign: "right" }} title="Days since the impact news story">
-                            <span style={{ color: "#94a3b8" }}>{r.days_since_news != null ? `${r.days_since_news}d` : "—"}</span>
                           </td>
 
                           {/* MQVR */}
@@ -725,18 +693,13 @@ export default function HighImpactRnsTab({ onSelect }) {
                           <td style={{ ...S.td, textAlign: "center" }}><ScorePill value={r.value_score} /></td>
                           <td style={{ ...S.td, textAlign: "center" }}><ScorePill value={r.risk_score} invert /></td>
 
-                          {/* % since the story */}
-                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(r.pct_since_news) }}>
-                            {r.pct_since_news == null ? "—" : `${r.pct_since_news >= 0 ? "+" : ""}${r.pct_since_news.toFixed(1)}%`}
-                          </td>
-
                           {/* Follow-up tally since tracking began */}
                           <td style={{ ...S.td, textAlign: "right" }}>
                             <FollowupTally
                               pos={r.followup_pos}
                               neg={r.followup_neg}
-                              expanded={isExpanded}
-                              onToggle={() => toggleExpand(r.showcase_id)}
+                              expanded={isStoryOpen}
+                              onToggle={() => toggleStory(r.showcase_id)}
                             />
                           </td>
 
@@ -758,110 +721,94 @@ export default function HighImpactRnsTab({ onSelect }) {
                           </td>
                         </tr>
 
-                        {/* Story strip — the announcement that got this pick selected */}
-                        <tr style={{ background: baseBg }}>
-                          <td colSpan={COLS.length} style={{ ...S.td, whiteSpace: "normal", borderBottom: "1px solid #1a1a1a", paddingTop: 0 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                              <ScoreCell value={st.llm_score} />
-                              {st.tier && (
-                                <span style={{ color: TIER_COLOR[st.tier] || TIER_COLOR.C, fontSize: 10, fontWeight: 700 }}>
-                                  {st.tier}
-                                </span>
-                              )}
-                              <a
-                                href={st.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                style={{ color: "#e2e8f0", fontSize: 12, fontWeight: 600, textDecoration: "none" }}
-                              >
-                                {st.headline}
-                              </a>
-                              <span style={{ color: "#475569", fontSize: 10 }}>{fmtDate(st.published_at)}</span>
-                              {st.vet_verdict && VET_STYLE[st.vet_verdict] && (
-                                <span
-                                  title={st.vet_rationale || ""}
-                                  style={{
-                                    color: VET_STYLE[st.vet_verdict].color,
-                                    background: VET_STYLE[st.vet_verdict].bg,
-                                    border: `1px solid ${VET_STYLE[st.vet_verdict].color}55`,
-                                    borderRadius: 2,
-                                    padding: "1px 6px",
-                                    fontSize: 9.5,
-                                    fontWeight: 700,
-                                    fontFamily: "monospace",
-                                  }}
-                                >
-                                  {VET_STYLE[st.vet_verdict].label}
-                                </span>
-                              )}
-                              {st.llm_thesis && (
-                                <span
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleAnalysis(r.showcase_id);
-                                  }}
-                                  title="Show full AI analysis"
-                                  style={{ display: "inline-flex", alignItems: "center", gap: 5, maxWidth: 480, minWidth: 0, cursor: "pointer" }}
-                                >
-                                  <span style={{ color: "#94a3b8", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    — {st.llm_thesis}
+                        {/* Story dropdown — hidden until the row's caret is expanded */}
+                        {isStoryOpen && (
+                          <tr style={{ background: baseBg }}>
+                            <td colSpan={COLS.length} style={{ ...S.td, whiteSpace: "normal", borderBottom: "1px solid #1a1a1a", paddingTop: 0 }}>
+                              {/* Headline row */}
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <ScoreCell value={st.llm_score} />
+                                {st.tier && (
+                                  <span style={{ color: TIER_COLOR[st.tier] || TIER_COLOR.C, fontSize: 10, fontWeight: 700 }}>
+                                    {st.tier}
                                   </span>
-                                  {/* Kept outside the truncated text so a long thesis can't clip it. */}
-                                  <span style={{ color: "#94a3b8", fontSize: 9, flexShrink: 0 }}>{isAnalysisOpen ? "▲" : "▼"}</span>
-                                </span>
-                              )}
-                              {isAdmin && (
-                                <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
-                                  {dl != null && dl <= 5 && (
-                                    <span style={{ color: dl <= 0 ? "#f87171" : "#f59e0b", fontSize: 10, fontWeight: 700 }}>
-                                      {dl <= 0 ? "expired" : `${dl}d left`}
-                                    </span>
-                                  )}
-                                  <button onClick={() => extendTracking(r.showcase_id)} style={btn("#60a5fa")}>Extend</button>
-                                  <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
-                                </span>
-                              )}
-                            </div>
+                                )}
+                                <a
+                                  href={st.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600, textDecoration: "none" }}
+                                >
+                                  {st.headline}
+                                </a>
+                                {st.vet_verdict && VET_STYLE[st.vet_verdict] && (
+                                  <span
+                                    title={st.vet_rationale || ""}
+                                    style={{
+                                      color: VET_STYLE[st.vet_verdict].color,
+                                      background: VET_STYLE[st.vet_verdict].bg,
+                                      border: `1px solid ${VET_STYLE[st.vet_verdict].color}55`,
+                                      borderRadius: 2,
+                                      padding: "1px 6px",
+                                      fontSize: 9.5,
+                                      fontWeight: 700,
+                                      fontFamily: "monospace",
+                                    }}
+                                  >
+                                    {VET_STYLE[st.vet_verdict].label}
+                                  </span>
+                                )}
+                                {isAdmin && (
+                                  <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
+                                    {dl != null && dl <= 5 && (
+                                      <span style={{ color: dl <= 0 ? "#f87171" : "#f59e0b", fontSize: 10, fontWeight: 700 }}>
+                                        {dl <= 0 ? "expired" : `${dl}d left`}
+                                      </span>
+                                    )}
+                                    <button onClick={() => extendTracking(r.showcase_id)} style={btn("#60a5fa")}>Extend</button>
+                                    <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
+                                  </span>
+                                )}
+                              </div>
 
-                            {/* Expanded: full AI analysis */}
-                            {isAnalysisOpen && (
-                              <div style={{ marginTop: 8, paddingLeft: 4, display: "flex", flexDirection: "column", gap: 6, whiteSpace: "normal", maxWidth: 760 }}>
+                              {/* Full AI analysis */}
+                              <div style={{ marginTop: 10, paddingLeft: 4, display: "flex", flexDirection: "column", gap: 6, whiteSpace: "normal", maxWidth: 760 }}>
                                 <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
                                 <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
-                                {vet && <AnalysisRow label={`Vet · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+                                {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
                                 <AnalysisRow label="AI summary" text={st.summary} />
                                 {st.llm_confidence && (
                                   <div style={{ fontSize: 10, color: "#64748b" }}>confidence: {st.llm_confidence}</div>
                                 )}
                               </div>
-                            )}
 
-                            {/* Expanded: subsequent announcements since tracking began */}
-                            {isExpanded && (r.followups || []).length > 0 && (
-                              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 5, paddingLeft: 4 }}>
-                                {r.followups.map((f, fi) => {
-                                  const c = f.sentiment === "positive" ? "#10b981" : f.sentiment === "negative" ? "#ef4444" : "#94a3b8";
-                                  const sym = f.sentiment === "positive" ? "▲" : f.sentiment === "negative" ? "▼" : "—";
-                                  const inner = (
-                                    <>
-                                      <span style={{ color: c, fontWeight: 700, width: 14, flexShrink: 0 }}>{sym}</span>
-                                      <span style={{ color: "#475569", fontSize: 10, width: 40, flexShrink: 0 }}>{fmtWhen(f.published_at)}</span>
-                                      <span style={{ color: "#cbd5e1", fontSize: 11.5 }}>{f.headline}</span>
-                                    </>
-                                  );
-                                  return f.url ? (
-                                    <a key={fi} href={f.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none" }}>
-                                      {inner}
-                                    </a>
-                                  ) : (
-                                    <div key={fi} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>{inner}</div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
+                              {/* Subsequent announcements since tracking began */}
+                              {(r.followups || []).length > 0 && (
+                                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5, paddingLeft: 4 }}>
+                                  {r.followups.map((f, fi) => {
+                                    const c = f.sentiment === "positive" ? "#10b981" : f.sentiment === "negative" ? "#ef4444" : "#94a3b8";
+                                    const sym = f.sentiment === "positive" ? "▲" : f.sentiment === "negative" ? "▼" : "—";
+                                    const inner = (
+                                      <>
+                                        <span style={{ color: c, fontWeight: 700, width: 14, flexShrink: 0 }}>{sym}</span>
+                                        <span style={{ color: "#475569", fontSize: 10, width: 40, flexShrink: 0 }}>{fmtWhen(f.published_at)}</span>
+                                        <span style={{ color: "#cbd5e1", fontSize: 11.5 }}>{f.headline}</span>
+                                      </>
+                                    );
+                                    return f.url ? (
+                                      <a key={fi} href={f.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none" }}>
+                                        {inner}
+                                      </a>
+                                    ) : (
+                                      <div key={fi} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>{inner}</div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
                       </Fragment>
                     );
                   })}
