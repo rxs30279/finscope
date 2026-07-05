@@ -77,6 +77,7 @@ def _load_candidate(row_id: int) -> Optional[dict]:
                t.roic, t.roe, t.operating_margin, t.fcf_margin,
                t.revenue_growth, t.eps_cagr_10,
                t.debt_to_equity, t.current_ratio,
+               t.net_debt, t.ebitda,
                t.gross_margin, t.net_income_margin,
                t.gross_margin_median, t.operating_margin_median,
                t.net_margin_median, t.roe_median, t.roic_median,
@@ -91,6 +92,7 @@ def _load_candidate(row_id: int) -> Optional[dict]:
                    roic, roe, operating_margin, fcf_margin,
                    revenue_growth, eps_cagr_10,
                    debt_to_equity, current_ratio,
+                   net_debt, ebitda,
                    gross_margin, net_income_margin,
                    gross_margin_median, operating_margin_median,
                    net_margin_median, roe_median, roic_median,
@@ -192,6 +194,15 @@ def _format_market_cap(mc: Optional[float]) -> str:
     if mc >= 1e6:
         return f"£{mc/1e6:.0f}m"
     return f"£{mc:.0f}"
+
+
+def _format_net_debt(nd: Optional[float]) -> str:
+    """Sign-aware money format; negative net debt is surfaced as net cash."""
+    if nd is None:
+        return "n/a"
+    if nd < 0:
+        return f"{_format_market_cap(-nd)} net cash"
+    return _format_market_cap(nd)
 
 
 def _fmt_pct(v: Optional[float]) -> str:
@@ -326,7 +337,14 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         "£100m microcap, trivial for a FTSE100. Use positioning context too — "
         "news that contradicts analyst consensus has more surprise; news that "
         "confirms a stock that's already rallied or fallen sharply is largely "
-        "priced in. Return STRICT JSON only."
+        "priced in. "
+        "Scrutinise the balance sheet: we avoid highly-indebted companies. Always "
+        "weigh net debt against both market cap and profits. Net debt above 3x "
+        "EBITDA is a serious red flag, and net debt that exceeds the market cap "
+        "means equity holders sit behind a heavy debt load — in both cases treat "
+        "the company with caution, call it out in the risks, and hold the score "
+        "down unless the announcement directly and materially de-levers the "
+        "balance sheet. Return STRICT JSON only."
     )
 
     hist_lines = (
@@ -375,6 +393,21 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
     ps = cand.get("price_to_sales")
     fwd_eps = cand.get("eps_growth_next_yr")
 
+    # ── Leverage: net debt vs market cap and profits ────────────────────────
+    # We avoid highly-indebted companies. Net debt / EBITDA above ~3x is a red
+    # flag, and net debt that dwarfs the market cap means equity holders sit
+    # behind a large debt load (enterprise value is mostly debt).
+    net_debt = cand.get("net_debt")
+    ebitda = cand.get("ebitda")
+    mcap = cand.get("market_cap")
+    nd_to_mktcap = (net_debt / mcap) if (net_debt is not None and mcap and mcap > 0) else None
+    nd_to_ebitda = (net_debt / ebitda) if (net_debt is not None and ebitda and ebitda > 0) else None
+    leverage_flag = ""
+    if nd_to_ebitda is not None and nd_to_ebitda > 3:
+        leverage_flag = "  !! HIGH LEVERAGE (net debt > 3x profit)"
+    elif nd_to_mktcap is not None and nd_to_mktcap > 1:
+        leverage_flag = "  !! net debt exceeds market cap"
+
     quality_str = f"{qs}/10" if qs is not None else "n/a"
     risk_str = f"{rs}/10" if rs is not None else "n/a"
     risk_label = ""
@@ -391,6 +424,9 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         f"  Op. margin:   {_fmt_pct(op_margin)}   FCF margin: {_fmt_pct(fcf_margin)}\n"
         f"  Revenue gr:   {_fmt_pct(rev_growth)}   EPS CAGR 10Y: {_fmt_pct(eps_cagr)}\n"
         f"  D/E:          {_fmt_num(de, 2)}   Current ratio: {_fmt_num(cr, 2)}\n"
+        f"  Net debt:     {_format_net_debt(net_debt)}"
+        f"   Net debt/EBITDA: {_fmt_num(nd_to_ebitda, 1)}x"
+        f"   Net debt/mkt cap: {_fmt_num(nd_to_mktcap, 1)}x{leverage_flag}\n"
         f"  P/B:          {_fmt_num(pb, 2)}x   P/S: {_fmt_num(ps, 2)}x\n"
         f"  Quality:      {quality_str}   Risk: {risk_str}{risk_label}"
     )
