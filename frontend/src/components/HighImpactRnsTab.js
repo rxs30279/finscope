@@ -805,7 +805,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                                   style={{ color: "#94a3b8", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 460, cursor: "pointer" }}
                                 >
                                   — {st.llm_thesis}{" "}
-                                  <span style={{ color: "#64748b", fontSize: 9 }}>{isAnalysisOpen ? "▾" : "▸"}</span>
+                                  <span style={{ color: "#64748b", fontSize: 9 }}>{isAnalysisOpen ? "▲" : "▼"}</span>
                                 </span>
                               )}
                               {isAdmin && (
