@@ -41,6 +41,11 @@ router = APIRouter(prefix="/api/showcase", tags=["showcase"])
 HIGH_IMPACT_MIN_LLM_SCORE = 75
 HIGH_IMPACT_CATEGORIES = ("trading_update", "final_results", "interim_results", "quarterly")
 HIGH_IMPACT_MIN_MARKET_CAP = 50_000_000  # £50m — keep to genuinely tradeable names
+# Balance-sheet / quality floors — keep over-levered and low-quality names out of
+# the showcase entirely (they convert good news to shareholder value poorly). These
+# mirror the leverage/quality flags in the LLM ranker so the two stages agree.
+HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA = 3.0  # skip net debt > 3x profit (also skips net debt > market cap)
+HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # skip wafer-thin-margin (< 2%) businesses
 HIGH_IMPACT_DEDUPE_DAYS = 30             # don't re-flag the same symbol within a month
 TRACK_DAYS = 31                          # monitoring window from the story date
 EXTEND_DAYS = 30                         # admin Extend button adds this per click
@@ -231,6 +236,17 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
           AND r.category = ANY(%s)
           AND r.published_at >= NOW() - (%s || ' hours')::interval
           AND t.market_cap >= %s
+          -- Leverage floor: drop over-indebted names. Excludes net debt > 3x
+          -- EBITDA, indebted names with no profit to service it, and net debt
+          -- that exceeds the market cap. Missing net_debt data is left in.
+          AND NOT COALESCE(
+              (t.ebitda > 0 AND t.net_debt > %s * t.ebitda)
+              OR (t.ebitda <= 0 AND t.net_debt > 0)
+              OR (t.net_debt > t.market_cap),
+              FALSE
+          )
+          -- Quality floor: drop wafer-thin-margin businesses (missing margin left in).
+          AND (t.net_income_margin IS NULL OR t.net_income_margin >= %s)
           AND NOT EXISTS (
               SELECT 1 FROM high_impact_rns h
               WHERE h.symbol = r.symbol
@@ -243,6 +259,8 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
             list(HIGH_IMPACT_CATEGORIES),
             hours,
             HIGH_IMPACT_MIN_MARKET_CAP,
+            HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA,
+            HIGH_IMPACT_MIN_NET_MARGIN,
             HIGH_IMPACT_DEDUPE_DAYS,
         ),
     )
