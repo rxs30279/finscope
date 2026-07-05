@@ -45,7 +45,7 @@ HIGH_IMPACT_MIN_MARKET_CAP = 50_000_000  # £50m — keep to genuinely tradeable
 # the showcase entirely (they convert good news to shareholder value poorly). These
 # mirror the leverage/quality flags in the LLM ranker so the two stages agree.
 HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA = 3.0  # skip net debt > 3x profit (also skips net debt > market cap)
-HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # skip wafer-thin-margin (< 2%) businesses
+HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # fallback margin floor when the sector median is missing
 HIGH_IMPACT_DEDUPE_DAYS = 30             # don't re-flag the same symbol within a month
 TRACK_DAYS = 31                          # monitoring window from the story date
 EXTEND_DAYS = 30                         # admin Extend button adds this per click
@@ -245,8 +245,15 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
               OR (t.net_debt > t.market_cap),
               FALSE
           )
-          -- Quality floor: drop wafer-thin-margin businesses (missing margin left in).
-          AND (t.net_income_margin IS NULL OR t.net_income_margin >= %s)
+          -- Quality floor, sector-relative: require profitability at or above the
+          -- sector-median net margin, and never loss-making — so thin-margin
+          -- sectors aren't blanket-banned but below-par names within them are.
+          -- Falls back to an absolute floor when the sector median is missing;
+          -- missing margin data is left in.
+          AND (
+              t.net_income_margin IS NULL
+              OR t.net_income_margin >= GREATEST(0, COALESCE(t.net_margin_median, %s))
+          )
           AND NOT EXISTS (
               SELECT 1 FROM high_impact_rns h
               WHERE h.symbol = r.symbol

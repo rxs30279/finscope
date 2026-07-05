@@ -345,8 +345,10 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         "the company with caution, call it out in the risks, and hold the score "
         "down unless the announcement directly and materially de-levers the "
         "balance sheet. "
-        "Weigh business quality too. A low quality score (<=3/10), wafer-thin net "
-        "margins (under ~2%), or a deteriorating margin / EPS trend means the "
+        "Weigh business quality too. A low quality score (<=3/10), a net margin "
+        "below the sector median (judge margins sector-relative — a thin margin "
+        "is normal in some sectors; below the sector's own norm is the red flag, "
+        "loss-making doubly so), or a deteriorating margin / EPS trend means the "
         "underlying business is weak and converts good news into shareholder "
         "value poorly. For a positive catalyst on such a low-quality name, temper "
         "the score and flag the fragile fundamentals in the risks rather than "
@@ -414,15 +416,21 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
     elif nd_to_mktcap is not None and nd_to_mktcap > 1:
         leverage_flag = "  !! net debt exceeds market cap"
 
-    # ── Quality: weak or thin-margin businesses convert good news poorly ─────
-    # A low quality score or wafer-thin net margin means the underlying business
-    # is fragile — a positive catalyst on it deserves a tempered score.
+    # ── Quality: weak or below-sector-margin businesses convert good news ────
+    # poorly. Margins are judged sector-relative — thin-margin sectors aren't
+    # penalised wholesale, but a name below its own sector's median (or
+    # loss-making) is fragile and a positive catalyst deserves a tempered score.
     nim = cand.get("net_income_margin")
+    nim_median = cand.get("net_margin_median")
+    margin_floor = max(0.0, nim_median) if nim_median is not None else 0.02
     quality_flag = ""
     if qs is not None and qs <= 3:
         quality_flag = "  !! LOW QUALITY (weak fundamentals)"
-    elif nim is not None and nim < 0.02:
-        quality_flag = "  !! THIN MARGINS (net margin < 2%)"
+    elif nim is not None and nim < margin_floor:
+        quality_flag = (
+            "  !! WEAK MARGINS (loss-making)" if nim < 0
+            else "  !! WEAK MARGINS (below sector median)"
+        )
 
     quality_str = f"{qs}/10" if qs is not None else "n/a"
     risk_str = f"{rs}/10" if rs is not None else "n/a"
@@ -444,7 +452,8 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         f"   Net debt/EBITDA: {_fmt_num(nd_to_ebitda, 1)}x"
         f"   Net debt/mkt cap: {_fmt_num(nd_to_mktcap, 1)}x{leverage_flag}\n"
         f"  P/B:          {_fmt_num(pb, 2)}x   P/S: {_fmt_num(ps, 2)}x\n"
-        f"  Net margin:   {_fmt_pct(nim)}   Gross margin: {_fmt_pct(cand.get('gross_margin'))}\n"
+        f"  Net margin:   {_fmt_pct(nim)} (sector median {_fmt_pct(nim_median)})"
+        f"   Gross margin: {_fmt_pct(cand.get('gross_margin'))}\n"
         f"  Quality:      {quality_str}   Risk: {risk_str}{risk_label}{quality_flag}"
     )
 
