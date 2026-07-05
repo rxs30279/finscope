@@ -240,7 +240,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
                       href={`${API}/help-doc`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      onClick={() => setToolsOpen(false)}
+                      onClick={(e) => {
+                        // The manual URL is stable across uploads, and some mobile caches
+                        // (iOS home-screen PWA) pin the old PDF anyway. A per-click timestamp
+                        // gives every open a fresh cache key. Set at click time, not render
+                        // time — Date.now() in the href would break SSR hydration.
+                        e.currentTarget.href = `${API}/help-doc?v=${Date.now()}`;
+                        setToolsOpen(false);
+                      }}
                       style={{ display: "block", padding: "10px 14px", color: "#e5e5e5", fontFamily: "monospace", fontSize: 11, textDecoration: "none", borderBottom: "1px solid #1f1f1f" }}
                     >
                       📖 Tool Manual Download
@@ -373,7 +380,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
               href={`${API}/help-doc`}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => setMobileMenuOpen(false)}
+              onClick={(e) => {
+                // Same cache-buster as the desktop link: per-click timestamp so stale
+                // device caches (iOS PWA) can never pin an old copy of the manual.
+                e.currentTarget.href = `${API}/help-doc?v=${Date.now()}`;
+                setMobileMenuOpen(false);
+              }}
               style={{ display: "block", padding: "12px 20px", color: "#999", fontSize: 13, fontFamily: "monospace", textDecoration: "none" }}
             >
               Tool Manual Download
