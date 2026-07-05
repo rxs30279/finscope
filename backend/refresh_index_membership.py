@@ -32,8 +32,14 @@ For each constituent the EPIC is mapped to its Yahoo symbol and reconciled:
 Usage (run from backend/):
     python refresh_index_membership.py            # dry run — report only, no writes
     python refresh_index_membership.py --apply    # apply changes
+    python refresh_index_membership.py --apply --max-purge 40
+                                                  # raise the unattended purge cap
 
-Safe to re-run; every write is idempotent (ON CONFLICT upserts).
+Safe to re-run; every write is idempotent (ON CONFLICT upserts). In --apply mode,
+if more than --max-purge symbols (default 25) would be purged, the purges are
+skipped (new/moved still applied) and the run exits non-zero — a second guard,
+after the per-index MIN_EXPECTED floors, against a partial HL fetch mass-deleting
+real stocks on an unattended cron run.
 """
 
 import os
@@ -293,8 +299,22 @@ def purge(conn, child_tables, symbol: str):
 
 # ── reconcile ─────────────────────────────────────────────────────────────────
 
+DEFAULT_MAX_PURGE = 25  # a normal quarterly reshuffle drops ~10-20 across the four tiers
+
+
+def _arg_int(flag: str, default: int) -> int:
+    if flag in sys.argv:
+        try:
+            return int(sys.argv[sys.argv.index(flag) + 1])
+        except (IndexError, ValueError):
+            log.error(f"{flag} requires an integer value")
+            sys.exit(2)
+    return default
+
+
 def main():
     apply = "--apply" in sys.argv
+    max_purge = _arg_int("--max-purge", DEFAULT_MAX_PURGE)
     mode = "APPLY" if apply else "DRY RUN"
     log.info(f"=== Index membership refresh ({mode}) ===")
 
@@ -355,17 +375,25 @@ def main():
         update_moved(conn, s, fetched[s][0])
         log.info(f"    ~ moved {s}: {db[s][0]} -> {fetched[s][0]}")
     purged = 0
-    for s in dropped:
-        try:
-            purge(conn, child_tables, s)
-            purged += 1
-            log.info(f"    - purged {s} (left all indices)")
-        except Exception as e:
-            log.error(f"    ! purge failed {s}: {e}")
+    purges_blocked = len(dropped) > max_purge
+    if purges_blocked:
+        log.error(f"    ! {len(dropped)} dropped exceeds --max-purge {max_purge} — "
+                  f"purges SKIPPED (new/moved still applied). Review the list and "
+                  f"re-run with --max-purge {len(dropped)} if it's genuine.")
+    else:
+        for s in dropped:
+            try:
+                purge(conn, child_tables, s)
+                purged += 1
+                log.info(f"    - purged {s} (left all indices)")
+            except Exception as e:
+                log.error(f"    ! purge failed {s}: {e}")
 
     conn.close()
     print(f"\n  Done. +{len(new)} new, ~{len(moved)} moved, -{purged} purged.")
     print("  New constituents will get financials on the next updater.py run.\n")
+    if purges_blocked:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
