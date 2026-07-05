@@ -24,6 +24,22 @@ const fmtWhen = (iso) => {
   });
 };
 
+// News list: whole days ("1d", "2d", "3d") for the first few days, then the date.
+const fmtNewsWhen = (iso) => {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const days = Math.floor(Math.max(0, Date.now() - then) / 86400000);
+  if (days <= 3) return `${Math.max(1, days)}d`;
+  const d = new Date(then);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "2-digit" }),
+  });
+};
+
 // Absolute calendar date, e.g. "1 Jul 26" — the anchor date of the impact story.
 const fmtDate = (iso) => {
   if (!iso) return "—";
@@ -283,7 +299,7 @@ function NewsPanel({ symbol, name, sideBySide }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4, fontFamily: "monospace", fontSize: 9.5, letterSpacing: 0.3, color: "#64748b" }}>
                   <span style={{ color: isRns ? accent : "#7c8a9c", fontWeight: 700 }}>{isRns ? "RNS" : "PRESS"}</span>
                   {meta && <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta}</span>}
-                  <span style={{ marginLeft: "auto", flexShrink: 0 }}>{fmtWhen(it.published_at)}</span>
+                  <span style={{ marginLeft: "auto", flexShrink: 0 }}>{fmtNewsWhen(it.published_at)}</span>
                 </div>
                 <div style={{ color: "#f1f5f9", fontSize: 13, fontWeight: 500, lineHeight: 1.45 }}>{it.headline}</div>
               </>
