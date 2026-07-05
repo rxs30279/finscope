@@ -13,6 +13,8 @@ What it checks
                        nightly price refresh finish" signal, weekend-proof)
     - Prices (feed)    MAX(date)        on price_history
     - Analysts         MAX(snapshot_date) on analyst_snapshots
+    - Index refresh    pipeline_runs marker for the quarterly index-membership
+                       cron (stale > ~1 quarter, or last run degraded)
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
     - Backend API      GET {API_BASE_URL}/api/filters
@@ -171,6 +173,22 @@ def run_db_checks() -> None:
         if n < 300:  # a healthy daily snapshot covers most of the ~633 universe
             status = max(status, WARN, key=[PASS, WARN, FAIL].index)
         return status, f"latest {row['d']} ({d}d ago), {n} stocks in it"
+
+    @check("index.membership_refresh")
+    def _index_refresh():
+        row = _query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'index_refresh'"
+        )
+        if not row or row["last_run_at"] is None:
+            return FAIL, "no index_refresh marker in pipeline_runs"
+        d = _age_hours(row["last_run_at"]) / 24.0
+        # Quarterly Dokploy cron on the 25th of Mar/Jun/Sep/Dec — successive
+        # runs are 90-92 days apart, so >93d means a missed quarter.
+        status = _tier(d, warn_at=93, fail_at=97)
+        if row["status"] != "ok":
+            status = FAIL  # last run blocked its purges (or otherwise degraded)
+        return status, f"last apply {d:.0f}d ago, status '{row['status']}', {row['detail']}"
 
     @check("financials.rotation")
     def _financials():

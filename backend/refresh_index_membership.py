@@ -249,6 +249,24 @@ def insert_new(conn, symbol: str, index_label: str, fallback_name: str):
     return meta["name"] or fallback_name
 
 
+def record_run(conn, status: str, detail: dict):
+    """Stamp pipeline_runs so healthcheck.py can tell the quarterly cron ran —
+    a zero-change apply leaves no other DB trace (migration 008)."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO pipeline_runs (pipeline, last_run_at, status, detail)
+        VALUES ('index_refresh', NOW(), %s, %s)
+        ON CONFLICT (pipeline) DO UPDATE SET
+            last_run_at = EXCLUDED.last_run_at,
+            status      = EXCLUDED.status,
+            detail      = EXCLUDED.detail
+        """,
+        (status, psycopg2.extras.Json(detail)),
+    )
+    conn.commit()
+
+
 def update_moved(conn, symbol: str, index_label: str):
     cur = conn.cursor()
     cur.execute(
@@ -389,6 +407,12 @@ def main():
             except Exception as e:
                 log.error(f"    ! purge failed {s}: {e}")
 
+    record_run(
+        conn,
+        "purges_blocked" if purges_blocked else "ok",
+        {"new": len(new), "moved": len(moved), "purged": purged,
+         "dropped": len(dropped), "universe": len(fset)},
+    )
     conn.close()
     print(f"\n  Done. +{len(new)} new, ~{len(moved)} moved, -{purged} purged.")
     print("  New constituents will get financials on the next updater.py run.\n")
