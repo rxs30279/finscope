@@ -44,6 +44,24 @@ def main() -> int:
         ranked = _rank_pending(limit=50, tiers=("A", "B"), hours=48)
         print(f"[rns] ranking done — {ranked}")
 
+        # Stage 3.5: High Impact RNS showcase — flag new candidates, snapshot
+        # follow-ups for tracked companies, and auto-archive expired picks. Runs
+        # after ranking (needs llm_* populated) and before the prune (needs the
+        # follow-ups copied out before the source rows are deleted). Non-fatal:
+        # a showcase bug must never block the prune stage that keeps the table
+        # from growing unbounded.
+        try:
+            from showcase import (
+                flag_high_impact_candidates,
+                record_followups,
+                expire_tracked_entries,
+            )
+            print(f"[rns] showcase flagging — {flag_high_impact_candidates(hours=48)}")
+            print(f"[rns] showcase follow-ups — {record_followups()}")
+            print(f"[rns] showcase auto-archive — {expire_tracked_entries()}")
+        except Exception as e:
+            print(f"[rns] showcase stage FAILED (non-fatal) — {type(e).__name__}: {e}")
+
         # Stage 4: Prune old rows (keep 14 days)
         pruned = _prune_old(days=14)
         print(f"[rns] prune done — {pruned}")

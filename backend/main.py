@@ -21,6 +21,7 @@ from rns_llm import router as rns_llm_router
 from news import router as news_router
 from subscribers import router as subscribers_router
 from feedback import router as feedback_router
+from showcase import router as showcase_router
 from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
 
@@ -43,6 +44,7 @@ app.include_router(rns_llm_router)
 app.include_router(news_router)
 app.include_router(subscribers_router)
 app.include_router(feedback_router)
+app.include_router(showcase_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
@@ -1701,6 +1703,18 @@ def watchlist(symbols: str, response: Response = None):
     # watchlist tab into one function call per minute per distinct set.
     if response is not None:
         response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=60"
+
+    return _watchlist_rows(requested)
+
+
+def _watchlist_rows(requested: list[str]) -> list[dict]:
+    """Build the enriched per-stock rows for a symbol list — the body of the
+    watchlist endpoint, factored out so other endpoints (e.g. the High Impact RNS
+    showcase in showcase.py) can reuse the exact same enrichment. No HTTP concerns
+    here; the caller sets any cache headers. Returns rows in the caller's order.
+    """
+    if not requested:
+        return []
 
     # 1. Base metadata + the TTM fields the risk scorer needs + latest analyst snapshot.
     rows = query(
