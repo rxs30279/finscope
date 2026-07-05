@@ -1,7 +1,6 @@
 "use client";
 import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { API, adminHeaders } from "@/lib/api";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { lseStatus } from "@/lib/lse";
 import PageHeader from "@/components/layout/PageHeader";
@@ -393,7 +392,6 @@ const COLS = [
 // ── main component ────────────────────────────────────────────────────────────
 export default function HighImpactRnsTab({ onSelect }) {
   const isAdmin = useIsAdmin();
-  const sideBySide = useMediaQuery("(min-width: 1280px)");
 
   const [rows, setRows] = useState([]);
   const [pending, setPending] = useState([]);
@@ -587,8 +585,8 @@ export default function HighImpactRnsTab({ onSelect }) {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: sideBySide ? "row" : "column", gap: 16, alignItems: "stretch" }}>
-        <div style={{ flex: sideBySide ? (rows.length ? "0 1 auto" : "1 1 auto") : "1 1 auto", minWidth: 0 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, alignItems: "stretch" }}>
+        <div style={{ flex: "1 1 auto", minWidth: 0 }}>
           {rows.length === 0 ? (
             <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 3, padding: "48px 24px", textAlign: "center", color: "#555", fontFamily: "monospace", fontSize: 13 }}>
               {loading ? "Loading…" : "No stories are being showcased yet."}
@@ -783,7 +781,7 @@ export default function HighImpactRnsTab({ onSelect }) {
         <NewsPanel
           symbol={selectedNewsSymbol}
           name={rows.find((r) => r.symbol === selectedNewsSymbol)?.name || (selectedNewsSymbol ? selectedNewsSymbol.replace(".L", "") : "")}
-          sideBySide={sideBySide}
+          sideBySide={false}
         />
       </div>
     </div>
