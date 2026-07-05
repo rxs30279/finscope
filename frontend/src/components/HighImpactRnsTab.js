@@ -381,6 +381,19 @@ const btn = (color) => ({
   cursor: "pointer",
 });
 
+// One labelled line inside the expanded AI-analysis block.
+function AnalysisRow({ label, text, color = "#94a3b8" }) {
+  if (!text) return null;
+  return (
+    <div style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+      <span style={{ color, fontWeight: 700, textTransform: "uppercase", fontSize: 9, letterSpacing: 0.5, marginRight: 8 }}>
+        {label}
+      </span>
+      <span style={{ color: "#cbd5e1" }}>{text}</span>
+    </div>
+  );
+}
+
 // ── columns ───────────────────────────────────────────────────────────────────
 const COLS = [
   { key: "name", label: "Stock", align: "left" },
@@ -420,6 +433,7 @@ export default function HighImpactRnsTab({ onSelect }) {
   const [sortDir, setSortDir] = useState("desc");
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
   const [expanded, setExpanded] = useState(() => new Set());
+  const [analysisOpen, setAnalysisOpen] = useState(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
 
   const symbols = useMemo(() => rows.map((r) => r.symbol), [rows]);
@@ -568,6 +582,13 @@ export default function HighImpactRnsTab({ onSelect }) {
       return next;
     });
 
+  const toggleAnalysis = (id) =>
+    setAnalysisOpen((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
   const daysLeft = (r) => {
     if (!r.track_until) return null;
     return Math.ceil((new Date(r.track_until).getTime() - Date.now()) / 86400000);
@@ -639,6 +660,8 @@ export default function HighImpactRnsTab({ onSelect }) {
                     const st = r.story || {};
                     const dl = daysLeft(r);
                     const isExpanded = expanded.has(r.showcase_id);
+                    const isAnalysisOpen = analysisOpen.has(r.showcase_id);
+                    const vet = st.vet_verdict ? VET_STYLE[st.vet_verdict] : null;
                     return (
                       <Fragment key={r.showcase_id}>
                         <tr
@@ -773,8 +796,16 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 </span>
                               )}
                               {st.llm_thesis && (
-                                <span title={st.llm_thesis} style={{ color: "#94a3b8", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 460 }}>
-                                  — {st.llm_thesis}
+                                <span
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleAnalysis(r.showcase_id);
+                                  }}
+                                  title="Show full AI analysis"
+                                  style={{ color: "#94a3b8", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 460, cursor: "pointer" }}
+                                >
+                                  — {st.llm_thesis}{" "}
+                                  <span style={{ color: "#64748b", fontSize: 9 }}>{isAnalysisOpen ? "▾" : "▸"}</span>
                                 </span>
                               )}
                               {isAdmin && (
@@ -789,6 +820,19 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 </span>
                               )}
                             </div>
+
+                            {/* Expanded: full AI analysis */}
+                            {isAnalysisOpen && (
+                              <div style={{ marginTop: 8, paddingLeft: 4, display: "flex", flexDirection: "column", gap: 6, whiteSpace: "normal", maxWidth: 760 }}>
+                                <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
+                                <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
+                                {vet && <AnalysisRow label={`Vet · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+                                <AnalysisRow label="AI summary" text={st.summary} />
+                                {st.llm_confidence && (
+                                  <div style={{ fontSize: 10, color: "#64748b" }}>confidence: {st.llm_confidence}</div>
+                                )}
+                              </div>
+                            )}
 
                             {/* Expanded: subsequent announcements since tracking began */}
                             {isExpanded && (r.followups || []).length > 0 && (
