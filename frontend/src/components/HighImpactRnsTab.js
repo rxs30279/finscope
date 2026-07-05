@@ -802,10 +802,13 @@ export default function HighImpactRnsTab({ onSelect }) {
                                     toggleAnalysis(r.showcase_id);
                                   }}
                                   title="Show full AI analysis"
-                                  style={{ color: "#94a3b8", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 460, cursor: "pointer" }}
+                                  style={{ display: "inline-flex", alignItems: "center", gap: 5, maxWidth: 480, minWidth: 0, cursor: "pointer" }}
                                 >
-                                  — {st.llm_thesis}{" "}
-                                  <span style={{ color: "#64748b", fontSize: 9 }}>{isAnalysisOpen ? "▲" : "▼"}</span>
+                                  <span style={{ color: "#94a3b8", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    — {st.llm_thesis}
+                                  </span>
+                                  {/* Kept outside the truncated text so a long thesis can't clip it. */}
+                                  <span style={{ color: "#94a3b8", fontSize: 9, flexShrink: 0 }}>{isAnalysisOpen ? "▲" : "▼"}</span>
                                 </span>
                               )}
                               {isAdmin && (
