@@ -135,6 +135,20 @@ def _story_close(symbol: str, published_at) -> Optional[float]:
     return float(rows[0]["close"]) if rows and rows[0]["close"] is not None else None
 
 
+def _spark_since_count(symbol: str, published_at) -> int:
+    """How many of the last ~63 trading-day closes (the sparkline window) fall on
+    or after the story date — the length of the 'since selection' line segment."""
+    rows = _q(
+        """
+        SELECT COUNT(*) AS n FROM (
+            SELECT date FROM price_history WHERE symbol = %s ORDER BY date DESC LIMIT 63
+        ) x WHERE date >= %s::date
+        """,
+        (symbol, published_at),
+    )
+    return int(rows[0]["n"]) if rows else 0
+
+
 # ── Showcase-specific LLM vet (advisory) ──────────────────────────────────────
 def _vet_messages(cand: dict) -> list[dict]:
     system = (
@@ -419,6 +433,7 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "value_score": m.get("value_score"),
             "days_since_news": (now - e["published_at"]).days,
             "pct_since_news": pct,
+            "spark_since": _spark_since_count(e["symbol"], e["published_at"]),
             "track_until": e.get("track_until"),
             "followup_pos": sum(1 for f in fus if f["sentiment"] == "positive"),
             "followup_neg": sum(1 for f in fus if f["sentiment"] == "negative"),

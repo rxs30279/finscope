@@ -24,6 +24,14 @@ const fmtWhen = (iso) => {
   });
 };
 
+// Absolute calendar date, e.g. "1 Jul 26" — the anchor date of the impact story.
+const fmtDate = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
+};
+
 // Prices are stored in pence (LSE convention) — show as pounds.
 const fmtPounds = (pence) =>
   pence == null ? "—" : `£${(pence / 100).toFixed(2)}`;
@@ -160,7 +168,11 @@ function FollowupTally({ pos, neg, expanded, onToggle }) {
   );
 }
 
-function Sparkline({ points, width = 76, height = 26 }) {
+// Trend line over the last ~3 months. The segment SINCE the pick was selected
+// (the last `sinceCount` closes) is drawn in a gain/loss colour — green if up
+// since selection, red if down — with a dot marking the selection point, so you
+// can see at a glance how the stock has moved since the story.
+function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height = 26 }) {
   if (!points || points.length < 2)
     return <span style={{ color: "#3a3a3a", fontSize: 11 }}>—</span>;
   const min = Math.min(...points);
@@ -172,25 +184,31 @@ function Sparkline({ points, width = 76, height = 26 }) {
     const y = height - 1 - ((v - min) / span) * (height - 2);
     return [x, y];
   });
-  const line = coords
-    .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`)
-    .join(" ");
+  const toPath = (arr) =>
+    arr.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  // Split at the selection point; share the junction so the two lines connect.
+  const sc = Math.max(0, Math.min(n - 1, sinceCount || 0));
+  const splitIdx = sc > 0 ? n - sc : n;
+  const before = coords.slice(0, Math.min(splitIdx + 1, n));
+  const since = sc > 0 ? coords.slice(splitIdx) : [];
+  const baseColor = "#6366f1";
+  const sinceColor = sinceUp == null ? "#94a3b8" : sinceUp ? "#10b981" : "#ef4444";
   const area =
     `M${coords[0][0].toFixed(1)},${height} ` +
     coords.map(([x, y]) => `L${x.toFixed(1)},${y.toFixed(1)}`).join(" ") +
     ` L${coords[n - 1][0].toFixed(1)},${height} Z`;
-  const color = "#6366f1";
   return (
-    <svg width={width} height={height} style={{ display: "block", flexShrink: 0 }}>
-      <path d={area} fill={color} opacity={0.13} />
-      <path
-        d={line}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.25}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
+    <svg width={width} height={height} style={{ display: "block", flexShrink: 0 }} title="Price — coloured since selection">
+      <path d={area} fill={baseColor} opacity={0.1} />
+      {before.length >= 2 && (
+        <path d={toPath(before)} fill="none" stroke={baseColor} strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" />
+      )}
+      {since.length >= 2 && (
+        <path d={toPath(since)} fill="none" stroke={sinceColor} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
+      )}
+      {sc > 0 && splitIdx < n && (
+        <circle cx={coords[splitIdx][0]} cy={coords[splitIdx][1]} r={1.7} fill={sinceColor} />
+      )}
     </svg>
   );
 }
@@ -331,7 +349,7 @@ function PendingCard({ entry, onApprove, onReject }) {
           </span>
         )}
         <span style={{ marginLeft: "auto", color: "#64748b", fontSize: 11, fontFamily: "monospace" }}>
-          {fmtWhen(st.published_at)}
+          {fmtDate(st.published_at)}
         </span>
       </div>
       <a href={st.url} target="_blank" rel="noreferrer" style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600, textDecoration: "none", lineHeight: 1.4 }}>
@@ -379,12 +397,13 @@ const COLS = [
     ),
     align: "left",
   },
+  { key: "date", label: "Date", align: "right" },
   { key: "days", label: "Days", align: "right" },
   { key: "m", label: "M", align: "center" },
   { key: "q", label: "Q", align: "center" },
   { key: "v", label: "V", align: "center" },
   { key: "r", label: "R", align: "center" },
-  { key: "pct_news", label: "% News", align: "right" },
+  { key: "pct_news", label: "Since story", align: "right" },
   { key: "fu", label: "Since ±", align: "right", noSort: true },
   { key: "signals", label: "News", align: "left", noSort: true },
 ];
@@ -485,6 +504,7 @@ export default function HighImpactRnsTab({ onSelect }) {
       case "day": return dayPct(r);
       case "run": return r.streak;
       case "range": return rangePos(r);
+      case "date": return r.story?.published_at ? new Date(r.story.published_at).getTime() : null;
       case "days": return r.days_since_news;
       case "m": return r.momentum_score;
       case "q": return r.quality_score;
@@ -657,14 +677,23 @@ export default function HighImpactRnsTab({ onSelect }) {
                           {/* Trend + 52w range */}
                           <td style={S.td}>
                             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                              <Sparkline points={r.spark} />
+                              <Sparkline
+                                points={r.spark}
+                                sinceCount={r.spark_since}
+                                sinceUp={r.pct_since_news == null ? null : r.pct_since_news >= 0}
+                              />
                               <RangeBar pos={rangePos(r)} />
                             </div>
                           </td>
 
+                          {/* Date of the impact story */}
+                          <td style={{ ...S.td, textAlign: "right" }} title="Date of the impact news story">
+                            <span style={{ color: "#cbd5e1" }}>{fmtDate(st.published_at)}</span>
+                          </td>
+
                           {/* Days since the impact story */}
                           <td style={{ ...S.td, textAlign: "right" }} title="Days since the impact news story">
-                            <span style={{ color: "#cbd5e1" }}>{r.days_since_news != null ? `${r.days_since_news}d` : "—"}</span>
+                            <span style={{ color: "#94a3b8" }}>{r.days_since_news != null ? `${r.days_since_news}d` : "—"}</span>
                           </td>
 
                           {/* MQVR */}
@@ -725,7 +754,24 @@ export default function HighImpactRnsTab({ onSelect }) {
                               >
                                 {st.headline}
                               </a>
-                              <span style={{ color: "#475569", fontSize: 10 }}>{fmtWhen(st.published_at)}</span>
+                              <span style={{ color: "#475569", fontSize: 10 }}>{fmtDate(st.published_at)}</span>
+                              {st.vet_verdict && VET_STYLE[st.vet_verdict] && (
+                                <span
+                                  title={st.vet_rationale || ""}
+                                  style={{
+                                    color: VET_STYLE[st.vet_verdict].color,
+                                    background: VET_STYLE[st.vet_verdict].bg,
+                                    border: `1px solid ${VET_STYLE[st.vet_verdict].color}55`,
+                                    borderRadius: 2,
+                                    padding: "1px 6px",
+                                    fontSize: 9.5,
+                                    fontWeight: 700,
+                                    fontFamily: "monospace",
+                                  }}
+                                >
+                                  {VET_STYLE[st.vet_verdict].label}
+                                </span>
+                              )}
                               {st.llm_thesis && (
                                 <span title={st.llm_thesis} style={{ color: "#94a3b8", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 460 }}>
                                   — {st.llm_thesis}
