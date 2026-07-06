@@ -2,11 +2,24 @@
 
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
+import "@uiw/react-md-editor/markdown-editor.css";
+import "@uiw/react-markdown-preview/markdown.css";
 import { API, adminHeaders } from "@/lib/api";
 import { colors } from "@/lib/theme";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import PageHeader from "@/components/layout/PageHeader";
 import { fmtPostDate, type ResearchPostSummary } from "@/lib/research";
+
+// The Markdown editor manipulates the DOM (toolbar, split preview) and can't be
+// server-rendered — load it client-only. While it loads, a plain disabled
+// textarea holds the space so the form doesn't jump.
+const MDEditor = dynamic(() => import("@uiw/react-md-editor"), {
+  ssr: false,
+  loading: () => (
+    <textarea disabled style={{ width: "100%", minHeight: 420, background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: 2, color: "#666", fontFamily: "monospace", padding: 12 }} value="Loading editor…" readOnly />
+  ),
+});
 
 interface AdminComment {
   id: number;
@@ -187,14 +200,33 @@ export default function ResearchAdminClient() {
           <Field label="Tags (comma-separated)">
             <input value={edit.tags} onChange={(e) => setEdit({ ...edit, tags: e.target.value })} style={inputStyle} placeholder="valuation, small-caps" />
           </Field>
-          <Field label="Body (Markdown)">
-            <textarea
-              value={edit.body}
-              onChange={(e) => setEdit({ ...edit, body: e.target.value })}
-              style={{ ...inputStyle, resize: "vertical", minHeight: 320, lineHeight: 1.6 }}
-              placeholder={"## A heading\n\nWrite in **Markdown**. Lists, links, tables and code all work."}
-            />
-          </Field>
+          {/* Not wrapped in Field's <label>: the editor's toolbar buttons would
+              trigger the label's click-to-focus and steal the caret. */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <span style={{ fontFamily: "monospace", fontSize: 10, color: colors.textFaint, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Body (Markdown — toolbar &amp; live preview)
+            </span>
+            <div data-color-mode="dark">
+              <MDEditor
+                value={edit.body}
+                onChange={(v) => setEdit({ ...edit, body: v || "" })}
+                height={480}
+                preview="live"
+                previewOptions={{
+                  components: {
+                    // While typing an image link the body transiently holds
+                    // ![](), and <img src=""> makes React warn (and the browser
+                    // re-request the page). Skip rendering until a URL exists.
+                    img: (props: React.ImgHTMLAttributes<HTMLImageElement>) =>
+                      props.src ? <img {...props} style={{ maxWidth: "100%" }} /> : null,
+                  },
+                }}
+                textareaProps={{
+                  placeholder: "## A heading\n\nWrite in Markdown — the toolbar inserts it for you. Lists, links, tables, images and code all work.",
+                }}
+              />
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
             <button onClick={() => savePost(undefined)} disabled={busy} style={btn(colors.textMuted)}>
               Save {edit.status === "published" ? "(keep published)" : "draft"}

@@ -70,7 +70,17 @@ export default function ResearchPostClient({ initialPost }: { initialPost: Resea
         </h1>
 
         <div className="research-prose" style={proseStyle}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{post.body}</ReactMarkdown>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              // A half-written image link (![]()), e.g. in a body saved mid-edit,
+              // yields <img src=""> — React warns and the browser re-fetches the
+              // page as the "image". Render nothing until the URL exists.
+              img: (props) => (props.src ? <img {...props} /> : null),
+            }}
+          >
+            {post.body}
+          </ReactMarkdown>
         </div>
       </article>
 

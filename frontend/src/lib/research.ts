@@ -32,8 +32,10 @@ export interface ResearchComment {
 export async function getResearchPost(slug: string): Promise<ResearchPost | null> {
   if (!slug) return null;
   try {
+    // 60s max-staleness: served stale-while-revalidate, so readers always get a
+    // cached render; this only bounds how long a fresh edit takes to appear.
     const res = await fetch(apiUrl(`/api/research/posts/${encodeURIComponent(slug)}`), {
-      next: { revalidate: 300 },
+      next: { revalidate: 60 },
     });
     if (!res.ok) return null;
     return (await res.json()) as ResearchPost;
