@@ -18,6 +18,7 @@ const NAV_GROUPS = [
   { href: "/rns", label: "RNS News" },
   { href: "/subscribe", label: "RNS Email" },
   { href: "/markets", label: "Markets" },
+  { href: "/research", label: "Research" },
 ];
 
 export default function AppShell({ children }: { children: ReactNode }) {

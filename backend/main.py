@@ -22,6 +22,7 @@ from news import router as news_router
 from subscribers import router as subscribers_router
 from feedback import router as feedback_router
 from showcase import router as showcase_router
+from research import router as research_router, published_slugs as _research_slugs
 from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
 
@@ -45,6 +46,7 @@ app.include_router(news_router)
 app.include_router(subscribers_router)
 app.include_router(feedback_router)
 app.include_router(showcase_router)
+app.include_router(research_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
@@ -98,6 +100,7 @@ _SITEMAP_STATIC = [
     ("/trending", "daily", "0.8"),
     ("/analysts", "daily", "0.7"),
     ("/rns", "daily", "0.7"),
+    ("/research", "weekly", "0.7"),
     ("/heatmap", "daily", "0.6"),
     ("/benchmarks", "weekly", "0.5"),
     ("/subscribe", "monthly", "0.5"),
@@ -138,6 +141,21 @@ def sitemap_xml():
             f"<url><loc>{loc}</loc><changefreq>daily</changefreq>"
             f"<priority>0.6</priority></url>"
         )
+    # Published Research posts — a lastmod helps search engines re-crawl edits.
+    try:
+        for post in _research_slugs():
+            loc = escape(f"{SITEMAP_BASE}/research/{quote(post['slug'])}")
+            lastmod = ""
+            if post.get("updated_at"):
+                lastmod = f"<lastmod>{post['updated_at'].date().isoformat()}</lastmod>"
+            parts.append(
+                f"<url><loc>{loc}</loc>{lastmod}"
+                f"<changefreq>monthly</changefreq><priority>0.6</priority></url>"
+            )
+    except Exception:
+        # Sitemap must never 500 on the research table (e.g. pre-migration) — the
+        # company URLs above are the important payload.
+        pass
     parts.append("</urlset>")
     return Response(
         content="\n".join(parts),
