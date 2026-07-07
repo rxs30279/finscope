@@ -496,6 +496,8 @@ Produce a JSON object with these fields exactly:
   thesis       one sentence: why this matters (or why it doesn't)
   action       one of: "watch", "research", "ignore"
   risks        one sentence: what would invalidate the thesis
+  sentiment    one of: "positive", "negative", "neutral" — the direction of
+               this news for existing shareholders, independent of size/impact
 
 Return JSON only — no preamble, no code fence."""
 
@@ -522,6 +524,11 @@ def _call_deepseek(messages: list[dict]) -> dict:
 
 
 def _save_ranking(ann_id: int, result: dict, model: str) -> None:
+    # Sentiment is constrained to the three known values — anything else the
+    # model invents is stored as NULL so _sentiment falls back to its scan.
+    sentiment = (result.get("sentiment") or "").lower().strip()
+    if sentiment not in ("positive", "negative", "neutral"):
+        sentiment = None
     pool = _get_pool()
     conn = pool.getconn()
     try:
@@ -534,6 +541,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 llm_thesis       = %s,
                 llm_action       = %s,
                 llm_risks        = %s,
+                llm_sentiment    = %s,
                 llm_model        = %s,
                 llm_processed_at = NOW()
             WHERE id = %s
@@ -544,6 +552,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 (result.get("thesis") or "")[:500] or None,
                 (result.get("action") or "").lower()[:10] or None,
                 (result.get("risks") or "")[:500] or None,
+                sentiment,
                 model,
                 ann_id,
             ),
@@ -643,7 +652,7 @@ def get_ranked(
         SELECT id, published_at, ticker, symbol, company_name, headline, url,
                tier, category, score,
                llm_score, llm_confidence, llm_thesis, llm_action, llm_risks,
-               llm_model, llm_processed_at
+               llm_sentiment, llm_model, llm_processed_at
         FROM rns_announcements
         WHERE llm_processed_at IS NOT NULL
           AND llm_score >= %s

@@ -106,13 +106,22 @@ const _POS_CATS = new Set([
   "firm_offer", "recommended_offer", "drug_approval", "contract_win",
 ]);
 
-const _LLM_POS = ["positive", "upside", "beat", "above expectations", "outperform", "upgrade", "bullish", "boost", "opportunity"];
-const _LLM_NEG = ["negative", "pressure", "miss", "below expectations", "concern", "decline", "downgrade", "disappoint", "warning", "bearish", "weak"];
+// Mirrors backend showcase.py / email_rns_digest.py — keep all three lists in
+// sync. "upgrad"/"downgrad"/"dilut"/"deteriorat" are stems (whole words never
+// substring-match "upgrading"/"dilutive"/"deteriorating"). This scan is the
+// fallback for rows ranked before llm_sentiment existed (migration 012).
+const _LLM_POS = ["positive", "upside", "beat", "above expectations", "outperform", "upgrad", "bullish", "boost", "opportunity", "record", "ahead of expectations", "ahead of consensus", "ahead of guidance", "swing to profit", "above consensus", "accretive", "surge", "de-risk", "unlock", "exceed", "better than expected", "at a premium", "significant premium", "higher offer", "re-rate", "re-rating"];
+const _LLM_NEG = ["negative", "pressure", "miss", "below expectations", "concern", "decline", "downgrad", "disappoint", "warning", "bearish", "weak", "dilut", "solvency", "distress", "slash", "headwind", "shortfall", "deteriorat", "impairment", "write-down", "write down", "below consensus", "below guidance", "collapse", "downside", "net loss", "suspend", "cash crunch", "deeply discounted"];
 
 function getSentiment(r) {
   // Layer 1: unambiguous category overrides
   if (_NEG_CATS.has(r.category)) return "negative";
   if (_POS_CATS.has(r.category)) return "positive";
+
+  // Layer 1.5: the ranker's own stored direction (llm_sentiment) — it read the
+  // full announcement, so it beats any keyword scan of its one-line thesis.
+  const stored = (r.llm_sentiment || "").toLowerCase();
+  if (stored === "positive" || stored === "negative" || stored === "neutral") return stored;
 
   // Layer 2: LLM thesis — scan for directional language
   if (r.llm_thesis) {

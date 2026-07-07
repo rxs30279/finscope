@@ -1,0 +1,13 @@
+-- 012: ranker-emitted sentiment for RNS announcements.
+--
+-- The DeepSeek ranker (rns_llm.py) now returns a sixth JSON field,
+-- sentiment ∈ 'positive' | 'negative' | 'neutral' — the direction of the news
+-- for existing shareholders, judged from the full announcement context.
+-- showcase._sentiment, the email digest and the frontend badge prefer this
+-- stored value over the keyword scan of the thesis prose, which is
+-- negation-blind and trails DeepSeek's phrasing habits (74% of stored theses
+-- read neutral under the scan, incl. clearly directional 85+ scorers).
+--
+-- Additive and backwards-compatible: rows ranked before this column exists
+-- stay NULL and fall through to the keyword-scan layers.
+ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_sentiment TEXT;

@@ -52,6 +52,93 @@ def test_sentiment_default_neutral():
     assert showcase._sentiment({}) == "neutral"
 
 
+def test_sentiment_uk_results_phrasing():
+    # Real DeepSeek theses that scored 75-85 but read neutral before the UK
+    # phrasing ("ahead of expectations", "upgrad" stem, "record", "swing to
+    # profit") was added to _LLM_POS (2y CMCX/KLR/TBTG backtest, 2026-07).
+    theses = [
+        # KLR prelims 2026-03-03
+        "Record results ahead of expectations, net cash position for first "
+        "time in 25 years, and £100m buyback materially upgrading the "
+        "investment case.",
+        # TBTG finals 2026-04-16
+        "Final results show revenue and profit significantly ahead of "
+        "expectations, with guidance for FY26 profit ahead of consensus.",
+        # CMCX interims 2024-11-21
+        "Strong interim results with 45% revenue growth, swing to profit, and "
+        "210% dividend hike confirm strategic turnaround.",
+        # KLR prelims 2025-03-04
+        "Record underlying operating profit, margin expansion, and a new "
+        "share buyback programme signal a materially improved case.",
+    ]
+    for thesis in theses:
+        assert showcase._sentiment(
+            {"category": "final_results", "llm_thesis": thesis}
+        ) == "positive", thesis
+    # negative language still outweighs a positive-sounding "record"
+    assert showcase._sentiment(
+        {"category": "final_results",
+         "llm_thesis": "record impairment, guidance miss and margin decline"}
+    ) == "negative"
+
+
+def test_sentiment_prod_thesis_vocabulary():
+    # Vocabulary validated against 438 stored prod theses (2026-07): the M&A
+    # premium/offer cluster and the discounted-placing cluster both previously
+    # read neutral.
+    positives = [
+        "Recommended cash acquisition offering a near-term cash exit at a "
+        "significant premium.",  # at a premium / significant premium
+        "Transformational deal is EPS accretive by >20% in 2028.",
+        "Guidance above consensus and a 60% profit surge.",
+        "Rejection of the bid signals potential for a higher offer, which "
+        "could significantly re-rate the stock.",
+        "Approval removes a key overhang, de-risking the disposal and "
+        "unlocking value.",
+    ]
+    negatives = [
+        "Deeply discounted placing signals severe financial distress, likely "
+        "diluting existing shareholders.",  # dilut stem
+        "Revenue guidance slashed; this is a solvency crisis for a £26m "
+        "market cap company.",
+        "Non-cash fair value loss drove the net loss for the period.",
+        "Results confirm margin deterioration, a £7.3m goodwill impairment "
+        "and mounting headwinds.",  # deteriorat stem
+        "Analysts downgrading estimates on the earnings shortfall.",  # downgrad stem
+    ]
+    for thesis in positives:
+        assert showcase._sentiment(
+            {"category": "final_results", "llm_thesis": thesis}
+        ) == "positive", thesis
+    for thesis in negatives:
+        assert showcase._sentiment(
+            {"category": "final_results", "llm_thesis": thesis}
+        ) == "negative", thesis
+
+
+def test_sentiment_prefers_stored_llm_sentiment():
+    # The ranker's stored direction beats the thesis scan — here the thesis
+    # reads positive ("upside beat") but the model said negative.
+    assert showcase._sentiment(
+        {"category": "final_results", "llm_sentiment": "negative",
+         "llm_thesis": "upside beat opportunity"}
+    ) == "negative"
+    # A stored "neutral" is also authoritative (no fall-through to the scan).
+    assert showcase._sentiment(
+        {"category": "final_results", "llm_sentiment": "neutral",
+         "llm_thesis": "upside beat opportunity"}
+    ) == "neutral"
+    # Category overrides still outrank the stored value…
+    assert showcase._sentiment(
+        {"category": "profit_warning", "llm_sentiment": "positive"}
+    ) == "negative"
+    # …and junk/legacy values fall through to the scan.
+    assert showcase._sentiment(
+        {"category": "final_results", "llm_sentiment": "bullish!!",
+         "llm_thesis": "upside beat opportunity"}
+    ) == "positive"
+
+
 # ── flag_high_impact_candidates ───────────────────────────────────────────────
 def test_flag_keeps_positive_and_stores_vet():
     vet = {"verdict": "include", "confidence": "high", "rationale": "clean", "model": "deepseek-chat"}

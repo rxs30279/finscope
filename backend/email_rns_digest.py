@@ -66,7 +66,7 @@ def _fetch_rows(hours: int = _WINDOW_H) -> list[dict]:
         SELECT r.id, r.published_at, r.ticker, r.symbol, r.company_name,
                r.headline, r.url, r.tier, r.category, r.keyword_hits,
                r.score, r.llm_score, r.llm_thesis, r.llm_action, r.llm_risks,
-               m.ftse_index, f.market_cap
+               r.llm_sentiment, m.ftse_index, f.market_cap
           FROM rns_announcements r
           LEFT JOIN company_metadata m ON m.symbol = r.symbol
           LEFT JOIN ttm_financials   f ON f.company_symbol = r.symbol
@@ -183,10 +183,23 @@ _NEG_CATS = {
 _POS_CATS = {
     "firm_offer", "recommended_offer", "drug_approval", "contract_win",
 }
+# Keep in sync with showcase.py / RnsTab.js — edit all three together.
+# "upgrad"/"downgrad"/"dilut"/"deteriorat" are stems (whole words never
+# substring-match "upgrading"/"dilutive"/"deteriorating"). This scan is the
+# fallback for rows ranked before llm_sentiment existed (migration 012).
 _LLM_POS = ["positive", "upside", "beat", "above expectations", "outperform",
-            "upgrade", "bullish", "boost", "opportunity"]
+            "upgrad", "bullish", "boost", "opportunity", "record",
+            "ahead of expectations", "ahead of consensus", "ahead of guidance",
+            "swing to profit", "above consensus", "accretive", "surge",
+            "de-risk", "unlock", "exceed", "better than expected",
+            "at a premium", "significant premium", "higher offer",
+            "re-rate", "re-rating"]
 _LLM_NEG = ["negative", "pressure", "miss", "below expectations", "concern",
-            "decline", "downgrade", "disappoint", "warning", "bearish", "weak"]
+            "decline", "downgrad", "disappoint", "warning", "bearish", "weak",
+            "dilut", "solvency", "distress", "slash", "headwind", "shortfall",
+            "deteriorat", "impairment", "write-down", "write down",
+            "below consensus", "below guidance", "collapse", "downside",
+            "net loss", "suspend", "cash crunch", "deeply discounted"]
 
 _SENTIMENT_STYLE = {
     "positive": ("▲", "#10b981"),
@@ -197,13 +210,20 @@ _SENTIMENT_STYLE = {
 
 def _sentiment(r: dict) -> str:
     """Directional read on an announcement — matches the web RNS table.
-    Layer 1: unambiguous category overrides. Layer 2: scan the LLM thesis
-    for directional language. Layer 3: fall back to keyword_hits tallies."""
+    Layer 1: unambiguous category overrides. Layer 1.5: the ranker's own
+    stored sentiment. Layer 2: scan the LLM thesis for directional language.
+    Layer 3: fall back to keyword_hits tallies."""
     # Layer 1: category overrides
     if r.get("category") in _NEG_CATS:
         return "negative"
     if r.get("category") in _POS_CATS:
         return "positive"
+
+    # Layer 1.5: the ranker read the full announcement — trust its direction
+    # over any keyword scan of its prose. NULL on rows ranked pre-migration-012.
+    llm_sent = (r.get("llm_sentiment") or "").lower()
+    if llm_sent in ("positive", "negative", "neutral"):
+        return llm_sent
 
     # Layer 2: LLM thesis language
     thesis = r.get("llm_thesis")

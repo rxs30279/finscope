@@ -54,24 +54,51 @@ EXTEND_DAYS = 30                         # admin Extend button adds this per cli
 # ── Sentiment (server-side port of RnsTab.js getSentiment) ────────────────────
 _NEG_CATS = {"profit_warning", "going_concern", "liquidation", "delisting", "suspension"}
 _POS_CATS = {"firm_offer", "recommended_offer", "drug_approval", "contract_win"}
+# Thesis-scan word lists — kept in sync across showcase.py, email_rns_digest.py
+# and RnsTab.js: edit all three together. "upgrad"/"downgrad"/"dilut"/
+# "deteriorat" are stems (the whole words never substring-match "upgrading",
+# "dilutive", "deteriorating"). Vocabulary is calibrated against real DeepSeek
+# theses (2y CMCX/KLR/TBTG backtest + 438 stored prod theses, 2026-07): the
+# "ahead of …"/"record"/"surge" forms are standard UK results phrasing, the
+# premium/offer cluster covers M&A targets, and "dilut"/"solvency"/"distress"
+# the discounted-placing cluster. Known limit: the scan is negation-blind
+# ("lack of distress" still counts) — the stored llm_sentiment layer above it
+# is the real signal; this list is the fallback for unranked/legacy rows.
 _LLM_POS = ["positive", "upside", "beat", "above expectations", "outperform",
-            "upgrade", "bullish", "boost", "opportunity"]
+            "upgrad", "bullish", "boost", "opportunity", "record",
+            "ahead of expectations", "ahead of consensus", "ahead of guidance",
+            "swing to profit", "above consensus", "accretive", "surge",
+            "de-risk", "unlock", "exceed", "better than expected",
+            "at a premium", "significant premium", "higher offer",
+            "re-rate", "re-rating"]
 _LLM_NEG = ["negative", "pressure", "miss", "below expectations", "concern",
-            "decline", "downgrade", "disappoint", "warning", "bearish", "weak"]
+            "decline", "downgrad", "disappoint", "warning", "bearish", "weak",
+            "dilut", "solvency", "distress", "slash", "headwind", "shortfall",
+            "deteriorat", "impairment", "write-down", "write down",
+            "below consensus", "below guidance", "collapse", "downside",
+            "net loss", "suspend", "cash crunch", "deeply discounted"]
 
 
 def _sentiment(row) -> str:
     """Classify an announcement as 'positive' | 'negative' | 'neutral'.
 
     Mirrors the frontend getSentiment so the flag rule and the follow-up tally
-    agree with what the RNS page shows: category override first, then a scan of
-    the LLM thesis, then the pos:/neg: keyword_hits counts as a last resort.
+    agree with what the RNS page shows: category override first, then the
+    ranker's own stored sentiment (llm_sentiment, migration 012), then a scan
+    of the LLM thesis, then the pos:/neg: keyword_hits counts as a last resort.
     """
     cat = row.get("category")
     if cat in _NEG_CATS:
         return "negative"
     if cat in _POS_CATS:
         return "positive"
+
+    # The ranker read the full announcement and emitted a direction — trust it
+    # over any keyword scan of its prose (which is negation-blind). NULL for
+    # rows ranked before the field existed; they fall through to the scan.
+    llm_sent = (row.get("llm_sentiment") or "").lower()
+    if llm_sent in ("positive", "negative", "neutral"):
+        return llm_sent
 
     thesis = (row.get("llm_thesis") or "").lower()
     if thesis:
@@ -224,6 +251,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         SELECT r.id, r.symbol, r.company_name, r.headline, r.url, r.published_at,
                r.tier, r.category, r.score, r.keyword_hits, r.summary,
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_risks, r.llm_action,
+               r.llm_sentiment,
                m.sector, m.industry, m.country, m.ftse_index, t.market_cap
         FROM rns_announcements r
         JOIN ttm_financials t ON t.company_symbol = r.symbol
@@ -335,7 +363,7 @@ def record_followups() -> dict:
         newer = _q(
             """
             SELECT id, headline, url, published_at, tier, category, keyword_hits,
-                   llm_score, llm_thesis
+                   llm_score, llm_thesis, llm_sentiment
             FROM rns_announcements
             WHERE symbol = %s AND published_at > %s AND id <> %s AND tier IN ('A', 'B')
             """,

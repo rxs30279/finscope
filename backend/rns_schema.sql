@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS rns_announcements (
     llm_thesis          TEXT,                             -- one-sentence rationale
     llm_action          TEXT,                             -- 'watch' | 'research' | 'ignore'
     llm_risks           TEXT,                             -- what would invalidate the thesis
+    llm_sentiment       TEXT,                             -- 'positive' | 'negative' | 'neutral' (migration 012)
     llm_model           TEXT,                             -- e.g. 'deepseek-chat'
     llm_processed_at    TIMESTAMPTZ
 );
@@ -41,6 +42,7 @@ ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_confidence     TEXT;
 ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_thesis         TEXT;
 ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_action         TEXT;
 ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_risks          TEXT;
+ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_sentiment      TEXT;
 ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_model          TEXT;
 ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS llm_processed_at   TIMESTAMPTZ;
 
