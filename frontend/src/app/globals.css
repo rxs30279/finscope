@@ -37,6 +37,24 @@ body {
   animation: spin 0.8s linear infinite;
 }
 
+/* Nudge the High Impact RNS mobile card's chevron once per cycle (last ~1s of
+   30s) rather than continuously, so it draws the eye to "tap here" without
+   being distracting the rest of the time. */
+@keyframes chevron-wobble {
+  0%, 96% { transform: rotate(0deg); }
+  97% { transform: rotate(-16deg); }
+  97.5% { transform: rotate(13deg); }
+  98% { transform: rotate(-9deg); }
+  98.5% { transform: rotate(6deg); }
+  99% { transform: rotate(-3deg); }
+  100% { transform: rotate(0deg); }
+}
+
+.chevron-wobble {
+  display: inline-block;
+  animation: chevron-wobble 30s ease-in-out infinite;
+}
+
 /* Scrollbar styling — hidden on sidebar, thin elsewhere */
 ::-webkit-scrollbar {
   width: 6px;

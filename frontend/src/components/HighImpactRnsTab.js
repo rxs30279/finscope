@@ -2,6 +2,7 @@
 import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { API, adminHeaders } from "@/lib/api";
 import { useIsAdmin } from "@/hooks/useAdmin";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { lseStatus } from "@/lib/lse";
 import PageHeader from "@/components/layout/PageHeader";
 import ScorePill from "@/components/screener/ScorePill";
@@ -386,6 +387,161 @@ function AnalysisRow({ label, text, color = "#94a3b8" }) {
   );
 }
 
+// A single MQVR pill with its letter label above, for the mobile card's compact row.
+function LabelledPill({ label, value, invert }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+      <span style={{ color: "#475569", fontSize: 8, fontWeight: 700 }}>{label}</span>
+      <ScorePill value={value} invert={invert} />
+    </div>
+  );
+}
+
+// ── mobile card (phones/narrow viewports) ──────────────────────────────────────
+// The desktop layout is a wide sticky-header table meant to be scanned across
+// many columns; on a phone that means constant horizontal scrolling just to
+// reach the story dropdown. Each row becomes a self-contained card instead —
+// tapping it opens the company, tapping the caret expands the same AI-analysis
+// block as desktop but full-width, no horizontal scroll involved.
+function MobileCard({
+  r, isOpen, onToggle, onSelect, isAdmin, live, price, changePct, rangePosValue,
+  isNewsSelected, onNewsSelect, dl, vet, st, extendTracking, setStatus,
+}) {
+  const caretColor = isOpen ? "#f97316" : isAdmin && dl != null && dl <= 5 ? "#ef4444" : "#60a5fa";
+  return (
+    <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 6, overflow: "hidden" }}>
+      <div onClick={onSelect} style={{ padding: "12px 14px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggle(); }}
+            title={isOpen ? "Hide story & analysis" : "Show story & analysis"}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: caretColor,
+              cursor: "pointer",
+              fontSize: 22,
+              lineHeight: 1,
+              padding: "4px 6px",
+              flexShrink: 0,
+              transform: isOpen ? "rotate(90deg)" : "none",
+              transition: "transform 0.12s ease",
+            }}
+          >
+            <span className={!isOpen ? "chevron-wobble" : undefined}>▶</span>
+          </button>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
+              <IndexBadge index={r.ftse_index} />
+            </div>
+            <div style={{ color: "#64748b", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {r.name}
+            </div>
+          </div>
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
+            <div style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 13 }}>
+              {live && <span title="Live" style={{ marginRight: 4, fontSize: 9, color: "#10b981" }}>●</span>}
+              {fmtPounds(price)}
+            </div>
+            <div style={{ color: pctColor(changePct), fontWeight: 700, fontSize: 12 }}>
+              {changePct == null ? "—" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}%`}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Sparkline points={r.spark} sinceCount={r.spark_since} sinceUp={changePct == null ? null : changePct >= 0} width={64} height={22} />
+            <RangeBar pos={rangePosValue} />
+          </div>
+          <span style={{ color: "#64748b", fontSize: 10 }} title="Date the pick was added">{fmtDate(st.published_at)}</span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <LabelledPill label="M" value={r.momentum_score} />
+            <LabelledPill label="Q" value={r.quality_score} />
+            <LabelledPill label="V" value={r.value_score} />
+            <LabelledPill label="R" value={r.risk_score} invert />
+          </div>
+          <FollowupTally pos={r.followup_pos} neg={r.followup_neg} expanded={isOpen} onToggle={onToggle} />
+          <span
+            onClick={(e) => { e.stopPropagation(); onNewsSelect(); }}
+            style={{ color: isNewsSelected ? "#f97316" : "#64748b", fontSize: 11, flexShrink: 0 }}
+          >
+            news ›
+          </span>
+        </div>
+      </div>
+
+      {isOpen && (
+        <div style={{ padding: "0 14px 14px", borderTop: "1px solid #1a1a1a" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <ScoreCell value={st.llm_score} />
+            {st.vet_verdict && vet && (
+              <span
+                title={st.vet_rationale || ""}
+                style={{ color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 6px", fontSize: 9.5, fontWeight: 700, fontFamily: "monospace" }}
+              >
+                {vet.label}
+              </span>
+            )}
+          </div>
+          <a href={st.url} target="_blank" rel="noreferrer" style={{ display: "block", marginTop: 6, color: "#e2e8f0", fontSize: 13, fontWeight: 600, textDecoration: "none", lineHeight: 1.4 }}>
+            {st.headline}
+          </a>
+
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+            <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
+            <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
+            {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+            <AnalysisRow label="AI summary" text={st.summary} />
+            {st.llm_confidence && (
+              <div style={{ fontSize: 10, color: "#64748b" }}>confidence: {st.llm_confidence}</div>
+            )}
+          </div>
+
+          {(r.followups || []).length > 0 && (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+              {r.followups.map((f, fi) => {
+                const c = f.sentiment === "positive" ? "#10b981" : f.sentiment === "negative" ? "#ef4444" : "#94a3b8";
+                const sym = f.sentiment === "positive" ? "▲" : f.sentiment === "negative" ? "▼" : "—";
+                const inner = (
+                  <>
+                    <span style={{ color: c, fontWeight: 700, width: 14, flexShrink: 0 }}>{sym}</span>
+                    <span style={{ color: "#475569", fontSize: 10, width: 40, flexShrink: 0 }}>{fmtWhen(f.published_at)}</span>
+                    <span style={{ color: "#cbd5e1", fontSize: 11.5 }}>{f.headline}</span>
+                  </>
+                );
+                return f.url ? (
+                  <a key={fi} href={f.url} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none" }}>
+                    {inner}
+                  </a>
+                ) : (
+                  <div key={fi} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>{inner}</div>
+                );
+              })}
+            </div>
+          )}
+
+          {isAdmin && (
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+              {dl != null && dl <= 5 && (
+                <span style={{ color: dl <= 0 ? "#f87171" : "#f59e0b", fontSize: 10, fontWeight: 700 }}>
+                  {dl <= 0 ? "expired" : `${dl}d left`}
+                </span>
+              )}
+              <button onClick={() => extendTracking(r.showcase_id)} style={btn("#60a5fa")}>Extend</button>
+              <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── columns ───────────────────────────────────────────────────────────────────
 const COLS = [
   { key: "name", label: "Stock", align: "left" },
@@ -413,6 +569,7 @@ const COLS = [
 // ── main component ────────────────────────────────────────────────────────────
 export default function HighImpactRnsTab({ onSelect }) {
   const isAdmin = useIsAdmin();
+  const isMobile = useIsMobile();
 
   const [rows, setRows] = useState([]);
   const [pending, setPending] = useState([]);
@@ -601,6 +758,34 @@ export default function HighImpactRnsTab({ onSelect }) {
           {rows.length === 0 ? (
             <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 3, padding: "48px 24px", textAlign: "center", color: "#555", fontFamily: "monospace", fontSize: 13 }}>
               {loading ? "Loading…" : "No stories are being showcased yet."}
+            </div>
+          ) : isMobile ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {sorted.map((r) => {
+                const st = r.story || {};
+                const vet = st.vet_verdict ? VET_STYLE[st.vet_verdict] : null;
+                return (
+                  <MobileCard
+                    key={r.showcase_id}
+                    r={r}
+                    st={st}
+                    vet={vet}
+                    isOpen={openStory.has(r.showcase_id)}
+                    onToggle={() => toggleStory(r.showcase_id)}
+                    onSelect={() => onSelect && onSelect(r.symbol)}
+                    isAdmin={isAdmin}
+                    live={isLive(r)}
+                    price={priceOf(r)}
+                    changePct={pctSinceNews(r)}
+                    rangePosValue={rangePos(r)}
+                    isNewsSelected={r.symbol === selectedNewsSymbol}
+                    onNewsSelect={() => setSelectedNewsSymbol(r.symbol)}
+                    dl={daysLeft(r)}
+                    extendTracking={extendTracking}
+                    setStatus={setStatus}
+                  />
+                );
+              })}
             </div>
           ) : (
             <div style={{ overflow: "auto", maxHeight: "calc(100vh - 245px)", scrollbarGutter: "stable" }}>
