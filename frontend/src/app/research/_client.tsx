@@ -8,17 +8,24 @@ import { useIsAdmin } from "@/hooks/useAdmin";
 import PageHeader from "@/components/layout/PageHeader";
 import { fmtPostDate, type ResearchPostSummary } from "@/lib/research";
 
-export default function ResearchListClient() {
+export default function ResearchListClient({
+  initialPosts,
+}: {
+  initialPosts: ResearchPostSummary[] | null;
+}) {
   const isAdmin = useIsAdmin();
-  const [posts, setPosts] = useState<ResearchPostSummary[] | null>(null);
+  // Server-rendered when the page's server fetch succeeded; the client fetch
+  // below is only the fallback for when it didn't.
+  const [posts, setPosts] = useState<ResearchPostSummary[] | null>(initialPosts);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    if (initialPosts !== null) return;
     fetch(`${API}/research/posts`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d) => setPosts(d.posts || []))
       .catch(() => setError(true));
-  }, []);
+  }, [initialPosts]);
 
   return (
     <div style={{ maxWidth: 820, margin: "0 auto" }}>

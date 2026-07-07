@@ -10,6 +10,9 @@ Two audiences, one router:
 Comments are moderated: every submission is stored as status='pending' and is
 invisible until an admin approves it. A honeypot field ('website') catches the
 bots that fill every input — we accept-and-drop those so they don't retry.
+Beyond the honeypot: a per-IP rate limit and a per-post pending cap stop a
+script flooding the queue, and each accepted comment emails the owner (via the
+same Resend relay feedback.py uses) so the queue actually gets worked.
 
 DB access goes through main.query (imported lazily to dodge the import cycle:
 main.py registers this router before query() is defined). query() runs with
@@ -20,13 +23,18 @@ Migration: migrations/010_research.sql
 import re
 import sys
 import os
+import html
+import time
+import hashlib
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from admin_auth import require_admin_token
@@ -36,9 +44,19 @@ router = APIRouter(prefix="/api/research", tags=["research"])
 _MAX_TITLE = 200
 _MAX_SUMMARY = 500
 _MAX_BODY = 100_000
+_MAX_IMAGE = 500
 _MAX_COMMENT = 4000
 _MAX_AUTHOR = 80
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+# Comment flood control (the honeypot only stops dumb bots): a per-IP sliding
+# window on submissions, plus a cap on how many pending comments one post can
+# accumulate before we stop accepting more.
+_RATE_LIMIT = 3           # accepted submissions …
+_RATE_WINDOW = 60         # … per IP per this many seconds
+_MAX_PENDING_PER_POST = 50
+_rate_lock = threading.Lock()
+_rate_hits: dict[str, list[float]] = {}  # ip -> recent submission timestamps
 
 
 def _q(sql, params=None):
@@ -67,6 +85,76 @@ def _unique_slug(base: str, exclude_id: Optional[int] = None) -> str:
         slug = f"{base}-{n}"
 
 
+def _client_ip(request: Request) -> str:
+    """Real client IP: first hop of X-Forwarded-For (we're behind Traefik /
+    Vercel's proxy), falling back to the socket peer."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limited(ip: str) -> bool:
+    """True if this IP has already submitted _RATE_LIMIT comments in the last
+    _RATE_WINDOW seconds. Records the attempt when allowed."""
+    now = time.time()
+    with _rate_lock:
+        # Keep the map bounded — a slow scan across many IPs must not grow it
+        # forever (the process is long-lived on Dokploy).
+        if len(_rate_hits) > 1000:
+            for k in [k for k, v in _rate_hits.items() if not v or v[-1] < now - _RATE_WINDOW]:
+                del _rate_hits[k]
+        hits = [t for t in _rate_hits.get(ip, []) if t > now - _RATE_WINDOW]
+        if len(hits) >= _RATE_LIMIT:
+            _rate_hits[ip] = hits
+            return True
+        hits.append(now)
+        _rate_hits[ip] = hits
+        return False
+
+
+def _notify_new_comment(post_title: str, post_slug: str, author: str,
+                        email: str, body: str) -> None:
+    """Email the owner that a comment is waiting in the moderation queue.
+
+    Runs as a BackgroundTask after the response is sent, and swallows every
+    failure — a Resend outage must never affect (or reveal anything to) the
+    commenter. Reuses feedback.py's Resend relay + recipient resolution.
+    """
+    try:
+        from feedback import _send_via_resend, _feedback_to  # same env / sender
+        base = (os.environ.get("PUBLIC_BASE_URL") or "https://app.alphamoveai.co.uk").rstrip("/")
+        admin_url = f"{base}/research/admin"
+        text = (
+            f"New comment awaiting review on “{post_title}”\n"
+            f"({base}/research/{post_slug})\n\n"
+            f"From: {author}{f' <{email}>' if email else ''}\n\n"
+            f"{body}\n\n"
+            f"Review: {admin_url}"
+        )
+        html_body = (
+            '<div style="font-family:monospace;font-size:14px;color:#111;">'
+            f'<p>New comment awaiting review on '
+            f'<a href="{html.escape(base)}/research/{html.escape(post_slug)}">'
+            f'{html.escape(post_title)}</a></p>'
+            f'<p style="color:#666;">From: {html.escape(author)}'
+            f'{" &lt;" + html.escape(email) + "&gt;" if email else ""}</p>'
+            f'<p style="white-space:pre-wrap;line-height:1.6;border-left:3px solid #ccc;'
+            f'padding-left:12px;">{html.escape(body)}</p>'
+            f'<p><a href="{html.escape(admin_url)}">Open the moderation queue</a></p>'
+            '</div>'
+        )
+        _send_via_resend({
+            "from": os.environ.get("DIGEST_FROM", "Alpha Move AI <digest@alphamoveai.co.uk>"),
+            "to": [_feedback_to()],
+            "subject": f"New research comment — {post_title}",
+            "text": text,
+            "html": html_body,
+        })
+    except Exception:
+        pass  # never let notification failures surface anywhere
+
+
 # ── Serialisation ─────────────────────────────────────────────────────────────
 def _post_summary(r: dict) -> dict:
     """List-card shape: no body, plus the approved-comment tally."""
@@ -75,6 +163,7 @@ def _post_summary(r: dict) -> dict:
         "slug": r["slug"],
         "title": r["title"],
         "summary": r["summary"],
+        "image": r.get("image"),
         "tags": r["tags"] or [],
         "status": r["status"],
         "published_at": r["published_at"].isoformat() if r["published_at"] else None,
@@ -161,9 +250,13 @@ class CommentBody(BaseModel):
 
 
 @router.post("/posts/{slug}/comments")
-def submit_comment(slug: str, payload: CommentBody):
+def submit_comment(slug: str, payload: CommentBody, request: Request,
+                   background: BackgroundTasks):
     if (payload.website or "").strip():
         return {"ok": True, "pending": True}  # honeypot — silently discard
+
+    if _rate_limited(_client_ip(request)):
+        raise HTTPException(429, "Too many comments — please wait a minute and try again")
 
     author = (payload.author or "").strip()
     body = (payload.body or "").strip()
@@ -181,20 +274,33 @@ def submit_comment(slug: str, payload: CommentBody):
         raise HTTPException(400, "Invalid email address")
 
     rows = _q(
-        "SELECT id FROM research_posts WHERE slug = %s AND status = 'published'",
+        """
+        SELECT p.id, p.title, (
+            SELECT COUNT(*) FROM research_comments c
+            WHERE c.post_id = p.id AND c.status = 'pending'
+        ) AS pending_count
+        FROM research_posts p WHERE p.slug = %s AND p.status = 'published'
+        """,
         (slug,),
     )
     if not rows:
         raise HTTPException(404, "Post not found")
-    post_id = rows[0]["id"]
+    post = rows[0]
+    # Flood backstop: once a post has this many unreviewed comments something is
+    # spamming it — stop accepting until the queue is worked.
+    if int(post["pending_count"] or 0) >= _MAX_PENDING_PER_POST:
+        raise HTTPException(429, "This post has too many comments awaiting review — try again later")
 
     _q(
         """
         INSERT INTO research_comments (post_id, author, email, body)
         VALUES (%s, %s, %s, %s) RETURNING id
         """,
-        (post_id, author, email or None, body),
+        (post["id"], author, email or None, body),
     )
+    # Tell the owner there's something in the queue — after the response, and
+    # best-effort (see _notify_new_comment).
+    background.add_task(_notify_new_comment, post["title"], slug, author, email, body)
     # Moderated: the comment won't show until approved. Tell the reader so.
     return {"ok": True, "pending": True}
 
@@ -207,6 +313,22 @@ class PostBody(BaseModel):
     tags: Optional[list[str]] = None
     slug: Optional[str] = None            # optional override; auto from title otherwise
     status: Optional[str] = None          # 'draft' | 'published'
+    image: Optional[str] = None           # hero/OG image URL (site-relative or absolute)
+
+
+def _validated_body_and_image(payload: PostBody) -> tuple[str, Optional[str]]:
+    """Shared create/update checks. Over-long content is REJECTED, not
+    truncated — silently chopping the tail off a long article and reporting
+    'Saved.' loses work."""
+    body = payload.body or ""
+    if len(body) > _MAX_BODY:
+        raise HTTPException(
+            400, f"Body too long ({len(body):,} chars; max {_MAX_BODY:,}) — split the post"
+        )
+    image = (payload.image or "").strip() or None
+    if image and len(image) > _MAX_IMAGE:
+        raise HTTPException(400, f"Image URL too long (max {_MAX_IMAGE})")
+    return body, image
 
 
 def _clean_tags(tags) -> list[str]:
@@ -252,7 +374,7 @@ def admin_create_post(payload: PostBody):
         raise HTTPException(400, "Title is required")
     if len(title) > _MAX_TITLE:
         raise HTTPException(400, f"Title too long (max {_MAX_TITLE})")
-    body = (payload.body or "")[:_MAX_BODY]
+    body, image = _validated_body_and_image(payload)
     summary = (payload.summary or "").strip()[:_MAX_SUMMARY] or None
     status = payload.status if payload.status in ("draft", "published") else "draft"
     slug = _unique_slug(_slugify(payload.slug or title))
@@ -260,11 +382,11 @@ def admin_create_post(payload: PostBody):
 
     rows = _q(
         f"""
-        INSERT INTO research_posts (slug, title, summary, body, tags, status, published_at)
-        VALUES (%s, %s, %s, %s, %s, %s, {published_at})
+        INSERT INTO research_posts (slug, title, summary, body, tags, status, image, published_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, {published_at})
         RETURNING id, slug
         """,
-        (slug, title, summary, body, _clean_tags(payload.tags), status),
+        (slug, title, summary, body, _clean_tags(payload.tags), status, image),
     )
     return {"ok": True, "id": rows[0]["id"], "slug": rows[0]["slug"]}
 
@@ -281,7 +403,7 @@ def admin_update_post(post_id: int, payload: PostBody):
         raise HTTPException(400, "Title is required")
     if len(title) > _MAX_TITLE:
         raise HTTPException(400, f"Title too long (max {_MAX_TITLE})")
-    body = (payload.body or "")[:_MAX_BODY]
+    body, image = _validated_body_and_image(payload)
     summary = (payload.summary or "").strip()[:_MAX_SUMMARY] or None
     status = payload.status if payload.status in ("draft", "published") else cur["status"]
 
@@ -304,12 +426,12 @@ def admin_update_post(post_id: int, payload: PostBody):
     rows = _q(
         f"""
         UPDATE research_posts
-        SET title = %s, summary = %s, body = %s, tags = %s, status = %s, slug = %s,
+        SET title = %s, summary = %s, body = %s, tags = %s, status = %s, slug = %s, image = %s,
             {pub_clause} updated_at = NOW()
         WHERE id = %s
         RETURNING id, slug
         """,
-        (title, summary, body, _clean_tags(payload.tags), status, slug, post_id),
+        (title, summary, body, _clean_tags(payload.tags), status, slug, image, post_id),
     )
     return {"ok": True, "id": rows[0]["id"], "slug": rows[0]["slug"]}
 
@@ -417,6 +539,84 @@ def admin_delete_comment(comment_id: int):
     if not rows:
         raise HTTPException(404, "Comment not found")
     return {"ok": True}
+
+
+# ── Images ────────────────────────────────────────────────────────────────────
+# In-browser image upload for post bodies (paste/drag in the admin editor) and
+# share images — so publishing a post with pictures needs no git commit/deploy.
+#
+# Storage is a plain directory. On Dokploy set RESEARCH_IMAGE_DIR to a path on
+# the persistent volume (e.g. /data/research_images — same pattern as
+# MARKET_SNAPSHOT_DIR) or uploads vanish on redeploy. The dev default keeps
+# them next to the code.
+#
+# Upload is a raw request body (not multipart — avoids the python-multipart
+# dependency): the editor POSTs the file bytes with ?filename=<original name>.
+# The stored name is <slugified-stem>-<content-hash>.<ext with ext sniffed
+# from magic bytes (never trusted from the client), so names are unique,
+# path-safe, and immutable → the GET can cache forever.
+_IMAGE_DIR = os.environ.get("RESEARCH_IMAGE_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "research_images"
+)
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+_IMAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*\.(png|jpg|gif|webp)$")
+_IMAGE_MEDIA = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def _sniff_image(data: bytes) -> Optional[str]:
+    """File extension from magic bytes — or None if it isn't a supported image."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+@router.post("/images", dependencies=[Depends(require_admin_token)])
+async def upload_image(request: Request, filename: str = ""):
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "Empty upload")
+    if len(data) > _MAX_IMAGE_BYTES:
+        raise HTTPException(400, f"Image too large (max {_MAX_IMAGE_BYTES // (1024 * 1024)}MB)")
+    ext = _sniff_image(data)
+    if not ext:
+        raise HTTPException(400, "Unsupported image type (png, jpg, gif or webp)")
+
+    stem = _slugify(os.path.splitext(os.path.basename(filename or ""))[0])[:40]
+    digest = hashlib.sha1(data).hexdigest()[:10]
+    name = f"{stem}-{digest}.{ext}"  # content-addressed: re-uploads dedupe
+
+    os.makedirs(_IMAGE_DIR, exist_ok=True)
+    with open(os.path.join(_IMAGE_DIR, name), "wb") as f:
+        f.write(data)
+    return {"ok": True, "url": f"/api/research/images/{name}", "filename": name}
+
+
+@router.get("/images/{name}")
+def get_image(name: str):
+    # Regex gate (lowercase alnum + ._-, sniffed extension) blocks any traversal.
+    if not _IMAGE_NAME_RE.match(name):
+        raise HTTPException(404, "Image not found")
+    path = os.path.join(_IMAGE_DIR, name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Image not found")
+    return FileResponse(
+        path,
+        media_type=_IMAGE_MEDIA[name.rsplit(".", 1)[1]],
+        # Names embed a content hash — a changed image gets a new URL, so this
+        # can be cached forever by browsers (the Vercel edge won't cache /api).
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 # ── Sitemap helper (imported by main.sitemap_xml) ─────────────────────────────
