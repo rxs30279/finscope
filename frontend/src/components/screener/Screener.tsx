@@ -16,8 +16,8 @@ import PageHeader from "@/components/layout/PageHeader";
 // P/E, ROE, Rev Growth and PEGY are no longer fixed filters here — they're
 // generated per-column in the Advanced panel from the enabled table columns
 // (see colFilters). What remains are the non-column filters: sector/index/market
-// cap (always-on columns) plus the analyst filters (consensus, upside).
-const EMPTY_FILTERS = { sector: "", exclude_sectors: "", ftse_index: "", min_market_cap: "", consensus: "", min_upside_pct: "" };
+// cap (always-on columns).
+const EMPTY_FILTERS = { sector: "", exclude_sectors: "", ftse_index: "", min_market_cap: "" };
 const EMPTY_MODES = { min_market_cap: "" };
 const EMPTY_SCORE_FILTERS = { min_momentum: "", min_quality: "", min_value: "", max_risk: "" };
 
@@ -288,8 +288,6 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
       else if (r.ftse_index !== f.ftse_index) return false;
     }
     if (f.min_market_cap && (r.market_cap == null || r.market_cap < +f.min_market_cap)) return false;
-    if (f.consensus && r.consensus !== f.consensus) return false;
-    if (f.min_upside_pct && (r.upside_pct == null || r.upside_pct < +f.min_upside_pct)) return false;
     // Per-column metric filters — applied only for currently-enabled columns, so
     // a filter disappears (stops filtering) when its column is turned off.
     for (const c of visibleToggleCols) {
@@ -331,7 +329,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   const hasActiveFilters = Object.values(filters).some((v) => v !== "") || Object.values(scoreFilters).some((v) => v !== "") || activeColFilters;
   // Accent a filter control when it has a value, so active filters are obvious.
   const selStyle = (active: boolean) => (active ? { ...S.select, ...S.selectActive } : S.select);
-  const hasAdvancedFilters = activeColFilters || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_value || scoreFilters.max_risk || filters.consensus || filters.min_upside_pct;
+  const hasAdvancedFilters = activeColFilters || scoreFilters.min_momentum || scoreFilters.min_quality || scoreFilters.min_value || scoreFilters.max_risk;
 
   const handleSort = (key: string) => {
     if (sortCol === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
@@ -434,13 +432,6 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
               {opts.map(([v, l]: any) => <option key={v} value={v}>{l}</option>)}
             </select>
           ))}
-          {/* Analyst filters (independent of the fundamentals columns). */}
-          <select style={selStyle(!!filters.consensus)} value={filters.consensus} onChange={(e) => update("consensus", e.target.value)}>
-            <option value="">All Consensus</option><option value="Buy">Buy</option><option value="Hold">Hold</option><option value="Sell">Sell</option>
-          </select>
-          <select style={selStyle(!!filters.min_upside_pct)} value={filters.min_upside_pct} onChange={(e) => update("min_upside_pct", e.target.value)}>
-            <option value="">Any Upside</option><option value="5">Upside &gt; 5%</option><option value="10">Upside &gt; 10%</option><option value="20">Upside &gt; 20%</option>
-          </select>
         </div>
       )}
 
