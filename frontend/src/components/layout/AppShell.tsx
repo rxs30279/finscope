@@ -10,14 +10,22 @@ import { API, adminHeaders } from "@/lib/api";
 import { S } from "@/lib/theme";
 import Sidebar from "@/components/Sidebar";
 
-const NAV_GROUPS = [
+type NavLink = { href: string; label: string };
+type NavGroup = NavLink & { children?: never } | { label: string; children: NavLink[]; href?: never };
+
+const NAV_GROUPS: NavGroup[] = [
   { href: "/screener", label: "Screener" },
-  { href: "/trending", label: "Trending" },
-  { href: "/watchlist", label: "Watchlist" },
-  { href: "/analysts", label: "Analysts" },
-  { href: "/rns", label: "RNS News" },
   { href: "/high-impact-rns", label: "High Impact RNS" },
-  { href: "/subscribe", label: "RNS Email" },
+  { href: "/trending", label: "Trending" },
+  { href: "/analysts", label: "Analysts" },
+  {
+    label: "RNS",
+    children: [
+      { href: "/rns", label: "RNS Daily News" },
+      { href: "/subscribe", label: "RNS Daily Email" },
+    ],
+  },
+  { href: "/watchlist", label: "Watchlist" },
   { href: "/markets", label: "Markets" },
   { href: "/research", label: "Research" },
 ];
@@ -33,6 +41,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(isNarrow);
   const [toolsOpen, setToolsOpen] = useState(false);
+  // RNS nav dropdown. The menu is position:fixed (not absolute) because the nav
+  // links wrapper scrolls horizontally (overflow-x) and would clip an absolutely
+  // positioned menu; left is measured from the trigger button at click time.
+  const [rnsOpen, setRnsOpen] = useState(false);
+  const [rnsLeft, setRnsLeft] = useState(0);
   const [searchQ, setSearchQ] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [showSearch, setShowSearch] = useState(false);
@@ -182,6 +195,61 @@ export default function AppShell({ children }: { children: ReactNode }) {
             style={{ display: "flex", gap: 2, flexShrink: 1, minWidth: 0, overflowX: "auto" }}
           >
             {NAV_GROUPS.map((g) => {
+              if (g.children) {
+                const isActive = g.children.some(
+                  (c) => pathname === c.href || pathname.startsWith(c.href),
+                );
+                return (
+                  <div key={g.label} style={{ flexShrink: 0 }}>
+                    <button
+                      onClick={(e) => {
+                        setRnsLeft(e.currentTarget.getBoundingClientRect().left);
+                        setRnsOpen((v) => !v);
+                      }}
+                      style={{
+                        ...S.navBtn,
+                        ...(isNarrow ? { padding: "6px 8px", fontSize: 11 } : {}),
+                        whiteSpace: "nowrap",
+                        ...(isActive ? S.navBtnActive : {}),
+                      }}
+                    >
+                      {g.label} ▾
+                    </button>
+                    {rnsOpen && (
+                      <>
+                        <div onClick={() => setRnsOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 200 }} />
+                        <div style={{
+                          position: "fixed", top: 52, left: rnsLeft,
+                          minWidth: 170, background: "#141414", border: "1px solid #2a2a2a",
+                          borderRadius: 4, boxShadow: "0 8px 24px rgba(0,0,0,0.8)",
+                          zIndex: 201, overflow: "hidden",
+                        }}>
+                          {g.children.map((c, i) => {
+                            const childActive = pathname === c.href || pathname.startsWith(c.href);
+                            return (
+                              <Link
+                                key={c.href}
+                                href={c.href}
+                                onClick={() => setRnsOpen(false)}
+                                style={{
+                                  display: "block", padding: "10px 14px",
+                                  color: childActive ? "#f97316" : "#e5e5e5",
+                                  fontFamily: "monospace", fontSize: 11,
+                                  fontWeight: childActive ? 700 : 400,
+                                  textDecoration: "none",
+                                  borderBottom: i < g.children.length - 1 ? "1px solid #1f1f1f" : "none",
+                                }}
+                              >
+                                {c.label}
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              }
               const isActive = pathname === g.href || (g.href !== "/screener" && pathname.startsWith(g.href));
               return (
                 <Link
@@ -345,6 +413,36 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <div onClick={() => setMobileMenuOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 99 }} />
           <div style={{ position: "fixed", top: 52, left: 0, bottom: 0, width: 260, background: "#0d0d0d", borderRight: "1px solid #2a2a2a", zIndex: 100, overflowY: "auto", padding: "8px 0" }}>
             {NAV_GROUPS.map((g) => {
+              if (g.children) {
+                // Dropdown groups flatten in the drawer: dim section label, indented links.
+                return (
+                  <div key={g.label}>
+                    <div style={{ padding: "10px 20px 2px", color: "#555", fontSize: 10, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: 1 }}>
+                      {g.label}
+                    </div>
+                    {g.children.map((c) => {
+                      const childActive = pathname === c.href;
+                      return (
+                        <Link
+                          key={c.href}
+                          href={c.href}
+                          onClick={() => setMobileMenuOpen(false)}
+                          style={{
+                            display: "block", padding: "12px 20px 12px 32px",
+                            background: childActive ? "#1f1200" : "none",
+                            color: childActive ? "#f97316" : "#999",
+                            fontSize: 13, fontFamily: "monospace",
+                            fontWeight: childActive ? 700 : 400,
+                            textDecoration: "none",
+                          }}
+                        >
+                          {c.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                );
+              }
               const isActive = pathname === g.href;
               return (
                 <Link
