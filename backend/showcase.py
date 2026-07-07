@@ -563,6 +563,7 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "value_score": m.get("value_score"),
             "days_since_news": (now - e["published_at"]).days,
             "pct_since_news": pct,
+            "story_close": baseline,
             "spark_since": _spark_since_count(e["symbol"], e["published_at"]),
             "track_until": e.get("track_until"),
             "followup_pos": sum(1 for f in fus if f["sentiment"] == "positive"),

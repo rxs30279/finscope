@@ -486,6 +486,13 @@ export default function HighImpactRnsTab({ onSelect }) {
     return live != null ? live : r.current_price;
   };
   const isLive = (r) => liveQuotes[r.symbol] != null;
+  // % since the story — recomputed from the live quote when one is present so the
+  // Change column matches the Price column; otherwise the backend's EOD figure.
+  const pctSinceNews = (r) => {
+    const live = liveQuotes[r.symbol];
+    if (live != null && r.story_close > 0) return (live / r.story_close - 1) * 100;
+    return r.pct_since_news;
+  };
   const rangePos = (r) => {
     const p = priceOf(r);
     if (p == null || r.high_52w == null || r.low_52w == null) return null;
@@ -504,7 +511,7 @@ export default function HighImpactRnsTab({ onSelect }) {
       case "q": return r.quality_score;
       case "v": return r.value_score;
       case "r": return r.risk_score;
-      case "pct_news": return r.pct_since_news;
+      case "pct_news": return pctSinceNews(r);
       default: return null;
     }
   };
@@ -651,9 +658,9 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 style={{
                                   background: "transparent",
                                   border: "none",
-                                  color: isStoryOpen ? "#f97316" : "#3b82f6",
+                                  color: isStoryOpen ? "#f97316" : "#60a5fa",
                                   cursor: "pointer",
-                                  fontSize: 10,
+                                  fontSize: 14,
                                   padding: 0,
                                   lineHeight: 1,
                                   flexShrink: 0,
@@ -682,8 +689,8 @@ export default function HighImpactRnsTab({ onSelect }) {
                           </td>
 
                           {/* Change — % since the story */}
-                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(r.pct_since_news) }}>
-                            {r.pct_since_news == null ? "—" : `${r.pct_since_news >= 0 ? "+" : ""}${r.pct_since_news.toFixed(1)}%`}
+                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(pctSinceNews(r)) }}>
+                            {pctSinceNews(r) == null ? "—" : `${pctSinceNews(r) >= 0 ? "+" : ""}${pctSinceNews(r).toFixed(1)}%`}
                           </td>
 
                           {/* Trend + 52w range */}
@@ -692,7 +699,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                               <Sparkline
                                 points={r.spark}
                                 sinceCount={r.spark_since}
-                                sinceUp={r.pct_since_news == null ? null : r.pct_since_news >= 0}
+                                sinceUp={pctSinceNews(r) == null ? null : pctSinceNews(r) >= 0}
                               />
                               <RangeBar pos={rangePos(r)} />
                             </div>
