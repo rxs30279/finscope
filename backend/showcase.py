@@ -182,15 +182,78 @@ def _spark_since_count(symbol: str, published_at) -> int:
 
 
 # ── Showcase-specific LLM vet (advisory) ──────────────────────────────────────
-def _vet_messages(cand: dict) -> list[dict]:
+def _annual_history(symbol: Optional[str], before=None, years: int = 5) -> list[dict]:
+    """Last `years` fiscal years from annual_financials, oldest first.
+
+    `before` (a date) keeps only fiscal years ended before it — used by
+    backtests to avoid look-ahead; production passes None (a fresh announcement
+    can legitimately see every reported year)."""
+    if not symbol:
+        return []
+    rows = _q(
+        """
+        SELECT fiscal_year, period_end_date, revenue, operating_income,
+               net_income, eps_diluted
+        FROM annual_financials
+        WHERE company_symbol = %s
+          AND (%s::date IS NULL OR period_end_date < %s::date)
+        ORDER BY period_end_date DESC
+        LIMIT %s
+        """,
+        (symbol, before, before, years),
+    )
+    return list(reversed(rows))
+
+
+def _fmt_money_m(v) -> str:
+    if v is None:
+        return "n/a"
+    return f"£{float(v) / 1e6:,.1f}m"
+
+
+def _annual_lines(hist: list[dict]) -> str:
+    """Render the annual series as prompt lines the vet can do arithmetic on."""
+    if not hist:
+        return "  (no stored annual financials for this company)"
+    lines = []
+    for h in hist:
+        eps = h.get("eps_diluted")
+        eps_s = f"{float(eps) * 100:.1f}p" if eps is not None else "n/a"
+        lines.append(
+            f"  FY ended {h['period_end_date']}: revenue {_fmt_money_m(h.get('revenue'))}, "
+            f"operating income {_fmt_money_m(h.get('operating_income'))}, "
+            f"net income {_fmt_money_m(h.get('net_income'))}, diluted EPS {eps_s}"
+        )
+    return "\n".join(lines)
+
+
+def _vet_messages(cand: dict, annual: Optional[list[dict]] = None) -> list[dict]:
     system = (
         "You are a sceptical UK equity analyst vetting positive-looking RNS "
         "announcements for a 1-3 month long showcase of good investment cases. "
         "Your job is to catch positive-FRAMED stories the market may still punish "
         "— e.g. a secondary/overseas listing that fragments liquidity, guidance "
         "quietly cut inside an upbeat results headline, heavy equity dilution, or "
-        "profit flattered by one-off/non-cash gains. Judge whether this is a "
-        "genuinely positive near-term investment case. Return STRICT JSON only."
+        "profit flattered by one-off/non-cash gains. "
+        "Interrogate the growth arithmetic: when headline growth is quoted "
+        "year-on-year against a weak, depressed or loss-making base period, work "
+        "out what the figure really says — estimate the implied sequential "
+        "run-rate versus the immediately preceding half or quarter, not just the "
+        "prior-year comparator (e.g. preceding half = full-year total minus the "
+        "prior-year half quoted in the announcement). A half reported as 'up 45% "
+        "year-on-year' that is actually below the preceding half is a "
+        "deceleration dressed as growth, and claims of 'sustained' activity or "
+        "momentum deserve extra suspicion when the comparator was the weak "
+        "period. Ground every calculation in figures supplied in this context "
+        "or quoted in the announcement itself — NEVER fill gaps from your "
+        "memory of the company's accounts. If the announcement's headline "
+        "metric and the database series are on different bases (e.g. net "
+        "operating income vs total revenue), compare like-for-like or say the "
+        "comparison isn't clean rather than forcing it. If the base period "
+        "cannot be established from the data provided, say so in the rationale "
+        "and use low confidence. "
+        "Judge whether this is a genuinely positive near-term investment case. "
+        "Return STRICT JSON only."
     )
     user = f"""Announcement
   Company:    {cand.get('company_name') or '?'} ({cand.get('symbol') or '?'})
@@ -202,6 +265,11 @@ def _vet_messages(cand: dict) -> list[dict]:
 
 Investegate AI summary
 {cand.get('summary') or '(not available)'}
+
+Historical annual financials (from our own database; NOTE: "revenue" here is
+TOTAL revenue, which can differ from the company's preferred headline metric
+such as net operating income — compare bases carefully)
+{_annual_lines(annual or [])}
 
 Return a JSON object with exactly these fields:
   verdict     one of: "include" (clean positive case), "caution" (positive but
@@ -216,15 +284,24 @@ Return JSON only — no preamble, no code fence."""
     ]
 
 
-def _vet_candidate(cand: dict) -> dict:
+def _vet_candidate(cand: dict, before=None) -> dict:
     """Run the advisory vet. Raises on API/parse failure — the caller treats that
-    as non-fatal and stores a NULL verdict."""
+    as non-fatal and stores a NULL verdict. `before` limits the annual series
+    for backtests (see _annual_history)."""
     from rns_llm import _get_client, _DEEPSEEK_MODEL
+
+    try:
+        annual = _annual_history(cand.get("symbol"), before=before)
+    except Exception as e:
+        # Missing history must never block the vet — it degrades to the
+        # announcement-only judgement with the no-data instruction.
+        print(f"[showcase] annual history fetch failed (non-fatal) — {e}")
+        annual = []
 
     client = _get_client()
     resp = client.chat.completions.create(
         model=_DEEPSEEK_MODEL,
-        messages=_vet_messages(cand),
+        messages=_vet_messages(cand, annual),
         response_format={"type": "json_object"},
         temperature=0.2,
         max_tokens=300,

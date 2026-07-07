@@ -1098,6 +1098,7 @@ Candidates that clear all eight gates get one more AI pass before a human sees t
 - guidance quietly trimmed inside an upbeat results headline
 - heavy equity dilution buried in the detail
 - profit flattered by one-off or non-cash gains
+- headline growth flattered by a weak base period — it is given the company's last five years of accounts from the app's own database and works out the implied *sequential* run-rate against the immediately preceding half, so a "+45% year-on-year" measured against a depressed comparator reads as the deceleration it really is (it is instructed to use only the supplied figures, never its own recollection of a company's accounts)
 
 Its verdict — **include / caution / exclude**, with a one-line rationale — appears on the page as the *manual screen* badge. It is **advisory only**: it never blocks a story automatically, it arms the human reviewer.
 

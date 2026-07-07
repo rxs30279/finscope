@@ -116,6 +116,41 @@ def test_sentiment_prod_thesis_vocabulary():
         ) == "negative", thesis
 
 
+def test_vet_prompt_includes_annual_history():
+    annual = [
+        {"fiscal_year": 2024, "period_end_date": "2024-03-31",
+         "revenue": 359_745_000, "operating_income": 82_944_000,
+         "net_income": 46_886_000, "eps_diluted": 0.167},
+    ]
+    msgs = showcase._vet_messages(_cand(), annual)
+    user = msgs[1]["content"]
+    assert "FY ended 2024-03-31" in user
+    assert "revenue £359.7m" in user
+    assert "diluted EPS 16.7p" in user
+    # base-grounding instructions live in the system prompt
+    system = msgs[0]["content"]
+    assert "NEVER fill gaps from your memory" in system
+    # no history → explicit no-data line, not a silent omission
+    empty = showcase._vet_messages(_cand(), [])[1]["content"]
+    assert "no stored annual financials" in empty
+
+
+def test_annual_history_query_shape():
+    rows = [
+        {"fiscal_year": 2023, "period_end_date": "2023-03-31", "revenue": 1,
+         "operating_income": 1, "net_income": 1, "eps_diluted": 0.1},
+        {"fiscal_year": 2024, "period_end_date": "2024-03-31", "revenue": 2,
+         "operating_income": 2, "net_income": 2, "eps_diluted": 0.2},
+    ]
+    with patch.object(showcase, "_q", return_value=list(reversed(rows))) as q:
+        out = showcase._annual_history("ABC.L", before="2025-01-01")
+        # DESC from SQL, reversed to oldest-first for the prompt
+        assert [r["fiscal_year"] for r in out] == [2023, 2024]
+        assert q.call_args[0][1] == ("ABC.L", "2025-01-01", "2025-01-01", 5)
+    # no symbol → no query, empty history
+    assert showcase._annual_history(None) == []
+
+
 def test_sentiment_prefers_stored_llm_sentiment():
     # The ranker's stored direction beats the thesis scan — here the thesis
     # reads positive ("upside beat") but the model said negative.
