@@ -16,6 +16,7 @@ const NAV_GROUPS = [
   { href: "/watchlist", label: "Watchlist" },
   { href: "/analysts", label: "Analysts" },
   { href: "/rns", label: "RNS News" },
+  { href: "/high-impact-rns", label: "High Impact RNS" },
   { href: "/subscribe", label: "RNS Email" },
   { href: "/markets", label: "Markets" },
   { href: "/research", label: "Research" },

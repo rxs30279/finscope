@@ -100,6 +100,7 @@ _SITEMAP_STATIC = [
     ("/trending", "daily", "0.8"),
     ("/analysts", "daily", "0.7"),
     ("/rns", "daily", "0.7"),
+    ("/high-impact-rns", "daily", "0.7"),
     ("/research", "weekly", "0.7"),
     ("/heatmap", "daily", "0.6"),
     ("/benchmarks", "weekly", "0.5"),

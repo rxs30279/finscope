@@ -6,9 +6,8 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: "/",
-      // /watchlist: user-specific, no shared content. /high-impact-rns: hidden
-      // preproduction route, admin-gated until public release.
-      disallow: ["/watchlist", "/high-impact-rns"],
+      // /watchlist: user-specific, no shared content.
+      disallow: ["/watchlist"],
     },
     sitemap: `${SITE_URL}/sitemap.xml`,
     host: SITE_URL,
