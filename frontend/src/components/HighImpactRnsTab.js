@@ -577,7 +577,24 @@ export default function HighImpactRnsTab({ onSelect }) {
   return (
     <div>
       <PageHeader
-        title="High Impact RNS"
+        title={
+          <>
+            High Impact RNS
+            <sup
+              style={{
+                marginLeft: 7,
+                fontSize: 10,
+                fontFamily: "monospace",
+                fontWeight: 700,
+                letterSpacing: 1,
+                textTransform: "uppercase",
+                color: "#10b981",
+              }}
+            >
+              New
+            </sup>
+          </>
+        }
         subtitle="A curated showcase of high-impact, positive RNS stories — each tracked to determine the effect of positive news on the share price."
         right={
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
