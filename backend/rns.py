@@ -1264,6 +1264,14 @@ def backfill_summaries(
 _MC_CACHE: dict[str, tuple[float, float]] = {}  # symbol -> (market_cap, timestamp)
 _MC_CACHE_TTL = 900  # 15 minutes
 
+# Symbols that Yahoo has told us don't exist (e.g. unresolved RNS tickers we
+# guessed a ".L" suffix for). Cached far longer than successes since these are
+# almost always permanently invalid, not a transient miss — without this,
+# every RNS-window request re-hits Yahoo (and logs a 404) for the same dead
+# symbol forever.
+_MC_FAIL_CACHE: dict[str, float] = {}  # symbol -> timestamp
+_MC_FAIL_TTL = 21600  # 6 hours
+
 
 def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
     """Fetch market caps from Yahoo Finance for a batch of symbols.
@@ -1281,6 +1289,8 @@ def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
     for sym in symbols:
         if sym in _MC_CACHE and now - _MC_CACHE[sym][1] < _MC_CACHE_TTL:
             result[sym] = _MC_CACHE[sym][0]
+        elif sym in _MC_FAIL_CACHE and now - _MC_FAIL_CACHE[sym] < _MC_FAIL_TTL:
+            continue
         else:
             uncached.append(sym)
 
@@ -1303,6 +1313,8 @@ def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
             if mc is not None:
                 result[sym] = mc
                 _MC_CACHE[sym] = (mc, now)
+            else:
+                _MC_FAIL_CACHE[sym] = now
 
     return result
 
