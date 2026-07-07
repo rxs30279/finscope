@@ -45,6 +45,7 @@
    - 8.3 [Reading the Feed](#83-reading-the-feed)
    - 8.4 [Action Pills — BUY / WATCH / AVOID](#84-action-pills)
    - 8.5 [The RNS Email Briefing — the Feed in Your Inbox](#85-the-rns-email-briefing)
+   - 8.6 [High Impact RNS — the Curated Showcase](#86-high-impact-rns)
 9. [Trending — Risers and Fallers](#9-trending)
 10. [The Sidebar — Your Instant Dashboard](#10-the-sidebar)
 11. [How To Find Investment Leads — Step-by-Step Workflows](#11-how-to-find-investment-leads)
@@ -918,27 +919,66 @@ The challenge is that there are hundreds of RNS releases every trading day, most
 
 ### 8.2 The Two-Layer Pipeline
 
-Behind the scenes the app runs a three-stage pipeline that keeps the feed populated and ranked:
+Behind the scenes the app runs a staged pipeline that keeps the feed populated and ranked. The design principle: **the rules layer is a cheap, coarse filter; the AI layer does the actual judgement.** Rules decide *what is worth the AI's attention*; the AI decides *what is worth yours*.
 
 | Stage | What it does |
 |---|---|
-| **Ingest** | Pulls every new RNS announcement from Investegate (the standard data source for UK regulatory news). |
-| **Summaries** | Fetches the AI-generated summary for each announcement from Investegate. |
-| **Rank** | Sends each Tier A and Tier B item to **DeepSeek** (an AI model) for ranking, scoring, and a "what to do about it" recommendation. |
+| **1. Ingest & classify** | Pulls every new RNS announcement from Investegate (the standard data source for UK regulatory news) and runs the **rules classifier** on each one: category, tier, keyword hits, and a rules score (details below). |
+| **2. Summaries** | For every Tier A and B item, fetches Investegate's AI-generated summary of the announcement — this gives the ranking stage actual content to judge, not just a headline. |
+| **3. AI rank** | Sends each Tier A and Tier B item to **DeepSeek** (an AI model) together with a full context pack about the company. Returns a score, a thesis, an action, the risks, and a sentiment. |
+| **4. High Impact flag** | The strictest gate: candidates that clear every quality bar are flagged for the curated **High Impact RNS** showcase ([§8.6](#86-high-impact-rns)). |
+| **5. Prune** | Announcements older than 14 days are deleted — the feed is a *catalyst* tool, not an archive (High Impact stories are snapshotted first so they survive the prune). |
 
-This pipeline runs **automatically in the background** several times per UK trading day (roughly every 15 minutes during the morning RNS window), so the feed is kept fresh for you with no action required — there is no button to press. You simply open the page and read the latest ranked items.
+This pipeline runs **automatically in the background** — every 15 minutes through the busy morning RNS window (roughly 7–10am UK), with catch-up runs later in the day. There is no button to press: you open the page and read the latest ranked items.
 
-#### The Tier system
+#### Layer 1 — the rules classifier (category, tier, rules score)
 
-A simple keyword-based **rules classifier** does a first-pass coarse sort:
+Every announcement is matched against **~40 enumerated categories**, checked in priority order so the most specific match wins. Matching runs primarily on the announcement's **URL slug** (more reliable than headline text, which varies with punctuation and localisation), falling back to the lower-cased headline. Two details worth knowing:
+
+- **"Notice of Results" is caught before "Results"** — a scheduling announcement ("Notice of Interim Results") is routine admin, not the event itself, so it is deliberately classified Tier C ahead of the Tier A results categories.
+- **Free-text fallbacks catch what the fixed patterns miss.** Companies phrase results announcements dozens of ways ("FY26 Results", "Half-year Financial Report", "Results for the year ended 31 March 2026"). If no enumerated category matches, pattern-matching fallbacks classify interim results, full-year results, contract wins ("preferred bidder", "secures 25yr contract") and product launches — so a materially important announcement with unusual phrasing still reaches Tier A/B and therefore the AI.
+
+The category determines the **tier**:
 
 | Tier | Label | Examples |
 |---|---|---|
-| **A** | **Significant** | Profit warnings, full-year results, firm offers (Rule 2.7), strategic reviews, drug approvals, major contract wins |
-| **B** | **Noteworthy** | Trading updates, possible offers (Rule 2.4), capital raises, drill results, board changes, dividend changes |
-| **C** | **Routine** | Total voting rights, holdings notifications, PDMR transactions, AGM admin |
+| **A** | **Significant** | Profit warnings, full-/half-year results, trading updates, firm offers (Rule 2.7), strategic reviews, going concern, suspensions |
+| **B** | **Noteworthy** | Possible offers (Rule 2.4), capital raises, acquisitions/disposals, contract wins, drill results, board changes, dividend changes |
+| **C** | **Routine** | Total voting rights, holdings notifications, PDMR transactions, buybacks, AGM admin, NAV updates |
 
-Tier A and Tier B items are then sent to the AI for ranking. Tier C items are kept in the database but not ranked (you can still see them by setting Min Score = 0 and Tier filter = C).
+On top of the category, a **keyword overlay** scans the headline for directional language — negative ("materially below", "going concern", "covenant", "impairment"), positive ("ahead of expectations", "record", "raised guidance") and catalytic ("recommended offer", "formal sale process") — and records the hit counts. The **rules score** is then a simple formula: tier base (A = 60, B = 40, C = 10) plus 15 points per positive or negative hit (max two each) plus 10 per catalytic hit (max two), capped at 100. That is what the "Min score" control on the page filters on.
+
+**Tier A and Tier B items go to the AI. Tier C items do not** — they are kept in the database but never ranked (you can still see them by setting Min Score = 0 and Tier filter = C). This makes tiering the one *hard* cut in the whole pipeline: a genuinely important announcement misclassified into Tier C is invisible to every later stage, which is why the classifier errs toward promoting anything results-shaped.
+
+#### Layer 2 — the AI ranker
+
+Each Tier A/B item is sent to DeepSeek with a **context pack** far richer than the headline:
+
+- The headline, category, tier, keyword hits and rules score
+- **Investegate's AI summary** of the announcement content
+- Company profile: sector, industry, country, FTSE index membership, market cap
+- Valuation: P/E, dividend yield, P/B, P/S
+- Financial health: ROIC, ROE, margins, revenue growth, 10-year EPS CAGR, D/E, current ratio, plus the app's own Quality and Risk scores
+- **Leverage flags**: net debt vs EBITDA and vs market cap, with an explicit "HIGH LEVERAGE" warning injected when net debt exceeds 3× EBITDA or the market cap
+- **Sector-relative margin flags**: net margin compared against the *sector median* (thin margins are normal in some sectors — below the sector's own norm is the red flag, loss-making doubly so)
+- Analyst context: consensus, buy %, upside to target, forward EPS growth
+- Price context: 1-month and 6-month share-price change (news confirming a move that already happened is largely priced in; news contradicting consensus has more surprise value)
+- The issuer's other Tier A/B announcements from the **last 60 days** (so one announcement is read against the run of recent news, not in isolation)
+
+The model is explicitly instructed to be sceptical (most announcements are noise), to weigh company size (a £50m contract is transformational for a £100m microcap, trivial for a FTSE 100), and to hold scores down for over-levered or low-quality businesses even when the news itself is positive — a weak balance sheet converts good news into shareholder value poorly.
+
+It returns six structured fields, all stored and shown in the feed:
+
+| Field | Meaning |
+|---|---|
+| **AI score** (0–100) | Price-impact likelihood × magnitude |
+| **Confidence** | high / medium / low |
+| **Thesis** | One sentence: why this matters (or why it doesn't) |
+| **Action** | watch / research / ignore → shown as the action pill ([§8.4](#84-action-pills)) |
+| **Risks** | One sentence: what would invalidate the thesis |
+| **Sentiment** | positive / negative / neutral — the direction of the news for existing shareholders, independent of its size. This drives the ▲/▼ badge ([§8.3](#83-reading-the-feed)) and is a hard gate for the High Impact showcase ([§8.6](#86-high-impact-rns)). |
+
+Score and sentiment are deliberately separate: a solvency crisis at a microcap can score 85 (huge price impact) with *negative* sentiment, while a routine in-line statement scores 20 with *neutral* sentiment. Score answers "will this move the price?"; sentiment answers "in which direction?".
 
 ### 8.3 Reading the Feed
 
@@ -970,7 +1010,17 @@ Tier A and Tier B items are then sent to the AI for ranking. Tier C items are ke
 - **Category** — the rules-classifier category (Profit Warning, Trading Update, etc.)
 - **Rules score** — 0–100, the rules-classifier importance
 - **AI score** — 0–100, the DeepSeek score (typically a more refined version of the rules score, factoring in valuation, analyst views, and recent price action)
+- **Sentiment badge** — ▲ (green), ▼ (red) or — (grey): the direction of the news for holders
 - **Action pill** — BUY / WATCH / AVOID / NEUTRAL — see Section 8.4
+
+**How the sentiment badge is decided.** The same sentiment engine is used everywhere a ▲/▼ appears — this feed, the email briefing, and the High Impact page's follow-up tallies — so a story never reads positive in one place and neutral in another. It works through four layers, stopping at the first that gives an answer:
+
+1. **Category overrides** — some categories are directional by definition: profit warnings, going concern, liquidations, delistings and suspensions are always ▼; firm offers, recommended offers, drug approvals and contract wins are always ▲.
+2. **The AI's own sentiment** — the ranker read the full announcement and stated a direction (see [§8.2](#82-the-two-layer-pipeline)); this is the primary signal for everything else.
+3. **Thesis language scan** — for items ranked before the sentiment field existed, the AI thesis text is scanned for directional vocabulary ("ahead of expectations", "record", "accretive" vs "dilutive", "solvency", "impairment").
+4. **Headline keyword tallies** — as a last resort, the rules classifier's positive/negative headline hits are compared.
+
+If none of the layers produces a direction, the badge shows — (neutral).
 
 ### 8.4 Action Pills
 
@@ -1004,10 +1054,86 @@ The clearest opportunities tend to come from:
 If you don't want to open the RNS News page every morning, the app can bring the highlights to you. The **RNS Email** page (top nav → "RNS Email") signs you up for a short daily briefing:
 
 - **When:** every weekday at **07:30 UK time** — just after the busiest RNS release window opens, so you read it with your morning coffee rather than at lunch.
-- **What's in it:** the last 24 hours of **notable movers** and the **high-impact RNS announcements** the AI pipeline ranked most significant — the same tiering and scoring described in [§8.2](#82-the-two-layer-pipeline), condensed to the items that actually matter.
+- **What's in it:** the last 24 hours of **notable movers** and the **high-impact RNS announcements** the AI pipeline ranked most significant — the same tiering, scoring and ▲/▼ sentiment badges described in [§8.2](#82-the-two-layer-pipeline) and [§8.3](#83-reading-the-feed), condensed to the items that actually matter.
 - **Cost & commitment:** free, with a capped number of subscriber spots (the page shows how many remain). Every email has a **one-click unsubscribe** link in the footer, and the sign-up page shows a sample briefing so you can see the format before subscribing.
 
 **How it fits the workflows:** the email is a *prompt*, not a substitute for research. When an item catches your eye, click through to the RNS News page or the company's News tab and run the same checks as the Catalyst Hunt ([§11.6](#116-the-catalyst-hunt)) — quality, risk, and whether analysts have already priced the news in.
+
+### 8.6 High Impact RNS — the Curated Showcase
+
+The **High Impact RNS** page is the newest and most selective channel built on the RNS pipeline. Where the RNS News feed shows you *everything ranked* (typically dozens of items a day), High Impact RNS shows a **small, curated list of the best positive stories** — each one tracked for a month afterwards so you can see whether the signal actually played out.
+
+Think of the two pages as different altitudes over the same data:
+
+| | RNS News feed | High Impact RNS |
+|---|---|---|
+| **Volume** | Dozens of items per day | A handful of names at any time |
+| **Direction** | Positive, negative and neutral | Positive stories only |
+| **Selection** | Everything above your score filter | Six automated gates + an AI second opinion + human approval |
+| **Lifespan** | 14 days, then pruned | Snapshotted and tracked for 31 days from the story |
+| **Purpose** | Catch catalysts as they land | Watch whether the highest-conviction signals deliver |
+
+#### The selection funnel, gate by gate
+
+Every announcement that survives the ranking stage ([§8.2](#82-the-two-layer-pipeline)) is tested against **all** of the following. Failing any single gate means the story never appears:
+
+| # | Gate | Threshold | Why |
+|---|---|---|---|
+| 1 | **Category** | Must be a *performance report*: trading update, final results, interim results, or quarterly results | The showcase is about companies *delivering*, not deal speculation or fundraising |
+| 2 | **Tier** | A or B from the rules classifier | Routine admin never qualifies |
+| 3 | **AI score & action** | AI score **≥ 75** with action **watch** or **research** | Only the ranker's highest-conviction items; "ignore"-graded items are out regardless of score |
+| 4 | **Sentiment** | Must read **positive** (the engine described in [§8.3](#83-reading-the-feed)) | A high score only means "will move the price" — this gate forces the direction to be up |
+| 5 | **Size** | Market cap **≥ £50m** | Keeps the list to genuinely tradeable names with real liquidity |
+| 6 | **Balance sheet** | Excluded if net debt > 3× EBITDA, or the company carries net debt with no profit to service it, or net debt exceeds the entire market cap | Over-levered businesses convert good news into shareholder value poorly — the equity sits behind the debt |
+| 7 | **Quality** | Net margin must be at or above **max(0, its own sector's median)** — and never loss-making. (If sector data is missing, a 2% absolute floor applies) | Sector-relative on purpose: a grocer's 3% margin can be best-in-class while a software firm's 3% is a red flag |
+| 8 | **Freshness** | The same company can't be flagged twice within **30 days** | One story per name per month — the tracking window does the follow-up work |
+
+Gates 6 and 7 deliberately **mirror the leverage and margin flags inside the AI ranker's prompt** — the two stages judge companies by the same standards, so a name the ranker was told to treat with caution can't slip through the showcase selection on a technicality.
+
+#### The AI second opinion ("manual screen")
+
+Candidates that clear all eight gates get one more AI pass before a human sees them — a *sceptical* review with the opposite brief to the ranker. Instead of asking "is this important?", it asks: **"is this positive-looking story one the market might still punish?"** It specifically hunts for:
+
+- a secondary or overseas listing dressed up as good news (fragments liquidity)
+- guidance quietly trimmed inside an upbeat results headline
+- heavy equity dilution buried in the detail
+- profit flattered by one-off or non-cash gains
+
+Its verdict — **include / caution / exclude**, with a one-line rationale — appears on the page as the *manual screen* badge. It is **advisory only**: it never blocks a story automatically, it arms the human reviewer.
+
+#### Human approval — the final gate
+
+Nothing appears on the public page automatically. Flagged candidates land in a pending queue where a human reviews the story, the AI thesis and risks, and the sceptical verdict, then approves or rejects. What you see on the page is therefore: **rules filter → AI ranking → six quality gates → AI devil's-advocate review → human sign-off.**
+
+#### What happens after selection — the 31-day track
+
+Selection is where most tools stop; here it is where the page starts. The moment a story is flagged:
+
+- The **story is snapshotted** — headline, AI analysis, summary, and the share price at the story date (the "story close"). This matters because the RNS feed itself is pruned after 14 days; the showcase keeps its own copy.
+- The **Change** column then tracks the share price from the story close to now — an honest, fixed-baseline record of what happened after the signal, whether you look the next day or three weeks later.
+- A **follow-up recorder** copies every *subsequent* Tier A/B announcement the company makes while it is being tracked, each tagged with the same ▲/▼/— sentiment engine. The **Follow-up RNS** column shows the tally — so if a company delivers great results and the CEO resigns a week later, the deterioration is visible on the page rather than lost to the feed prune.
+- After **31 days** from the story date the entry is automatically archived (tracking can be extended in 30-day steps where the story is still developing).
+
+#### Reading the table
+
+| Column | What it shows |
+|---|---|
+| **Stock** | Ticker, name and index badge; the caret expands the full story |
+| **Price / Change** | Live price, and % change **since the story close** — not since you opened the page |
+| **Trend / 52W Range** | 3-month sparkline — the segment since selection is coloured green/red — plus position in the 52-week range |
+| **Date added** | The story date |
+| **Mom / Qual / Value / Risk** | The same four scores as the Screener ([§3.2](#32-the-four-scores-explained)) so you can judge the underlying business at a glance |
+| **Follow-up RNS** | ▲/▼ tally of the company's announcements since the story |
+| **News** | Latest headlines for the selected name |
+
+Expanding a row reveals the full story block: the AI **thesis** and **risks** from ranking day, the **manual screen** verdict and rationale, and the announcement **summary** — the complete evidence trail for why the name was selected.
+
+#### How to use it — and how not to
+
+- **It is a monitored watchlist, not a tip sheet.** Every name passed strict quality gates, but the 31-day track exists precisely because good stories sometimes fail. The Change and Follow-up columns are the scoreboard — read them, don't assume.
+- **Check how much has already moved.** The Change column is measured from the story date. If a name is +15% since its story, the easy part of the move may be gone; the question becomes whether the re-rating continues.
+- **Watch the follow-up sentiment.** A red ▼ appearing in the Follow-up column mid-track is exactly the early-warning signal the recorder was built for — open it before the market forces you to.
+- **Combine with the Screener scores in the row.** A showcase story on a 9-Quality, 3-Risk business is a different proposition from the same story on a 5-Quality, 7-Risk one — the columns are there so you never have to take a story on faith.
 
 ---
 
