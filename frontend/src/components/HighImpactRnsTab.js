@@ -406,8 +406,8 @@ const COLS = [
   { key: "q", label: "Qual", align: "center" },
   { key: "v", label: "Value", align: "center" },
   { key: "r", label: "Risk", align: "center" },
-  { key: "fu", label: "Follow-up RNS", align: "right", noSort: true },
-  { key: "signals", label: "News", align: "left", noSort: true },
+  { key: "fu", label: "Follow-up RNS", align: "right" },
+  { key: "signals", label: "News", align: "left" },
 ];
 
 // ── main component ────────────────────────────────────────────────────────────
@@ -418,8 +418,6 @@ export default function HighImpactRnsTab({ onSelect }) {
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
   const [liveQuotes, setLiveQuotes] = useState({});
-  const [sortCol, setSortCol] = useState("pct_news");
-  const [sortDir, setSortDir] = useState("desc");
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
   const [openStory, setOpenStory] = useState(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
@@ -501,44 +499,19 @@ export default function HighImpactRnsTab({ onSelect }) {
     return ((p - r.low_52w) / span) * 100;
   };
 
-  const sortVal = (r) => {
-    switch (sortCol) {
-      case "name": return r.name || r.symbol;
-      case "price": return priceOf(r);
-      case "range": return rangePos(r);
-      case "date": return r.story?.published_at ? new Date(r.story.published_at).getTime() : null;
-      case "m": return r.momentum_score;
-      case "q": return r.quality_score;
-      case "v": return r.value_score;
-      case "r": return r.risk_score;
-      case "pct_news": return pctSinceNews(r);
-      default: return null;
-    }
-  };
-
   const sorted = useMemo(() => {
+    const dateVal = (r) => (r.story?.published_at ? new Date(r.story.published_at).getTime() : null);
     const arr = [...rows];
     arr.sort((a, b) => {
-      const va = sortVal(a);
-      const vb = sortVal(b);
+      const va = dateVal(a);
+      const vb = dateVal(b);
       if (va == null && vb == null) return 0;
       if (va == null) return 1;
       if (vb == null) return -1;
-      if (typeof va === "string")
-        return sortDir === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
-      return sortDir === "asc" ? va - vb : vb - va;
+      return vb - va;
     });
     return arr;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, sortCol, sortDir, liveQuotes]);
-
-  const toggleSort = (key) => {
-    if (key === sortCol) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortCol(key);
-      setSortDir(key === "name" ? "asc" : "desc");
-    }
-  };
+  }, [rows]);
 
   const refetch = useCallback(() => setRefreshKey((n) => n + 1), []);
 
@@ -634,19 +607,11 @@ export default function HighImpactRnsTab({ onSelect }) {
               <table style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: 12, fontFamily: "monospace", tableLayout: "auto" }}>
                 <thead>
                   <tr>
-                    {COLS.map((c) => {
-                      const active = c.key === sortCol;
-                      return (
-                        <th
-                          key={c.key}
-                          onClick={c.noSort ? undefined : () => toggleSort(c.key)}
-                          style={{ ...S.th, textAlign: "center", cursor: c.noSort ? "default" : "pointer", color: active ? "#fbbf24" : "#f97316" }}
-                        >
-                          {c.label}
-                          {active ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
-                        </th>
-                      );
-                    })}
+                    {COLS.map((c) => (
+                      <th key={c.key} style={{ ...S.th, textAlign: "center", cursor: "default", color: "#f97316" }}>
+                        {c.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
