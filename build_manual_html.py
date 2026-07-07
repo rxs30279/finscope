@@ -551,7 +551,18 @@ const { chromium } = require('playwright');
   const url = 'file:///' + htmlPath.replace(/\\/g, '/');
   const browser = await chromium.launch({ channel: 'msedge' });
   const page = await browser.newPage();
-  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.goto(url, { waitUntil: 'load' });
+  // networkidle fires almost immediately for a file:// page — wait until the
+  // webfonts are loaded and every embedded base64 image has actually decoded,
+  // otherwise page.pdf() races layout and emits a silently truncated document
+  // (observed: 37 of 69 pages, cut mid-manual).
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await Promise.all(
+      Array.from(document.images).map((img) => img.decode().catch(() => {}))
+    );
+  });
+  await page.waitForTimeout(500);
   const footer = `<div style="width:100%; font-family:'Segoe UI',Arial,sans-serif;
       font-size:8px; color:#8a93a1; padding:0 15mm; display:flex;
       justify-content:space-between;">
@@ -572,14 +583,43 @@ const { chromium } = require('playwright');
 """
 
 
+# A silently truncated render (see the decode-wait comment in the Playwright
+# script) once cut the manual from 69 pages to 37 with exit code 0. Any output
+# below this floor is treated as a failed render, never returned as success.
+_MIN_PAGES = 50
+
+
+def _pdf_page_count(path):
+    """Page count via pypdfium2, or None if it isn't importable."""
+    try:
+        import pypdfium2 as pdfium
+        return len(pdfium.PdfDocument(path))
+    except Exception:
+        return None
+
+
+def _looks_complete(pdf_path):
+    n = _pdf_page_count(pdf_path)
+    if n is None:
+        print("  (pypdfium2 not available — skipping page-count sanity check)")
+        return True
+    if n < _MIN_PAGES:
+        print(f"  Render sanity check FAILED: {n} pages < floor of {_MIN_PAGES}.")
+        return False
+    print(f"  Render sanity check passed: {n} pages.")
+    return True
+
+
 def export_pdf(html_path, pdf_path):
-    if _export_pdf_playwright(html_path, pdf_path):
-        return "Playwright + Microsoft Edge (with page numbers)"
-    if _export_pdf_edge(html_path, pdf_path):
+    for attempt in (1, 2):
+        if _export_pdf_playwright(html_path, pdf_path) and _looks_complete(pdf_path):
+            return "Playwright + Microsoft Edge (with page numbers)"
+        print(f"  Playwright attempt {attempt} did not produce a complete PDF.")
+    if _export_pdf_edge(html_path, pdf_path) and _looks_complete(pdf_path):
         return "Microsoft Edge --print-to-pdf (WARNING: no footer page numbers)"
     raise RuntimeError(
-        "Could not render the PDF. Install Playwright (`npm i playwright`) so the "
-        "page-numbered footer works, or ensure Microsoft Edge is installed."
+        "Could not render a complete PDF. Install Playwright (`npm i playwright`) "
+        "so the page-numbered footer works, or ensure Microsoft Edge is installed."
     )
 
 
