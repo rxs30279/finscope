@@ -394,11 +394,15 @@ pre code{background:none; color:#243; padding:0; font-size:.86em; line-height:1.
 
 hr.rule{border:0; border-top:1px solid var(--line); margin:1.4em 0;}
 
-/* Tables */
+/* Tables — horizontal rules only, for a cleaner, more modern read */
 .table-wrap{break-inside:auto;}
 table{width:100%; border-collapse:collapse; margin:.7em 0 1em; font-size:9.6pt;}
-th,td{border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top;}
-thead th{background:var(--navy); color:#fff; font-weight:600; border-color:var(--navy);}
+th,td{border:0; border-bottom:1px solid var(--line); padding:6px 10px;
+  text-align:left; vertical-align:top;}
+thead th{background:var(--navy); color:#fff; font-weight:600;
+  border-bottom:2px solid var(--accent);}
+thead th:first-child{border-radius:4px 0 0 0;}
+thead th:last-child{border-radius:0 4px 0 0;}
 tbody tr:nth-child(even){background:var(--soft);}
 td code,th code{font-size:.86em;}
 
@@ -415,6 +419,13 @@ li>ul,li>ol{margin:.2em 0;}
 .callout.note{background:#eef4ff; border:1px solid #d3e1fb; border-left:4px solid #3b82f6;}
 .callout.warn{background:#fff5ec; border:1px solid #ffd9b8; border-left:4px solid var(--accent);}
 .callout.uth{background:#f3f4f8; border:1px solid #dfe2ec; border-left:4px solid var(--accent2);}
+/* The bold lead-in ("Under the hood — …", "Tip:", "Important…") becomes a
+   coloured heading line, so each box reads like a titled panel. */
+.callout>p:first-child>strong:first-child{display:block; font-size:10.2pt;
+  margin-bottom:.3em; letter-spacing:.2px;}
+.callout.note>p:first-child>strong:first-child{color:#1d4ed8;}
+.callout.warn>p:first-child>strong:first-child{color:#c2540a;}
+.callout.uth>p:first-child>strong:first-child{color:var(--accent2);}
 .callout table{margin:.5em 0;}
 
 /* Figures */
@@ -441,13 +452,14 @@ figcaption{color:var(--muted); font-style:italic; font-size:8.8pt; margin-top:.5
 .about{background:#f3f4f8; border:1px solid #dfe2ec; border-left:4px solid var(--accent2);
   border-radius:6px; padding:13px 16px; margin:0 0 1.2em; font-size:9.9pt;}
 
-/* Table of contents */
+/* Table of contents — two columns so it fits one page and scans faster */
 section.toc{break-after:page; page-break-after:always;}
 section.toc h2{border-bottom:2px solid var(--accent);}
-section.toc ol{list-style:decimal; padding-left:1.7em; font-size:10.4pt;}
+section.toc>ol{column-count:2; column-gap:32px;}
+section.toc ol{list-style:decimal; padding-left:1.7em; font-size:10pt;}
 section.toc ol li::marker{color:var(--accent); font-weight:700;}
-section.toc ul{list-style:none; padding-left:1.4em; font-size:9.8pt; color:var(--muted);}
-section.toc li{margin:.32em 0;}
+section.toc ul{list-style:none; padding-left:1.4em; font-size:9.4pt; color:var(--muted);}
+section.toc li{margin:.3em 0;}
 section.toc a{color:var(--ink);}
 section.toc a:hover{color:var(--accent);}
 

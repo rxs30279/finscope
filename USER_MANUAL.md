@@ -1,6 +1,6 @@
 # Alpha Move AI — UK Stock Screener — User Manual
 
-**Edition:** June 2026 (revised 20 June 2026)  
+**Edition:** July 2026 (revised 7 July 2026)  
 **Audience:** Investors new to financial analysis  
 **Purpose:** A plain-English guide to understanding what you are seeing and how to use these tools to find UK companies with the **greatest chance of upside** and the **smallest downside risk**.
 
@@ -11,6 +11,7 @@
 ## Table of Contents
 
 1. [Introduction — What Is a Stock Screener?](#1-introduction)
+   - 1.1 [Quick Start — Your First 15 Minutes](#11-quick-start)
 2. [The Dashboard Layout](#2-dashboard-layout)
 3. [The Screener — Finding Stocks](#3-the-screener)
    - 3.1 [Understanding the Columns](#31-understanding-the-columns)
@@ -43,6 +44,7 @@
    - 8.2 [The Two-Layer AI Pipeline](#82-the-two-layer-pipeline)
    - 8.3 [Reading the Feed](#83-reading-the-feed)
    - 8.4 [Action Pills — BUY / WATCH / AVOID](#84-action-pills)
+   - 8.5 [The RNS Email Briefing — the Feed in Your Inbox](#85-the-rns-email-briefing)
 9. [Trending — Risers and Fallers](#9-trending)
 10. [The Sidebar — Your Instant Dashboard](#10-the-sidebar)
 11. [How To Find Investment Leads — Step-by-Step Workflows](#11-how-to-find-investment-leads)
@@ -54,6 +56,8 @@
     - 11.6 [The Catalyst Hunt — RNS-Driven Upside](#116-the-catalyst-hunt)
     - 11.7 [The Cheap-Quality Hunt](#117-the-cheap-quality-hunt)
     - 11.8 [The Combined "Maximum Upside / Minimum Downside" Workflow](#118-the-combined-workflow)
+    - 11.9 [Managing Risk — Position Sizing, Diversification, and Knowing When to Sell](#119-managing-risk)
+    - 11.10 [Seven Common Investing Mistakes — and the Tool That Catches Each One](#1110-seven-common-investing-mistakes)
 12. [Glossary of Financial Terms](#12-glossary-of-financial-terms)
 13. [Appendix A — Methodology References](#appendix-a--methodology-references)
 14. [Appendix B — ICB Sector Company List](#appendix-b--icb-sector-company-list)
@@ -100,6 +104,19 @@ The tool focuses on **UK-listed equities** — companies whose shares trade on t
 | **FTSE All-Share** | The combined FTSE 100 + 250 + SmallCap. |
 | **AIM** | The Alternative Investment Market. Smaller, often younger businesses. Higher risk, higher potential reward. |
 
+### 1.1 Quick Start — Your First 15 Minutes
+
+If you want to get a feel for the app before reading the rest of this manual, this one loop touches every major tool and produces a real shortlist:
+
+1. **Check the mood (1 minute).** Glance at the left sidebar: is the LSE open, and is the **UK Fear & Greed** gauge showing fear or greed? Fear/Neutral readings are generally *better* hunting conditions — quality goes on sale when others are nervous ([§6.1](#61-fear--greed-index)).
+2. **Run your first screen (3 minutes).** On the **Screener**, open **Advanced ▼** and set: Min Quality **6**, Min Value **5**, Max Risk **5**. Sort by **Momentum** descending. You now have a list of decent businesses, in decent financial health, without obvious distress, that the market is currently rewarding ([§3.2](#32-the-four-scores-explained) explains each score).
+3. **Drill into the top name (5 minutes).** Click it. Spend one minute per tab: **Chart** (is price above the MA50?), **Health** (is net debt sensible?), **Growth** (are revenue and profits actually rising?), **Analysts** (do professionals agree?), **News** (any recent Tier A announcement that explains the move?).
+4. **Star what interests you (1 minute).** Click the **★** on 3–5 rows — they go to your **Watchlist** ([§3.6](#36-the-watchlist)), the page to glance at each morning from now on.
+5. **Scan today's catalysts (3 minutes).** Open **RNS News** and read the top AI-ranked items ([Section 8](#8-rns-news-screener)). This is where the biggest single-day movers announce themselves.
+6. **Let the app come to you (1 minute).** Sign up on the **RNS Email** page and a 07:30 weekday briefing of notable movers and high-impact RNS lands in your inbox ([§8.5](#85-the-rns-email-briefing)).
+
+When you're ready to be systematic about it, [Section 11](#11-how-to-find-investment-leads) turns this loop into eight repeatable workflows — and [§11.9](#119-managing-risk) covers the part most tools ignore: position sizing and knowing when to sell.
+
 ---
 
 ## 2. Dashboard Layout
@@ -108,13 +125,14 @@ When you open Alpha Move AI you see:
 
 ![The home page — the Screener table with its filter bar across the top and the live market sidebar down the left.](manual_assets/shots/Home%20Page.png)
 
-- **Top navigation bar** — **Screener**, **Trending**, **Watchlist**, **Analysts**, **RNS News**, **RNS Email**, and **Markets**. On narrow screens (tablets and phones) the links collapse into a **☰ hamburger** menu. The **Markets** link opens a single combined page that stacks the Cross-Asset Monitor, Fear & Greed Index, Market Breadth, and Sector Rotation panels (see [Sections 5–6](#5-sector-analysis)).
+- **Top navigation bar** — **Screener**, **Trending**, **Watchlist**, **Analysts**, **RNS News**, **RNS Email**, **Markets**, and **Research**. On narrow screens (tablets and phones) the links collapse into a **☰ hamburger** menu. The **Markets** link opens a single combined page that stacks the Cross-Asset Monitor, Fear & Greed Index, Market Breadth, and Sector Rotation panels (see [Sections 5–6](#5-sector-analysis)). **RNS Email** is where you sign up for the free daily briefing ([§8.5](#85-the-rns-email-briefing)); **Research** is the analysis blog — occasional data-driven articles and market notes written using the tools in this app, with a comment section under each post.
 - **⚙ Settings menu** — a gear dropdown at the far right of the navigation bar (in the hamburger menu on mobile). It holds **Screener Settings** — where you choose which fundamental columns appear in the Screener table (see [§3.1](#31-understanding-the-columns)) — and a link to download this manual.
 - **Left sidebar** — a live pulse of the market: a London Stock Exchange open/closed clock, benchmark returns, ICB sector strength, the UK and US fear gauges, and a **▦ Heatmap** link to the Sector Heatmap. See [Section 10](#10-the-sidebar). Toggle the sidebar on or off using the icon at the top-left of the navigation bar.
 - **Main content area** — changes depending on which page you are on.
 - **Search bar** — type a company name or ticker symbol to jump straight to its detail page.
+- **Benchmarks page** — a dedicated page (linked from the menu) charting performance across the FTSE 100, FTSE 250, SmallCap and AIM side by side, so you can see which part of the market is leading. The sidebar shows the same headline benchmark returns at a glance.
 
-> **Direct links to companies:** When you open a company page, the URL updates to include the ticker (e.g. `…/company?symbol=AZN.L`). You can bookmark or share that link to land directly on that company. The browser **Back** button takes you back to wherever you came from (screener, watchlist, RNS feed, etc.) — and the Screener remembers the filters, sort and view you had set, so you return to exactly the shortlist you left.
+> **Direct links to companies:** Every company page has a clean, shareable URL containing its ticker (e.g. `…/company/AZN.L`). You can bookmark or share that link to land directly on that company (older `…/company?symbol=` links still work — they redirect automatically). The browser **Back** button takes you back to wherever you came from (screener, watchlist, RNS feed, etc.) — and the Screener remembers the filters, sort and view you had set, so you return to exactly the shortlist you left.
 
 ---
 
@@ -981,6 +999,16 @@ The clearest opportunities tend to come from:
 - **Going concern statements**, **suspensions**, and **delistings** are tagged in the Category column — these are some of the worst things that can happen to a stock you own.
 - **Strategic Reviews** can go either way — sometimes leading to break-up value (upside), sometimes to forced asset sales (downside). Read the AI thesis carefully.
 
+### 8.5 The RNS Email Briefing — the Feed in Your Inbox
+
+If you don't want to open the RNS News page every morning, the app can bring the highlights to you. The **RNS Email** page (top nav → "RNS Email") signs you up for a short daily briefing:
+
+- **When:** every weekday at **07:30 UK time** — just after the busiest RNS release window opens, so you read it with your morning coffee rather than at lunch.
+- **What's in it:** the last 24 hours of **notable movers** and the **high-impact RNS announcements** the AI pipeline ranked most significant — the same tiering and scoring described in [§8.2](#82-the-two-layer-pipeline), condensed to the items that actually matter.
+- **Cost & commitment:** free, with a capped number of subscriber spots (the page shows how many remain). Every email has a **one-click unsubscribe** link in the footer, and the sign-up page shows a sample briefing so you can see the format before subscribing.
+
+**How it fits the workflows:** the email is a *prompt*, not a substitute for research. When an item catches your eye, click through to the RNS News page or the company's News tab and run the same checks as the Catalyst Hunt ([§11.6](#116-the-catalyst-hunt)) — quality, risk, and whether analysts have already priced the news in.
+
 ---
 
 ## 9. Trending — Risers and Fallers
@@ -1092,7 +1120,7 @@ The first five (11.1–11.5) are classic single-angle workflows. The last three 
 4. Cross-reference these names in the main Screener (Fundamentals view) to confirm they also score well on Quality and have a Risk Score ≤ 6
 5. Check the **Analysts tab** in Company Detail for the individual breakdown of estimate changes
 
-**What you are looking for:** Stocks where analysts are becoming increasingly positive AND the fundamentals support the bullish case. The "Changes" section on the Monitor page highlights stocks where consensus has recently shifted — these are the freshest signals.
+**What you are looking for:** Stocks where analysts are becoming increasingly positive AND the fundamentals support the bullish case. The **Biggest Movers** board on the Monitor page ranks the stocks whose analyst view has shifted most in the past 30 days — these are the freshest signals.
 
 ---
 
@@ -1248,11 +1276,64 @@ When eight or nine of these are green for a single name, you have a high-convict
 
 ---
 
+### 11.9 Managing Risk — Position Sizing, Diversification, and Knowing When to Sell
+
+Finding good companies is only half of investing. The other half — the half that actually determines whether you keep your gains — is how much you buy, how spread out you are, and when you get out. None of the workflows above will save you if a single position is large enough to sink the portfolio.
+
+#### Position sizing — decide the maximum loss before you buy
+
+- **Cap any single position at 5–10% of your portfolio.** At 5%, even a total wipe-out (a fraud, a going-concern failure) costs you 5% — painful but recoverable. At 25%, one profit warning can undo a year of good decisions.
+- **Size by risk, not by conviction.** Feeling *very* sure is not a reason for a bigger position — the market does not pay you for confidence. If anything, size *down* as the Risk Score rises: a Risk 3 utility can justify a full-sized position; a Risk 7 AIM stock should be a half or quarter position, if held at all.
+- **Build in thirds.** Rather than buying a full position at once, buy a third, and add the rest only as the thesis is confirmed — a good results announcement, a positive Tier A/B RNS, analysts revising upward. This means your largest positions are, by construction, your *most proven* ones.
+
+#### Diversification — the only free lunch
+
+- **Hold 10–20 names across at least 5 sectors.** Below ~10 holdings, one bad outcome dominates; beyond ~25, you are running a slow index fund with extra effort. The Screener's **Sector** column makes it easy to audit yourself: if your watchlist is five housebuilders, you own one idea five times, not five ideas.
+- **Watch out for hidden correlation.** Housebuilders, brickmakers and mortgage banks are three sectors but one interest-rate bet. Miners and oil majors are one commodity-cycle bet. Use the **Cross-Asset Monitor** ([§6.2](#62-cross-asset-monitor)) to ask: *what single macro move would hurt most of my portfolio at once?* If there is a clear answer, diversify against it.
+- **Mix defensives with cyclicals.** A few Consumer Staples / Health Care / Utilities names ([§11.5](#115-the-defensive-screen)) act as ballast, letting you hold your cyclical winners through drawdowns instead of being forced to sell at the bottom.
+
+#### When to sell — write the rules before you need them
+
+Selling is harder than buying because by the time the question arises, you are emotionally invested. Decide your exits in advance:
+
+| Sell trigger | How the app surfaces it | What to do |
+|---|---|---|
+| **The thesis breaks** | A Tier A profit warning or going-concern flag (RNS feed, Watchlist news dot); Piotroski dropping toward 0–3; margins rolling over on the Growth tab | Sell. The reason you bought no longer exists. Do not wait to "get back to break-even" — the market does not know your entry price. |
+| **The signals degrade** | Your 11.8 checklist name goes from 8 green to 4: momentum fades below 5, Risk Score climbs, analysts start revising down (negative Rev Score) | Trim or exit. Deterioration across *independent* signals is rarely noise. |
+| **The valuation runs ahead** | PEGY climbs well above 2, price far above analyst targets (negative upside %), sector RS still strong but the stock is priced for perfection | Trim into strength. You don't have to sell everything — taking a position back to its original size locks in gains while keeping exposure. |
+| **A better opportunity appears** | Monthly re-run of the 11.8 screen produces a name that dominates a current holding on every signal | Switch — but honestly count dealing costs and taxes first. |
+| **The position got too big** | One winner has grown to 20%+ of the portfolio | Rebalance back toward your cap. This is a success problem, but it is still a problem. |
+
+**What is *not* on this list:** "the price fell". A falling price with an *intact* thesis (no bad news, scores holding, analysts steady) is more often a buying opportunity than a sell signal — that is precisely what the Fear & Greed contrarian logic in [§6.1](#61-fear--greed-index) is telling you. The distinction to make every time is: **has the story changed, or only the price?** The News tab and the four scores exist to answer exactly that question.
+
+> **The "average down" trap:** adding to a loser is only rational when the thesis is intact and you would happily buy the stock today as a *new* idea at this price. Adding purely because your entry price was higher — to "fix" the average — is how small losses become large ones. Check the News tab first: if the fall was caused by a Tier A warning, the thesis is broken, and averaging down is throwing good money after bad.
+
+---
+
+### 11.10 Seven Common Investing Mistakes — and the Tool That Catches Each One
+
+Every feature in this app maps to a classic, repeatable retail-investor mistake. Use this table as a pre-purchase checklist — before any buy, confirm you are not committing one of the seven:
+
+| # | The mistake | Why it costs money | The check in this app |
+|---|---|---|---|
+| 1 | **Chasing a chart** — buying only because the price has gone up | Momentum without quality is how you buy the top of a bubble | Require Quality ≥ 6 alongside any high Momentum score ([§11.2](#112-the-momentum-trend-following-approach)) |
+| 2 | **The yield trap** — buying the highest dividend yield on the list | An unusually fat yield is usually the market pricing in a dividend cut | A blank PEGY (earnings flat/shrinking) next to a high yield is the warning sign ([§3.5](#35-the-pegy-column)); check FCF covers the dividend on the Financials tab |
+| 3 | **The value trap** — buying "cheap" without asking why | A low P/E on collapsing earnings is not cheap, it's a melting ice cube | Piotroski ≤ 3 plus falling revenue on the Growth tab = cheap for a reason ([§3.2](#32-the-four-scores-explained)) |
+| 4 | **Ignoring the balance sheet** — a great story with crushing debt | Leverage turns a bad year into a rescue rights issue or worse | Risk Score ≤ 5, then the Health tab: interest coverage, net debt vs EBITDA, Z-score gauge ([§4.5](#45-health-tab)) |
+| 5 | **Buying deaf** — not knowing what the company just announced | The market has already reacted to news you haven't read | Company News tab + AI summary before every purchase ([§4.8](#48-company-news-tab)) |
+| 6 | **Fighting the tape** — a lone bet against sector and market direction | Even good stocks struggle in an abandoned sector | Sector RS on the Rotation page ([§5.1](#51-sector-rotation)); Fear & Greed for the market backdrop ([§6.1](#61-fear--greed-index)) |
+| 7 | **Overtrading** — reacting to every wiggle and headline | Dealing costs, spreads and taxes compound *against* you | Work from the Watchlist on a daily glance + monthly re-screen cadence ([§11.8](#118-the-combined-workflow)), not from minute-by-minute prices |
+
+> **A note on expectations:** even a disciplined process gets individual stocks wrong regularly — good investing is a base-rates game, not a certainty game. The aim of stacking signals ([§11.8](#118-the-combined-workflow)) and sizing positions sensibly ([§11.9](#119-managing-risk)) is that your winners are allowed to matter and your inevitable losers are not. Keeping a short written note of *why* you bought each position (which signals were green, what would make you sell) turns every outcome — win or lose — into feedback that improves the next decision.
+
+---
+
 ## 12. Glossary of Financial Terms
 
 | Term | Definition |
 |---|---|
 | **Annual Report** | A yearly document published by a listed company reporting its financial results and strategy |
+| **Averaging Down** | Buying more of a stock after its price falls to lower your average entry price. Only rational when the investment thesis is intact (see §11.9) |
 | **Bear Market** | A sustained market decline of 20% or more from recent highs |
 | **Bull Market** | A sustained market rise of 20% or more from recent lows |
 | **CAGR** | Compound Annual Growth Rate — the smoothed annual rate of growth over a period |
@@ -1260,6 +1341,7 @@ When eight or nine of these are green for a single name, you have a high-convict
 | **Current Ratio** | Current assets ÷ current liabilities. A ratio above 1.0 means short-term bills can be met |
 | **Dividend** | A cash payment made by a company to its shareholders, usually quarterly or annually |
 | **Dividend Yield** | Annual dividend per share ÷ share price. Expressed as a percentage |
+| **Drawdown** | The fall from a portfolio's (or share's) peak value to its subsequent low, usually in percent. A measure of how painful the journey is, not just the destination |
 | **EPS** | Earnings Per Share — company net profit divided by shares outstanding |
 | **Enterprise Value (EV)** | Market cap + net debt. The theoretical takeover cost of a business |
 | **Equity** | Shareholders' ownership stake in a company. Assets minus liabilities. |
@@ -1277,6 +1359,7 @@ When eight or nine of these are green for a single name, you have a high-convict
 | **P/E Ratio** | Price to Earnings — share price divided by earnings per share |
 | **MACD** | Moving Average Convergence Divergence — a momentum indicator built from the difference between a 12-day and 26-day exponential moving average, with a 9-day signal line. A chart overlay (see §4.1) |
 | **PEGY** | (Forward) Price/Earnings divided by (Growth + Yield). A value-for-money check that combines the P/E with both growth and dividend yield in one figure. In this app the P/E is forward-looking and growth is a capped blend of analyst and historical EPS growth (see §3.5) |
+| **Position Sizing** | Deciding how much of your portfolio to commit to a single stock. The primary tool for limiting how much any one mistake can cost (see §11.9) |
 | **P/S Ratio** | Price to Sales — market cap divided by annual revenue |
 | **Relative Strength** | A stock's or sector's performance relative to a benchmark |
 | **RNS** | Regulatory News Service — the official Stock Exchange channel that all UK listed companies must use to release price-sensitive information |
@@ -1289,8 +1372,10 @@ When eight or nine of these are green for a single name, you have a high-convict
 | **Shrinkage (coverage)** | A statistical adjustment that pulls a thinly-covered stock's Buy% toward a neutral 50% baseline (prior weight k=5 analysts), so a "100% bullish" rating from a single analyst is not treated as strong as the same rating from twenty (see §7) |
 | **Ticker** | A short code identifying a listed stock (e.g. `AZN.L` for AstraZeneca London) |
 | **Treemap** | A chart that fills space with nested rectangles; here, one tile per company sized by market cap and coloured by daily move (the Sector Heatmap, see §5.3) |
+| **Value Trap** | A stock that looks cheap on ratios (low P/E, low P/B) but is cheap because the business is deteriorating — the "value" never materialises. A low Piotroski score with falling revenue is the classic signature |
 | **Volatility** | The degree of price fluctuation. Higher volatility = higher uncertainty = higher risk |
 | **Yield Curve** | A graph of government bond yields across different maturities. Its shape signals economic expectations |
+| **Yield Trap** | A dividend yield that looks attractively high because the share price has collapsed in anticipation of the dividend being cut. Check free cash flow covers the payout before buying for income |
 | **Z-Score (Altman)** | A statistical measure predicting probability of corporate bankruptcy |
 | **Z-Score (statistical)** | How many standard deviations a value is from its historical average |
 
@@ -1581,5 +1666,5 @@ Real Estate Investment Trusts (REITs) and property companies.
 
 ---
 
-*Alpha Move AI — UK Stock Screener — User Manual — June 2026*  
+*Alpha Move AI — UK Stock Screener — User Manual — July 2026*  
 *For support or feedback, refer to the project repository.*
