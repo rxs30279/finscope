@@ -127,7 +127,7 @@ function ScoreCell({ value }) {
         fontWeight: 700,
       }}
     >
-      <span style={{ color: "#fff" }}>AI</span> <span style={{ color: colour }}>{value}</span>
+      <span style={{ color: "#fff" }}>AI Score</span> <span style={{ color: colour }}>{value}</span>
     </span>
   );
 }
@@ -654,11 +654,16 @@ export default function HighImpactRnsTab({ onSelect }) {
                                   e.stopPropagation();
                                   toggleStory(r.showcase_id);
                                 }}
-                                title={isStoryOpen ? "Hide story & analysis" : "Show story & analysis"}
+                                title={
+                                  isAdmin && dl != null && dl <= 5
+                                    ? `Tracking ${dl <= 0 ? "expired" : `ends in ${dl}d`} — open to Extend`
+                                    : isStoryOpen ? "Hide story & analysis" : "Show story & analysis"
+                                }
                                 style={{
                                   background: "transparent",
                                   border: "none",
-                                  color: isStoryOpen ? "#f97316" : "#60a5fa",
+                                  // Red caret = admin heads-up that tracking ends within 5 days.
+                                  color: isStoryOpen ? "#f97316" : isAdmin && dl != null && dl <= 5 ? "#ef4444" : "#60a5fa",
                                   cursor: "pointer",
                                   fontSize: 14,
                                   padding: 0,
@@ -751,11 +756,6 @@ export default function HighImpactRnsTab({ onSelect }) {
                               {/* Headline row */}
                               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                                 <ScoreCell value={st.llm_score} />
-                                {st.tier && (
-                                  <span style={{ color: TIER_COLOR[st.tier] || TIER_COLOR.C, fontSize: 10, fontWeight: 700 }}>
-                                    {st.tier}
-                                  </span>
-                                )}
                                 <a
                                   href={st.url}
                                   target="_blank"
