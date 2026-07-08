@@ -52,7 +52,7 @@ body {
 
 .chevron-wobble {
   display: inline-block;
-  animation: chevron-wobble 30s ease-in-out infinite;
+  animation: chevron-wobble 10s ease-in-out infinite;
 }
 
 /* Scrollbar styling — hidden on sidebar, thin elsewhere */

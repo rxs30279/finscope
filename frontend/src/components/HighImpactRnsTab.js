@@ -97,7 +97,7 @@ const S = {
 };
 
 // ── small pieces ──────────────────────────────────────────────────────────────
-function IndexBadge({ index }) {
+function IndexBadge({ index, full = false }) {
   if (!index) return null;
   return (
     <span
@@ -114,14 +114,14 @@ function IndexBadge({ index }) {
         whiteSpace: "nowrap",
       }}
     >
-      {index.replace("FTSE ", "")}
+      {full ? index : index.replace("FTSE ", "")}
     </span>
   );
 }
 
 // AI (LLM) score, coloured on the RNS page's bands. `bare` drops the "AI Score"
 // label — used in the table column, which already has a header naming it.
-function ScoreCell({ value, bare = false }) {
+function ScoreCell({ value, bare = false, size = 12 }) {
   if (value == null) return <span style={{ color: "#333" }}>—</span>;
   const colour =
     value >= 75 ? "#f97316" : value >= 50 ? "#60a5fa" : value >= 25 ? "#94a3b8" : "#555";
@@ -130,7 +130,7 @@ function ScoreCell({ value, bare = false }) {
       title="AI significance score (0–100)"
       style={{
         fontFamily: "monospace",
-        fontSize: 12,
+        fontSize: size,
         fontWeight: 700,
       }}
     >
@@ -417,39 +417,62 @@ function MobileCard({
   r, isOpen, onToggle, onSelect, isAdmin, live, price, changePct, rangePosValue,
   isNewsSelected, onNewsSelect, dl, vet, st, extendTracking, setStatus,
 }) {
-  const caretColor = isOpen ? "#f97316" : isAdmin && dl != null && dl <= 5 ? "#ef4444" : "#60a5fa";
+  const [showMqvrInfo, setShowMqvrInfo] = useState(false);
+  const caretDanger = isAdmin && dl != null && dl <= 5;
+  const caretColor = isOpen ? "#f97316" : caretDanger ? "#ef4444" : "#93c5fd";
   return (
     <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 6, overflow: "hidden" }}>
       <div onClick={onSelect} style={{ padding: "12px 14px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8 }}>
           <button
             onClick={(e) => { e.stopPropagation(); onToggle(); }}
-            title={isOpen ? "Hide story & analysis" : "Show story & analysis"}
+            title={
+              caretDanger
+                ? `Tracking ${dl <= 0 ? "expired" : `ends in ${dl}d`} — open to Extend`
+                : isOpen ? "Hide story & analysis" : "Show story & analysis"
+            }
             style={{
-              background: "transparent",
-              border: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 28,
+              height: 28,
+              background: isOpen ? "rgba(249,115,22,0.18)" : "#1c2740",
+              border: `1px solid ${isOpen ? "#f97316" : caretDanger ? "#ef4444" : "#3d5273"}`,
+              borderRadius: 5,
               color: caretColor,
               cursor: "pointer",
-              fontSize: 22,
+              fontSize: 14,
+              padding: 0,
               lineHeight: 1,
-              padding: "4px 6px",
               flexShrink: 0,
-              transform: isOpen ? "rotate(90deg)" : "none",
-              transition: "transform 0.12s ease",
             }}
           >
-            <span className={!isOpen ? "chevron-wobble" : undefined}>▶</span>
+            <span
+              className={!isOpen ? "chevron-wobble" : undefined}
+              style={{
+                display: "inline-block",
+                transform: isOpen ? "rotate(90deg)" : "none",
+                transition: "transform 0.12s ease",
+              }}
+            >
+              ▶
+            </span>
           </button>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
-              <IndexBadge index={r.ftse_index} />
-            </div>
-            <div style={{ color: "#64748b", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {r.name}
+          <div style={{ width: 88, flexShrink: 0, marginLeft: 8 }}>
+            <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
+            <div style={{ marginTop: 3 }}>
+              <IndexBadge index={r.ftse_index} full />
             </div>
           </div>
-          <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, marginLeft: 2, flexShrink: 0 }}>
+            <span style={{ color: "#64748b", fontSize: 10, fontWeight: 700, letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "uppercase" }}>AI Score</span>
+            <ScoreCell value={st.llm_score} bare size={20} />
+          </div>
+          <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(calc(-50% + 66px), -50%)", pointerEvents: "none" }}>
+            <Sparkline points={r.spark} sinceCount={r.spark_since} sinceUp={changePct == null ? null : changePct >= 0} width={64} height={22} />
+          </div>
+          <div style={{ textAlign: "right", flexShrink: 0, marginLeft: "auto" }}>
             <div style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 13 }}>
               {live && <span title="Live" style={{ marginRight: 4, fontSize: 9, color: "#10b981" }}>●</span>}
               {fmtPounds(price)}
@@ -460,49 +483,99 @@ function MobileCard({
           </div>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Sparkline points={r.spark} sinceCount={r.spark_since} sinceUp={changePct == null ? null : changePct >= 0} width={64} height={22} />
-            <RangeBar pos={rangePosValue} />
-          </div>
-          <span style={{ color: "#64748b", fontSize: 10 }} title="Date the pick was added">{fmtDate(st.published_at)}</span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ display: "flex", gap: 8 }}>
-            <LabelledPill label="M" value={r.momentum_score} />
-            <LabelledPill label="Q" value={r.quality_score} />
-            <LabelledPill label="V" value={r.value_score} />
-            <LabelledPill label="R" value={r.risk_score} invert />
-          </div>
-          <FollowupTally pos={r.followup_pos} neg={r.followup_neg} expanded={isOpen} onToggle={onToggle} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
           <span
             onClick={(e) => { e.stopPropagation(); onNewsSelect(); }}
-            style={{ color: isNewsSelected ? "#f97316" : "#64748b", fontSize: 11, flexShrink: 0 }}
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              cursor: "pointer",
+              flexShrink: 0,
+              padding: "3px 10px",
+              borderRadius: 4,
+              color: isNewsSelected ? "#f97316" : "#94a3b8",
+              background: isNewsSelected ? "rgba(249,115,22,0.18)" : "transparent",
+              border: `1px solid ${isNewsSelected ? "#f97316" : "#2a3444"}`,
+              transition: "background 0.12s ease, color 0.12s ease, border-color 0.12s ease",
+            }}
           >
-            news ›
+            News
           </span>
         </div>
       </div>
 
       {isOpen && (
         <div style={{ padding: "0 14px 14px", borderTop: "1px solid #1a1a1a" }} onClick={(e) => e.stopPropagation()}>
-          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <ScoreCell value={st.llm_score} />
-            {st.vet_verdict && vet && (
-              <span
-                title={st.vet_rationale || ""}
-                style={{ color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 6px", fontSize: 9.5, fontWeight: 700, fontFamily: "monospace" }}
+          <div style={{ marginTop: 12, color: "#cbd5e1", fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {r.name}
+          </div>
+          {/* Factor scores + 52-week range — moved off the crowded card face */}
+          <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", gap: 10 }}>
+                <LabelledPill label="M" value={r.momentum_score} />
+                <LabelledPill label="Q" value={r.quality_score} />
+                <LabelledPill label="V" value={r.value_score} />
+                <LabelledPill label="R" value={r.risk_score} invert />
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowMqvrInfo((v) => !v); }}
+                title="What do M / Q / V / R mean?"
+                aria-label="Explain the factor scores"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 16,
+                  height: 16,
+                  borderRadius: "50%",
+                  border: `1px solid ${showMqvrInfo ? "#60a5fa" : "#3d5273"}`,
+                  background: "transparent",
+                  color: showMqvrInfo ? "#93c5fd" : "#64748b",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  fontStyle: "italic",
+                  fontFamily: "Georgia, serif",
+                  lineHeight: 1,
+                  cursor: "pointer",
+                  padding: 0,
+                  flexShrink: 0,
+                }}
               >
-                {vet.label}
+                i
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+              <span style={{ color: "#475569", fontSize: 8, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase" }}>
+                Price in 52-week range
               </span>
-            )}
+              <RangeBar pos={rangePosValue} />
+            </div>
+          </div>
+          {showMqvrInfo && (
+            <div style={{ marginTop: 8, padding: "8px 10px", background: "#0d1420", border: "1px solid #1e2a3d", borderRadius: 4, fontSize: 10.5, color: "#94a3b8", lineHeight: 1.6 }}>
+              Factor scores (0–100, higher is better):{" "}
+              <b style={{ color: "#cbd5e1" }}>M</b>omentum ·{" "}
+              <b style={{ color: "#cbd5e1" }}>Q</b>uality ·{" "}
+              <b style={{ color: "#cbd5e1" }}>V</b>alue ·{" "}
+              <b style={{ color: "#cbd5e1" }}>R</b>isk. Risk is inverted, so green means lower risk.
+            </div>
+          )}
+          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+              <span style={{ color: "#475569", fontSize: 8, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase" }}>
+                Publish date
+              </span>
+              <span style={{ color: "#64748b", fontSize: 10 }}>{fmtDate(st.published_at)}</span>
+            </div>
           </div>
           <a href={st.url} target="_blank" rel="noreferrer" style={{ display: "block", marginTop: 6, color: "#e2e8f0", fontSize: 13, fontWeight: 600, textDecoration: "none", lineHeight: 1.4 }}>
             {st.headline}
           </a>
 
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 14 }}>
             <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
             <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
             {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
@@ -959,23 +1032,6 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 >
                                   {st.headline}
                                 </a>
-                                {st.vet_verdict && VET_STYLE[st.vet_verdict] && (
-                                  <span
-                                    title={st.vet_rationale || ""}
-                                    style={{
-                                      color: VET_STYLE[st.vet_verdict].color,
-                                      background: VET_STYLE[st.vet_verdict].bg,
-                                      border: `1px solid ${VET_STYLE[st.vet_verdict].color}55`,
-                                      borderRadius: 2,
-                                      padding: "1px 6px",
-                                      fontSize: 9.5,
-                                      fontWeight: 700,
-                                      fontFamily: "monospace",
-                                    }}
-                                  >
-                                    {VET_STYLE[st.vet_verdict].label}
-                                  </span>
-                                )}
                                 {isAdmin && (
                                   <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
                                     {dl != null && dl <= 5 && (
@@ -990,7 +1046,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                               </div>
 
                               {/* Full AI analysis */}
-                              <div style={{ marginTop: 10, paddingLeft: 4, display: "flex", flexDirection: "column", gap: 6, whiteSpace: "normal", maxWidth: 760 }}>
+                              <div style={{ marginTop: 12, paddingLeft: 4, display: "flex", flexDirection: "column", gap: 14, whiteSpace: "normal", maxWidth: 760 }}>
                                 <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
                                 <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
                                 {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
