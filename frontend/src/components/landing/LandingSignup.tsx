@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { usePostHog } from "posthog-js/react";
 import { API } from "@/lib/api";
 import { DigestSampleModal } from "@/components/DigestSample";
 
@@ -23,6 +24,13 @@ export default function LandingSignup() {
   const [spots, setSpots] = useState<Spots | null>(null);
   const [showSample, setShowSample] = useState(false);
 
+  // Funnel instrumentation (no-op until NEXT_PUBLIC_POSTHOG_KEY is set). All
+  // signup events carry source:"landing" so the landing band and the dedicated
+  // /subscribe page share one funnel. focusedRef guards a single focus event
+  // per mount so re-focusing the input doesn't inflate the step.
+  const ph = usePostHog();
+  const focusedRef = useRef(false);
+
   // Live remaining-spots counter. Best-effort: if it fails, we just fall back
   // to the static trust line and the form stays open.
   useEffect(() => {
@@ -36,10 +44,17 @@ export default function LandingSignup() {
 
   const full = spots != null && spots.remaining <= 0;
 
+  function onFocus() {
+    if (focusedRef.current) return;
+    focusedRef.current = true;
+    ph?.capture("signup_form_focused", { source: "landing" });
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setMsg(null);
+    ph?.capture("signup_submitted", { source: "landing" });
     try {
       const res = await fetch(`${API}/subscribers/signup`, {
         method: "POST",
@@ -51,13 +66,16 @@ export default function LandingSignup() {
         const verb = data.status === "reactivated" ? "back" : "in";
         setMsg({ kind: "ok", text: `You're ${verb} — first briefing lands at 07:30 on the next market day.` });
         setEmail("");
+        ph?.capture("signup_completed", { source: "landing", status: verb });
         // Optimistically reflect the taken spot (endpoint is cached ~60s).
         setSpots((s) => (s ? { ...s, count: s.count + 1, remaining: Math.max(0, s.remaining - 1) } : s));
       } else {
         setMsg({ kind: "err", text: data.detail || `Something went wrong (${res.status}). Try again.` });
+        ph?.capture("signup_failed", { source: "landing", reason: `http_${res.status}` });
       }
     } catch {
       setMsg({ kind: "err", text: "Network error — please try again." });
+      ph?.capture("signup_failed", { source: "landing", reason: "network" });
     } finally {
       setBusy(false);
     }
@@ -101,6 +119,7 @@ export default function LandingSignup() {
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onFocus={onFocus}
             autoComplete="email"
             aria-label="Email address"
             disabled={busy || full}

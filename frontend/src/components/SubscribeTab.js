@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { usePostHog } from "posthog-js/react";
 import { API } from "@/lib/api";
 import PageHeader from "@/components/layout/PageHeader";
 import { DigestSample } from "@/components/DigestSample";
@@ -123,6 +124,17 @@ export default function SubscribeTab() {
   const [signupMsg, setSignupMsg]     = useState(null);
   const [spots, setSpots]             = useState(null);
 
+  // Funnel instrumentation (no-op until NEXT_PUBLIC_POSTHOG_KEY is set). Shares
+  // event names with LandingSignup, tagged source:"subscribe_page".
+  const ph = usePostHog();
+  const focusedRef = useRef(false);
+
+  function onSignupFocus() {
+    if (focusedRef.current) return;
+    focusedRef.current = true;
+    ph?.capture("signup_form_focused", { source: "subscribe_page" });
+  }
+
   const [unsubOpen, setUnsubOpen]     = useState(false);
   const [unsubEmail, setUnsubEmail]   = useState("");
   const [unsubBusy, setUnsubBusy]     = useState(false);
@@ -144,6 +156,7 @@ export default function SubscribeTab() {
   async function submitSignup(e) {
     e.preventDefault();
     setSignupBusy(true); setSignupMsg(null);
+    ph?.capture("signup_submitted", { source: "subscribe_page" });
     try {
       const res = await fetch(`${API}/subscribers/signup`, {
         method: "POST",
@@ -155,13 +168,16 @@ export default function SubscribeTab() {
         const verb = data.status === "reactivated" ? "back" : "in";
         setSignupMsg({ kind: "ok", text: `✓ You're ${verb} — your first briefing lands at 07:30 on the next market day.` });
         setSignupEmail("");
+        ph?.capture("signup_completed", { source: "subscribe_page", status: verb });
         // Optimistically reflect the taken spot (endpoint is cached ~60s).
         setSpots((s) => (s ? { ...s, count: s.count + 1, remaining: Math.max(0, s.remaining - 1) } : s));
       } else {
         setSignupMsg({ kind: "err", text: data.detail || `Error (${res.status})` });
+        ph?.capture("signup_failed", { source: "subscribe_page", reason: `http_${res.status}` });
       }
     } catch {
       setSignupMsg({ kind: "err", text: "Network error" });
+      ph?.capture("signup_failed", { source: "subscribe_page", reason: "network" });
     } finally {
       setSignupBusy(false);
     }
@@ -217,6 +233,7 @@ export default function SubscribeTab() {
             placeholder="you@example.com"
             value={signupEmail}
             onChange={(e) => setSignupEmail(e.target.value)}
+            onFocus={onSignupFocus}
             style={{ ...INPUT, minWidth: 220 }}
             autoComplete="email"
             disabled={signupBusy || full}
