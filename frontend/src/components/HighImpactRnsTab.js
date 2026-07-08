@@ -140,6 +140,34 @@ function ScoreCell({ value, bare = false, size = 12 }) {
   );
 }
 
+// Forward multiple computed from a figure the announcement itself stated
+// (FY guidance, a consensus footnote, or a fresh reported year) — extraction
+// is LLM, arithmetic is server-side Python. Null = nothing usable was stated,
+// so most rows legitimately show a dash. "<" marks an upper bound ("at least
+// £Xm" guidance / "ahead of consensus £Xm": the real multiple is lower).
+const FWD_LABEL = { ebitda: "EV/EBITDA", ebit: "EV/EBIT", pbt: "P/PBT" };
+const FWD_BASIS = { guidance: "guidance", consensus: "consensus", actual: "reported" };
+
+function FwdMultipleCell({ r, size = 12 }) {
+  if (r.fwd_multiple == null) return <span style={{ color: "#333" }}>—</span>;
+  const label = FWD_LABEL[r.fwd_metric] || "multiple";
+  const basis = FWD_BASIS[r.fwd_basis] || r.fwd_basis || "";
+  const title =
+    `${label} on the ${r.fwd_period || "full-year"} ${basis} figure stated in the announcement` +
+    (r.fwd_is_bound ? " (upper bound)" : "") +
+    (r.fwd_quote ? ` — “${r.fwd_quote}”` : "");
+  return (
+    <span title={title} style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+      <span style={{ color: "#a78bfa", fontWeight: 700, fontFamily: "monospace", fontSize: size }}>
+        {r.fwd_is_bound ? "<" : ""}{Number(r.fwd_multiple).toFixed(1)}×
+      </span>
+      <span style={{ color: "#64748b", fontSize: 8.5, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase", whiteSpace: "nowrap" }}>
+        {label} · {basis}
+      </span>
+    </span>
+  );
+}
+
 // Post-selection news tally: positives ▲ vs negatives ▼ since we started tracking.
 // A red ▼ count is the "watch out" signal (e.g. a CEO exit after the good story).
 function FollowupTally({ pos, neg, expanded, onToggle }) {
@@ -346,6 +374,7 @@ function PendingCard({ entry, onApprove, onReject }) {
         </span>
         <IndexBadge index={entry.ftse_index} />
         <ScoreCell value={st.llm_score} />
+        {entry.fwd_multiple != null && <FwdMultipleCell r={entry} />}
         {vet && (
           <span title={st.vet_rationale || ""} style={{ color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 6px", fontSize: 10, fontWeight: 700, fontFamily: "monospace" }}>
             {vet.label}
@@ -564,6 +593,14 @@ function MobileCard({
             </div>
           )}
           <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {r.fwd_multiple != null && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+                <span style={{ color: "#475569", fontSize: 8, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase" }}>
+                  Fwd multiple
+                </span>
+                <FwdMultipleCell r={r} />
+              </div>
+            )}
             <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
               <span style={{ color: "#475569", fontSize: 8, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase" }}>
                 Publish date
@@ -579,6 +616,20 @@ function MobileCard({
             <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
             <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
             {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+            {r.fwd_multiple != null && r.fwd_quote && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <AnalysisRow
+                  label={`${FWD_LABEL[r.fwd_metric] || "Multiple"} ${r.fwd_is_bound ? "<" : ""}${Number(r.fwd_multiple).toFixed(1)}× · source`}
+                  text={`“${r.fwd_quote}”`}
+                  color="#a78bfa"
+                />
+                {r.ttm_ev_ebitda != null && (
+                  <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.5 }}>
+                    For context: ~{Number(r.ttm_ev_ebitda).toFixed(1)}× EV/EBITDA on trailing twelve-month figures — before this announcement's new number.
+                  </div>
+                )}
+              </div>
+            )}
             <AnalysisRow label="AI summary" text={st.summary} />
             {st.llm_confidence && (
               <div style={{ fontSize: 10, color: "#64748b" }}>confidence: {st.llm_confidence}</div>
@@ -630,6 +681,7 @@ const COLS = [
   { key: "name", label: "Stock", align: "left" },
   { key: "ai", label: "AI Score", align: "center" },
   { key: "price", label: "Price", align: "right" },
+  { key: "fwd", label: "Fwd Multiple", align: "center" },
   { key: "pct_news", label: "Change", align: "right" },
   {
     key: "range",
@@ -961,6 +1013,11 @@ export default function HighImpactRnsTab({ onSelect }) {
                             <span style={{ color: "#f1f5f9", fontWeight: 700 }}>{fmtPounds(priceOf(r))}</span>
                           </td>
 
+                          {/* Forward multiple on the announcement's own stated figure */}
+                          <td style={{ ...S.td, textAlign: "center" }}>
+                            <FwdMultipleCell r={r} />
+                          </td>
+
                           {/* Change — % since the story */}
                           <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(pctSinceNews(r)) }}>
                             {pctSinceNews(r) == null ? "—" : `${pctSinceNews(r) >= 0 ? "+" : ""}${pctSinceNews(r).toFixed(1)}%`}
@@ -1050,6 +1107,20 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
                                 <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
                                 {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+                                {r.fwd_multiple != null && r.fwd_quote && (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                    <AnalysisRow
+                                      label={`${FWD_LABEL[r.fwd_metric] || "Multiple"} ${r.fwd_is_bound ? "<" : ""}${Number(r.fwd_multiple).toFixed(1)}× · source`}
+                                      text={`“${r.fwd_quote}”`}
+                                      color="#a78bfa"
+                                    />
+                                    {r.ttm_ev_ebitda != null && (
+                                      <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.5 }}>
+                                        For context: ~{Number(r.ttm_ev_ebitda).toFixed(1)}× EV/EBITDA on trailing twelve-month figures — before this announcement's new number.
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                                 <AnalysisRow label="AI summary" text={st.summary} />
                                 {st.llm_confidence && (
                                   <div style={{ fontSize: 10, color: "#64748b" }}>confidence: {st.llm_confidence}</div>

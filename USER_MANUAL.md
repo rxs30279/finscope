@@ -1121,19 +1121,44 @@ Selection is where most tools stop; here it is where the page starts. The moment
 |---|---|
 | **Stock** | Ticker, name and index badge; the caret expands the full story |
 | **Price / Change** | Live price, and % change **since the story close** — not since you opened the page |
+| **Fwd Multiple** | The valuation multiple implied by a profit figure **stated in the announcement itself** — see below. Blank for most stories; that is by design |
 | **Trend / 52W Range** | 3-month sparkline — the segment since selection is coloured green/red — plus position in the 52-week range |
 | **Date added** | The story date |
 | **Mom / Qual / Value / Risk** | The same four scores as the Screener ([§3.2](#32-the-four-scores-explained)) so you can judge the underlying business at a glance |
 | **Follow-up RNS** | ▲/▼ tally of the company's announcements since the story |
 | **News** | Latest headlines for the selected name |
 
-Expanding a row reveals the full story block: the AI **thesis** and **risks** from ranking day, the **manual screen** verdict and rationale, and the announcement **summary** — the complete evidence trail for why the name was selected.
+Expanding a row reveals the full story block: the AI **thesis** and **risks** from ranking day, the **manual screen** verdict and rationale, the **verbatim sentence** any Fwd Multiple was computed from, and the announcement **summary** — the complete evidence trail for why the name was selected.
+
+#### The Fwd Multiple column
+
+Good news is only half the question — the other half is *what you are paying for it*. Many trading updates state a concrete full-year profit figure: the company's own guidance ("adjusted EBITDA of no less than £45 million"), or — increasingly common — a footnote quoting **analyst consensus** so that "ahead of market expectations" has a defined meaning. When the announcement contains such a figure, the Fwd Multiple column turns it into a forward valuation multiple.
+
+**How the number is made.** The AI's only job is to *find and copy* the stated figure — the metric, the amount, the currency and the financial year, together with the exact sentence it came from. All arithmetic is then done by the app from its own data: enterprise value (market cap plus net debt) divided by the stated figure. The AI never calculates, never annualises a half-year number, and never fills a gap from memory — if the announcement doesn't state a usable figure, the column shows a dash.
+
+**Reading the label.** Under the multiple, a small label tells you what you are looking at:
+
+| Label part | Meaning |
+|---|---|
+| **EV/EBITDA** or **EV/EBIT** | Enterprise value over the stated EBITDA or operating profit — the standard "whole business" multiples |
+| **P/PBT** | Market cap over stated profit before tax — used when PBT is the figure given (PBT is after interest, so it is compared to the equity value, not EV) |
+| **guidance** | The figure is the company's own forecast — the board's promise. Boards usually guide conservatively, preferring to beat than miss |
+| **consensus** | The figure is the analysts' forecast quoted in the announcement — usually alongside a statement that results will *beat* it |
+| **reported** | A fresh full-year actual from a results announcement — a trailing multiple, not a forward one |
+| **`<` prefix** | The multiple is an **upper bound**: the figure was "at least £Xm" guidance, or a consensus number the company says it will beat — so the true multiple on the eventual outcome is *lower* than shown |
+
+A `<8.1× EV/EBIT · consensus` therefore reads: *"on the consensus number the company has just said it will materially beat, the business costs less than 8.1 times operating profit — and analysts haven't upgraded yet."* That gap between stated confidence and unmoved forecasts is often the most interesting number on the page.
+
+Where the forward figure is an EBITDA one, the expanded row also shows a **trailing comparison** — the same EV over the last twelve months' reported EBITDA — so you can see the re-rating in one line: a business on ~12× trailing that has just guided to under 7.5× forward is telling you how much the announcement changed. The trailing line is context only; it never substitutes for a blank column.
+
+**Why it is often blank.** Most updates say "in line with expectations" without stating what those expectations are — there is nothing to extract, and showing a guessed number would be worse than showing none. The column is also deliberately left blank when the figure fails a safety check: quoted in a foreign currency, covering only a half-year, an unusual period length (17–18-month reporting periods do occur), or a company type where these multiples mislead (banks, insurers, investment trusts, property). Expanding the row always shows the verbatim sentence behind a displayed multiple, so you can verify the source yourself in one glance.
 
 #### How to use it — and how not to
 
 - **It is a monitored watchlist, not a tip sheet.** Every name passed strict quality gates, but the 31-day track exists precisely because good stories sometimes fail. The Change and Follow-up columns are the scoreboard — read them, don't assume.
 - **Check how much has already moved.** The Change column is measured from the story date. If a name is +15% since its story, the easy part of the move may be gone; the question becomes whether the re-rating continues.
 - **Watch the follow-up sentiment.** A red ▼ appearing in the Follow-up column mid-track is exactly the early-warning signal the recorder was built for — open it before the market forces you to.
+- **Use the Fwd Multiple to judge what the re-rating has left to do.** A story on `<7× EV/EBITDA` of upgraded guidance is a very different proposition from the same story at 20× — and a consensus-based bound means the market's numbers haven't caught up with the company's own statement yet. Always glance at the quoted source sentence in the expanded row before leaning on the figure.
 - **Combine with the Screener scores in the row.** A showcase story on a 9-Quality, 3-Risk business is a different proposition from the same story on a 5-Quality, 7-Risk one — the columns are there so you never have to take a story on faith.
 
 ---

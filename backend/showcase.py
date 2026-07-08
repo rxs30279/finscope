@@ -329,7 +329,8 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                r.tier, r.category, r.score, r.keyword_hits, r.summary,
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_risks, r.llm_action,
                r.llm_sentiment,
-               m.sector, m.industry, m.country, m.ftse_index, t.market_cap
+               m.sector, m.industry, m.country, m.ftse_index,
+               t.market_cap, t.net_debt
         FROM rns_announcements r
         JOIN ttm_financials t ON t.company_symbol = r.symbol
         LEFT JOIN company_metadata m ON m.symbol = r.symbol
@@ -393,6 +394,12 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
             print(f"[showcase] vet failed for {c['symbol']} (non-fatal) — {e}")
             vet = None
 
+        # Forward multiple: LLM extracts any stated FY profit figure from the
+        # full announcement text, Python computes EV/multiple. Internally
+        # non-fatal — a blank column must never block a flag.
+        from showcase_fwd import extract_fwd_fields
+        fwd = extract_fwd_fields(c)
+
         track_until = c["published_at"] + timedelta(days=TRACK_DAYS)
         n = _exec(
             """
@@ -401,9 +408,14 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                  category, rules_score, keyword_hits, summary, llm_score,
                  llm_confidence, llm_thesis, llm_risks, story_close,
                  vet_verdict, vet_confidence, vet_rationale, vet_model, vet_processed_at,
+                 fwd_metric, fwd_value, fwd_currency, fwd_period, fwd_basis,
+                 fwd_is_bound, fwd_quote, fwd_ev, fwd_multiple, fwd_model,
+                 fwd_processed_at,
                  track_until, status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, 'pending')
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, 'pending')
             ON CONFLICT (rns_id) DO NOTHING
             """,
             (
@@ -414,6 +426,10 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                 (vet or {}).get("verdict"), (vet or {}).get("confidence"),
                 (vet or {}).get("rationale"), (vet or {}).get("model"),
                 datetime.now(timezone.utc) if vet else None,
+                fwd["fwd_metric"], fwd["fwd_value"], fwd["fwd_currency"],
+                fwd["fwd_period"], fwd["fwd_basis"], fwd["fwd_is_bound"],
+                fwd["fwd_quote"], fwd["fwd_ev"], fwd["fwd_multiple"],
+                fwd["fwd_model"], fwd["fwd_processed_at"],
                 track_until,
             ),
         )
@@ -478,7 +494,7 @@ def expire_tracked_entries() -> dict:
 # scoring sees the exact same columns (incl. the stored *_median companions).
 _MQVR_SQL = """
     SELECT m.symbol, m.sector, m.industry,
-           t.market_cap, t.revenue,
+           t.market_cap, t.revenue, t.net_debt, t.ebitda,
            CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END as price_to_earnings,
            t.price_to_book, t.price_to_sales, t.roe, t.roic,
            t.gross_margin, t.operating_margin, t.net_income_margin,
@@ -499,6 +515,28 @@ _MQVR_SQL = """
     LEFT JOIN screener_scores s ON s.symbol = m.symbol
     WHERE m.symbol = ANY(%s)
 """
+
+
+def _ttm_ev_ebitda(r) -> Optional[float]:
+    """Own trailing EV/EBITDA from ttm_financials, or None. Context for the
+    forward multiple only — same sanity band as showcase_fwd so a degenerate
+    stored EBITDA (the 40-50x artifacts the fair-value module trims) shows
+    nothing rather than nonsense."""
+    from showcase_fwd import _MIN_MULTIPLE, _MAX_MULTIPLE
+
+    try:
+        mkt = float(r.get("market_cap"))
+        ebitda = float(r.get("ebitda"))
+    except (TypeError, ValueError):
+        return None
+    if mkt <= 0 or ebitda <= 0:
+        return None
+    nd = r.get("net_debt")
+    ev = mkt + (float(nd) if nd is not None else 0.0)
+    if ev <= 0:
+        return None
+    m = ev / ebitda
+    return round(m, 2) if _MIN_MULTIPLE <= m <= _MAX_MULTIPLE else None
 
 
 def _enrich(entries: list[dict]) -> list[dict]:
@@ -522,6 +560,7 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "momentum_score": r.get("momentum_score"),
             "quality_score": _quality_score(r),
             "value_score": _value_score(r),
+            "ttm_ev_ebitda": _ttm_ev_ebitda(r),
         }
         for r in mrows
     }
@@ -569,6 +608,23 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "story_close": baseline,
             "spark_since": _spark_since_count(e["symbol"], e["published_at"]),
             "track_until": e.get("track_until"),
+            # Forward multiple (extraction-only LLM + Python arithmetic; see
+            # showcase_fwd.py). fwd_multiple is NULL when nothing usable was
+            # stated — the UI shows a dash, never a guess.
+            "fwd_multiple": float(e["fwd_multiple"]) if e.get("fwd_multiple") is not None else None,
+            "fwd_metric": e.get("fwd_metric"),
+            "fwd_basis": e.get("fwd_basis"),
+            "fwd_is_bound": e.get("fwd_is_bound"),
+            "fwd_period": e.get("fwd_period"),
+            "fwd_quote": e.get("fwd_quote"),
+            # Trailing comparison, only where it's like-for-like: a forward
+            # EV/EBITDA exists and the TTM one is computable. Never a fallback
+            # for a blank column — it contextualises the re-rating.
+            "ttm_ev_ebitda": (
+                m.get("ttm_ev_ebitda")
+                if e.get("fwd_multiple") is not None and e.get("fwd_metric") == "ebitda"
+                else None
+            ),
             "followup_pos": sum(1 for f in fus if f["sentiment"] == "positive"),
             "followup_neg": sum(1 for f in fus if f["sentiment"] == "negative"),
             "followup_neutral": sum(1 for f in fus if f["sentiment"] == "neutral"),
@@ -667,3 +723,64 @@ def extend_tracking(entry_id: int):
 def flag_now(hours: int = 48):
     """Admin — manually run the auto-flag pass (dev/testing convenience)."""
     return flag_high_impact_candidates(hours=hours)
+
+
+@router.post("/extract-fwd", dependencies=[Depends(require_admin_token)])
+def extract_fwd(entry_id: Optional[int] = None, force: bool = False):
+    """Admin — (re)run the forward-multiple extraction for showcase entries.
+
+    Backfill for rows flagged before the feature existed, and a redo hook after
+    prompt/gate changes. Targets one entry (`entry_id`) or every non-rejected
+    entry; without `force`, rows that already have a fwd_processed_at stamp are
+    left alone. Announcement text comes from the snapshotted Investegate URL,
+    which outlives the rns_announcements prune."""
+    from showcase_fwd import extract_fwd_fields
+
+    entries = _q(
+        """
+        SELECT h.id, h.symbol, h.company_name, h.headline, h.url, h.summary,
+               h.fwd_processed_at,
+               m.sector, m.industry, t.market_cap, t.net_debt
+        FROM high_impact_rns h
+        LEFT JOIN company_metadata m ON m.symbol = h.symbol
+        LEFT JOIN LATERAL (
+            SELECT market_cap, net_debt FROM ttm_financials
+            WHERE company_symbol = h.symbol
+            ORDER BY period_end_date DESC NULLS LAST LIMIT 1
+        ) t ON TRUE
+        WHERE h.status <> 'rejected'
+          AND (%s::bigint IS NULL OR h.id = %s)
+        ORDER BY h.published_at DESC
+        """,
+        (entry_id, entry_id),
+    )
+
+    results = []
+    for e in entries:
+        if e["fwd_processed_at"] is not None and not force:
+            results.append({"id": e["id"], "symbol": e["symbol"], "skipped": "already processed"})
+            continue
+        fwd = extract_fwd_fields(e)
+        _exec(
+            """
+            UPDATE high_impact_rns SET
+                fwd_metric = %s, fwd_value = %s, fwd_currency = %s,
+                fwd_period = %s, fwd_basis = %s, fwd_is_bound = %s,
+                fwd_quote = %s, fwd_ev = %s, fwd_multiple = %s,
+                fwd_model = %s, fwd_processed_at = %s
+            WHERE id = %s
+            """,
+            (
+                fwd["fwd_metric"], fwd["fwd_value"], fwd["fwd_currency"],
+                fwd["fwd_period"], fwd["fwd_basis"], fwd["fwd_is_bound"],
+                fwd["fwd_quote"], fwd["fwd_ev"], fwd["fwd_multiple"],
+                fwd["fwd_model"], fwd["fwd_processed_at"], e["id"],
+            ),
+        )
+        results.append({
+            "id": e["id"], "symbol": e["symbol"],
+            "fwd_multiple": fwd["fwd_multiple"], "fwd_metric": fwd["fwd_metric"],
+            "fwd_basis": fwd["fwd_basis"], "fwd_currency": fwd["fwd_currency"],
+            "fwd_quote": (fwd["fwd_quote"] or "")[:160] or None,
+        })
+    return {"processed": len(results), "results": results}
