@@ -561,7 +561,10 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "momentum_score": m.get("momentum_score"),
             "quality_score": m.get("quality_score"),
             "value_score": m.get("value_score"),
-            "days_since_news": (now - e["published_at"]).days,
+            # Inclusive calendar-day count: publication day is day 1, so an RNS
+            # published yesterday reads as "2 days" (its second day) today,
+            # rather than counting whole 24h periods elapsed.
+            "days_since_news": (now.date() - e["published_at"].date()).days + 1,
             "pct_since_news": pct,
             "story_close": baseline,
             "spark_since": _spark_since_count(e["symbol"], e["published_at"]),

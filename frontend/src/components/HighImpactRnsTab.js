@@ -809,7 +809,7 @@ export default function HighImpactRnsTab({ onSelect }) {
             </sup>
           </>
         }
-        subtitle="Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded."
+        subtitle="Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication."
         right={
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
             {loading ? "loading…" : `${rows.length} tracked`}
@@ -939,12 +939,12 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 </span>
                               </button>
                               <div style={{ minWidth: 0 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                                  <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
-                                  <IndexBadge index={r.ftse_index} />
-                                </div>
+                                <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
                                 <div style={{ color: "#64748b", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                   {r.name}
+                                </div>
+                                <div style={{ marginTop: 3 }}>
+                                  <IndexBadge index={r.ftse_index} full />
                                 </div>
                               </div>
                             </div>
