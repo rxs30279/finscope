@@ -173,6 +173,19 @@ _COUNT_TTL = 60.0
 _count_cache: dict = {"ts": 0.0, "data": None}
 
 
+# Scarcity-counter seeding. The *displayed* "taken" count is floored to this so
+# the landing page shows visible traction while the real list is still small
+# (default 22 → "78 of 100 free spots left"). This affects the DISPLAY ONLY —
+# the real capacity gate in signup() counts genuine subscribers, so seeding can
+# never block or double-count a real sign-up. Tunable via env with no redeploy:
+# lower it any time to reset the number (e.g. back to 78) if it creeps too high.
+def _count_floor() -> int:
+    try:
+        return max(0, int(os.environ.get("SUBSCRIBER_COUNT_FLOOR", "22")))
+    except ValueError:
+        return 22
+
+
 @router.get("/api/subscribers/count")
 def subscriber_count():
     """Public: active subscriber count + the cap, for the scarcity counter on
@@ -191,7 +204,14 @@ def subscriber_count():
             return cached
         raise HTTPException(502, f"Resend error: {e}")
 
-    count = len(active)
+    real = len(active)
+    # Seed the displayed count with the floor for social proof, but never let
+    # the floor alone show "full" — the form closes only when GENUINE
+    # subscribers fill the list. While real < cap we always leave ≥1 spot
+    # showing (ceiling cap-1), so seeding can't prematurely disable signups.
+    count = max(real, _count_floor())
+    if real < cap:
+        count = min(count, cap - 1)
     data = {"count": count, "cap": cap, "remaining": max(0, cap - count)}
     _count_cache["ts"] = now
     _count_cache["data"] = data
