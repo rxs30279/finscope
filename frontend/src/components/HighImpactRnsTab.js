@@ -592,7 +592,7 @@ function MobileCard({
               <b style={{ color: "#cbd5e1" }}>R</b>isk. Risk is inverted, so green means lower risk.
             </div>
           )}
-          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ marginTop: 16, marginBottom: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {r.fwd_multiple != null && (
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
                 <span style={{ color: "#475569", fontSize: 8, fontWeight: 700, letterSpacing: 0.3, textTransform: "uppercase" }}>
@@ -608,7 +608,7 @@ function MobileCard({
               <span style={{ color: "#64748b", fontSize: 10 }}>{fmtDate(st.published_at)}</span>
             </div>
           </div>
-          <a href={st.url} target="_blank" rel="noreferrer" style={{ display: "block", marginTop: 6, color: "#e2e8f0", fontSize: 13, fontWeight: 600, textDecoration: "none", lineHeight: 1.4 }}>
+          <a href={st.url} target="_blank" rel="noreferrer" style={{ display: "block", marginTop: 12, color: "#e2e8f0", fontSize: 13, fontWeight: 600, textDecoration: "none", lineHeight: 1.4 }}>
             {st.headline}
           </a>
 
@@ -681,8 +681,8 @@ const COLS = [
   { key: "name", label: "Stock", align: "left" },
   { key: "ai", label: "AI Score", align: "center" },
   { key: "price", label: "Price", align: "right" },
-  { key: "fwd", label: "Fwd Multiple", align: "center" },
   { key: "pct_news", label: "Change", align: "right" },
+  { key: "fwd", label: "Fwd Multiple", align: "center" },
   {
     key: "range",
     label: (
@@ -1013,14 +1013,14 @@ export default function HighImpactRnsTab({ onSelect }) {
                             <span style={{ color: "#f1f5f9", fontWeight: 700 }}>{fmtPounds(priceOf(r))}</span>
                           </td>
 
-                          {/* Forward multiple on the announcement's own stated figure */}
-                          <td style={{ ...S.td, textAlign: "center" }}>
-                            <FwdMultipleCell r={r} />
-                          </td>
-
                           {/* Change — % since the story */}
                           <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(pctSinceNews(r)) }}>
                             {pctSinceNews(r) == null ? "—" : `${pctSinceNews(r) >= 0 ? "+" : ""}${pctSinceNews(r).toFixed(1)}%`}
+                          </td>
+
+                          {/* Forward multiple on the announcement's own stated figure */}
+                          <td style={{ ...S.td, textAlign: "center" }}>
+                            <FwdMultipleCell r={r} />
                           </td>
 
                           {/* Trend + 52w range */}
