@@ -49,6 +49,11 @@ const fmtDate = (iso) => {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
 };
 
+// Age of the story, e.g. "1 day." / "5 days." — used in the desktop table in
+// place of the raw date, so you can see how long a pick has been tracked at a glance.
+const fmtDaysSince = (days) =>
+  days == null ? "—" : `${days} day${days === 1 ? "" : "s"}`;
+
 // Prices are stored in pence (LSE convention) — show as pounds.
 const fmtPounds = (pence) =>
   pence == null ? "—" : `£${(pence / 100).toFixed(2)}`;
@@ -114,8 +119,9 @@ function IndexBadge({ index }) {
   );
 }
 
-// AI (LLM) score, coloured on the RNS page's bands.
-function ScoreCell({ value }) {
+// AI (LLM) score, coloured on the RNS page's bands. `bare` drops the "AI Score"
+// label — used in the table column, which already has a header naming it.
+function ScoreCell({ value, bare = false }) {
   if (value == null) return <span style={{ color: "#333" }}>—</span>;
   const colour =
     value >= 75 ? "#f97316" : value >= 50 ? "#60a5fa" : value >= 25 ? "#94a3b8" : "#555";
@@ -128,7 +134,8 @@ function ScoreCell({ value }) {
         fontWeight: 700,
       }}
     >
-      <span style={{ color: "#fff" }}>AI Score</span> <span style={{ color: colour }}>{value}</span>
+      {!bare && <><span style={{ color: "#fff" }}>AI Score</span> </>}
+      <span style={{ color: colour }}>{value}</span>
     </span>
   );
 }
@@ -180,10 +187,13 @@ function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height 
   const toPath = (arr) =>
     arr.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   // Split at the selection point; share the junction so the two lines connect.
-  const sc = Math.max(0, Math.min(n - 1, sinceCount || 0));
+  const sc = Math.max(0, Math.min(n, sinceCount || 0));
   const splitIdx = sc > 0 ? n - sc : n;
   const before = coords.slice(0, Math.min(splitIdx + 1, n));
-  const since = sc > 0 ? coords.slice(splitIdx) : [];
+  // Start "since" one point early too, sharing the pre-news close with "before" —
+  // otherwise a 1-day-old story (sc=1) has only a single "since" point and no
+  // line can be drawn, so the jump itself never gets coloured (only the dot).
+  const since = sc > 0 ? coords.slice(Math.max(0, splitIdx - 1)) : [];
   const baseColor = "#6366f1";
   const sinceColor = sinceUp == null ? "#94a3b8" : sinceUp ? "#10b981" : "#ef4444";
   const area =
@@ -545,6 +555,7 @@ function MobileCard({
 // ── columns ───────────────────────────────────────────────────────────────────
 const COLS = [
   { key: "name", label: "Stock", align: "left" },
+  { key: "ai", label: "AI Score", align: "center" },
   { key: "price", label: "Price", align: "right" },
   { key: "pct_news", label: "Change", align: "right" },
   {
@@ -557,7 +568,7 @@ const COLS = [
     ),
     align: "left",
   },
-  { key: "date", label: "Date added", align: "right" },
+  { key: "date", label: "Days tracked", align: "center" },
   { key: "m", label: "Mom", align: "center" },
   { key: "q", label: "Qual", align: "center" },
   { key: "v", label: "Value", align: "center" },
@@ -725,7 +736,7 @@ export default function HighImpactRnsTab({ onSelect }) {
             </sup>
           </>
         }
-        subtitle="A curated showcase of high-impact, positive RNS stories — each tracked to determine the effect of positive news on the share price."
+        subtitle="Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded."
         right={
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
             {loading ? "loading…" : `${rows.length} tracked`}
@@ -814,7 +825,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                           style={{ cursor: "pointer", background: baseBg }}
                         >
                           {/* Stock — caret + ticker + name + index badge */}
-                          <td style={S.td}>
+                          <td style={{ ...S.td, paddingLeft: 22 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                               <button
                                 onClick={(e) => {
@@ -827,20 +838,32 @@ export default function HighImpactRnsTab({ onSelect }) {
                                     : isStoryOpen ? "Hide story & analysis" : "Show story & analysis"
                                 }
                                 style={{
-                                  background: "transparent",
-                                  border: "none",
-                                  // Red caret = admin heads-up that tracking ends within 5 days.
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  width: 28,
+                                  height: 28,
+                                  background: isStoryOpen ? "rgba(249,115,22,0.12)" : "#161b26",
+                                  // Red border = admin heads-up that tracking ends within 5 days.
+                                  border: `1px solid ${isStoryOpen ? "#f97316" : isAdmin && dl != null && dl <= 5 ? "#ef4444" : "#2a3444"}`,
+                                  borderRadius: 5,
                                   color: isStoryOpen ? "#f97316" : isAdmin && dl != null && dl <= 5 ? "#ef4444" : "#60a5fa",
                                   cursor: "pointer",
                                   fontSize: 14,
                                   padding: 0,
                                   lineHeight: 1,
                                   flexShrink: 0,
-                                  transform: isStoryOpen ? "rotate(90deg)" : "none",
-                                  transition: "transform 0.12s ease",
                                 }}
                               >
-                                ▶
+                                <span
+                                  style={{
+                                    display: "inline-block",
+                                    transform: isStoryOpen ? "rotate(90deg)" : "none",
+                                    transition: "transform 0.12s ease",
+                                  }}
+                                >
+                                  ▶
+                                </span>
                               </button>
                               <div style={{ minWidth: 0 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -852,6 +875,11 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 </div>
                               </div>
                             </div>
+                          </td>
+
+                          {/* AI significance score */}
+                          <td style={{ ...S.td, textAlign: "center" }}>
+                            <ScoreCell value={st.llm_score} bare />
                           </td>
 
                           {/* Price */}
@@ -877,9 +905,9 @@ export default function HighImpactRnsTab({ onSelect }) {
                             </div>
                           </td>
 
-                          {/* Date the pick was added to the showcase */}
-                          <td style={{ ...S.td, textAlign: "right" }} title="Date the pick was added">
-                            <span style={{ color: "#cbd5e1" }}>{fmtDate(st.published_at)}</span>
+                          {/* Days the pick has been tracked */}
+                          <td style={{ ...S.td, textAlign: "center" }} title={fmtDate(st.published_at)}>
+                            <span style={{ color: "#cbd5e1" }}>{fmtDaysSince(r.days_since_news)}</span>
                           </td>
 
                           {/* MQVR */}
@@ -922,7 +950,6 @@ export default function HighImpactRnsTab({ onSelect }) {
                             <td colSpan={COLS.length} style={{ ...S.td, whiteSpace: "normal", borderBottom: "1px solid #1a1a1a", paddingTop: 0 }}>
                               {/* Headline row */}
                               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                                <ScoreCell value={st.llm_score} />
                                 <a
                                   href={st.url}
                                   target="_blank"
