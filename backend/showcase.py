@@ -169,6 +169,21 @@ def _story_close(symbol: str, published_at) -> Optional[float]:
     return float(rows[0]["close"]) if rows and rows[0]["close"] is not None else None
 
 
+def _next_open(symbol: str, published_at) -> Optional[float]:
+    """Open (pence) on the first trading day AFTER the story date — the baseline
+    for 'bought the next morning at the open'. None until that day's price has
+    actually been recorded (e.g. a story flagged today has no next-day open yet)."""
+    rows = _q(
+        """
+        SELECT open FROM price_history
+        WHERE symbol = %s AND date > %s::date AND open IS NOT NULL
+        ORDER BY date ASC LIMIT 1
+        """,
+        (symbol, published_at),
+    )
+    return float(rows[0]["open"]) if rows and rows[0]["open"] is not None else None
+
+
 def _spark_since_count(symbol: str, published_at) -> int:
     """How many of the last ~63 trading-day closes (the sparkline window) fall on
     or after the story date — the length of the 'since selection' line segment."""
@@ -617,6 +632,15 @@ def _enrich(entries: list[dict]) -> list[dict]:
         if baseline and cur is not None and baseline > 0:
             pct = round((cur / baseline - 1) * 100, 2)
 
+        # % since next-day open: what you'd have made buying the morning after
+        # the story broke, instead of at the (unobtainable) story-date close.
+        # Can't be snapshotted at flag time — the next session hasn't happened
+        # yet — so it's always looked up fresh.
+        next_open = _next_open(e["symbol"], e["published_at"])
+        pct_next_open = None
+        if next_open and cur is not None and next_open > 0:
+            pct_next_open = round((cur / next_open - 1) * 100, 2)
+
         out.append({
             **base,
             "showcase_id": e["id"],
@@ -629,6 +653,8 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "days_since_news": (now.date() - e["published_at"].date()).days + 1,
             "pct_since_news": pct,
             "story_close": baseline,
+            "pct_since_next_open": pct_next_open,
+            "next_open": next_open,
             "spark_since": _spark_since_count(e["symbol"], e["published_at"]),
             "track_until": e.get("track_until"),
             # Forward multiple (extraction-only LLM + Python arithmetic; see

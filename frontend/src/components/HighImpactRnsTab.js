@@ -223,7 +223,7 @@ function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height 
   // line can be drawn, so the jump itself never gets coloured (only the dot).
   const since = sc > 0 ? coords.slice(Math.max(0, splitIdx - 1)) : [];
   // Grey: the pre-story stretch is context only — the coloured "since" segment is the story.
-  const baseColor = "#64748b";
+  const baseColor = "#334155";
   const sinceColor = sinceUp == null ? "#94a3b8" : sinceUp ? "#10b981" : "#ef4444";
   const area =
     `M${coords[0][0].toFixed(1)},${height} ` +
@@ -238,9 +238,13 @@ function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height 
       {since.length >= 2 && (
         <path d={toPath(since)} fill="none" stroke={sinceColor} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
       )}
-      {sc > 0 && splitIdx < n && (
+      {sc > 0 && splitIdx < n ? (
         <circle cx={coords[splitIdx][0]} cy={coords[splitIdx][1]} r={1.7} fill={sinceColor} />
-      )}
+      ) : sc === 0 ? (
+        // Picked today: no post-selection close exists yet to colour a "since" segment,
+        // so just mark the latest point instead of leaving the row unmarked.
+        <circle cx={coords[n - 1][0]} cy={coords[n - 1][1]} r={1.7} fill={sinceColor} />
+      ) : null}
     </svg>
   );
 }
@@ -682,7 +686,7 @@ const COLS = [
   { key: "name", label: "Stock", align: "left" },
   { key: "ai", label: "AI Score", align: "center" },
   { key: "price", label: "Price", align: "right" },
-  { key: "pct_news", label: "Change", align: "right" },
+  { key: "pct_news", label: "% Change", align: "right" },
   { key: "fwd", label: "Fwd Multiple", align: "center" },
   {
     key: "range",
@@ -715,6 +719,11 @@ export default function HighImpactRnsTab({ onSelect }) {
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
   const [openStory, setOpenStory] = useState(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
+  // "story": % since the story-date close (the flag baseline). "next_open": %
+  // since the next trading day's open — what buying the morning after would
+  // have returned, since the story close itself isn't a price you could deal at.
+  const [changeMode, setChangeMode] = useState("story");
+  const [showChangeInfo, setShowChangeInfo] = useState(false);
 
   const symbols = useMemo(() => rows.map((r) => r.symbol), [rows]);
 
@@ -785,6 +794,15 @@ export default function HighImpactRnsTab({ onSelect }) {
     if (live != null && r.story_close > 0) return (live / r.story_close - 1) * 100;
     return r.pct_since_news;
   };
+  // % since the next trading day's open — what buying the morning after the
+  // story broke (rather than at the unobtainable story-date close) would have
+  // returned. Null until that next session's open is actually on record.
+  const pctSinceNextOpen = (r) => {
+    const live = liveQuotes[r.symbol];
+    if (live != null && r.next_open > 0) return (live / r.next_open - 1) * 100;
+    return r.pct_since_next_open;
+  };
+  const changePctOf = (r) => (changeMode === "next_open" ? pctSinceNextOpen(r) : pctSinceNews(r));
   const rangePos = (r) => {
     const p = priceOf(r);
     if (p == null || r.high_52w == null || r.low_52w == null) return null;
@@ -890,6 +908,79 @@ export default function HighImpactRnsTab({ onSelect }) {
         </div>
       )}
 
+      {rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 10 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: "monospace" }}>
+            <span style={{ color: "#64748b", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              % Change vs
+            </span>
+            <div style={{ display: "inline-flex", border: "1px solid #2a3444", borderRadius: 4, overflow: "hidden" }}>
+              <button
+                onClick={() => setChangeMode("story")}
+                title="% since the close price on the publish date"
+                style={{
+                  padding: "3px 10px", fontSize: 10.5, fontWeight: 700, fontFamily: "monospace",
+                  border: "none", cursor: "pointer",
+                  background: changeMode === "story" ? "#f97316" : "transparent",
+                  color: changeMode === "story" ? "#0a0a0a" : "#94a3b8",
+                }}
+              >
+                Publish date
+              </button>
+              <button
+                onClick={() => setChangeMode("next_open")}
+                title="% since the opening price the day after publication — what buying the morning after the story broke would have returned"
+                style={{
+                  padding: "3px 10px", fontSize: 10.5, fontWeight: 700, fontFamily: "monospace",
+                  border: "none", borderLeft: "1px solid #2a3444", cursor: "pointer",
+                  background: changeMode === "next_open" ? "#f97316" : "transparent",
+                  color: changeMode === "next_open" ? "#0a0a0a" : "#94a3b8",
+                }}
+              >
+                +1d Publish date
+              </button>
+            </div>
+            <button
+              onClick={() => setShowChangeInfo((v) => !v)}
+              title="What do these mean?"
+              aria-label="Explain the % Change options"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 16,
+                height: 16,
+                borderRadius: "50%",
+                border: `1px solid ${showChangeInfo ? "#60a5fa" : "#3d5273"}`,
+                background: "transparent",
+                color: showChangeInfo ? "#93c5fd" : "#64748b",
+                fontSize: 10,
+                fontWeight: 700,
+                fontStyle: "italic",
+                fontFamily: "Georgia, serif",
+                lineHeight: 1,
+                cursor: "pointer",
+                padding: 0,
+                flexShrink: 0,
+              }}
+            >
+              i
+            </button>
+          </div>
+          {showChangeInfo && (
+            <div style={{ marginTop: 8, padding: "8px 10px", background: "#0d1420", border: "1px solid #1e2a3d", borderRadius: 4, fontSize: 10.5, color: "#94a3b8", lineHeight: 1.6, maxWidth: 420 }}>
+              <b style={{ color: "#cbd5e1" }}>Publish date</b> — % change from the closing price on the day the
+              story was published to now. This is the flag baseline, but it isn't a price you could actually
+              have dealt at.
+              <br />
+              <b style={{ color: "#cbd5e1" }}>+1d Publish date</b> — % change from the opening price on the next
+              trading day after publication to now — what you'd have made buying the morning after the story
+              broke, a more realistic entry point.
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 16, alignItems: "stretch" }}>
         <div style={{ flex: "1 1 auto", minWidth: 0 }}>
           {rows.length === 0 ? (
@@ -913,7 +1004,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                     isAdmin={isAdmin}
                     live={isLive(r)}
                     price={priceOf(r)}
-                    changePct={pctSinceNews(r)}
+                    changePct={changePctOf(r)}
                     rangePosValue={rangePos(r)}
                     isNewsSelected={r.symbol === selectedNewsSymbol}
                     onNewsSelect={() => setSelectedNewsSymbol(r.symbol)}
@@ -1018,9 +1109,9 @@ export default function HighImpactRnsTab({ onSelect }) {
                             <span style={{ color: "#f1f5f9", fontWeight: 700 }}>{fmtPounds(priceOf(r))}</span>
                           </td>
 
-                          {/* Change — % since the story */}
-                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(pctSinceNews(r)) }}>
-                            {pctSinceNews(r) == null ? "—" : `${pctSinceNews(r) >= 0 ? "+" : ""}${pctSinceNews(r).toFixed(1)}%`}
+                          {/* Change — % since the story close, or since next-day open */}
+                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(changePctOf(r)) }}>
+                            {changePctOf(r) == null ? "—" : `${changePctOf(r) >= 0 ? "+" : ""}${changePctOf(r).toFixed(1)}%`}
                           </td>
 
                           {/* Forward multiple on the announcement's own stated figure */}
