@@ -74,7 +74,7 @@ def _load_candidate(row_id: int) -> Optional[dict]:
                     THEN t.dividends_per_share / t.period_end_price
                     ELSE NULL END AS dividend_yield,
                t.price_to_book, t.price_to_sales,
-               t.roic, t.roe, t.operating_margin, t.fcf_margin,
+               t.roic, t.roe, t.roce, t.operating_margin, t.fcf_margin,
                t.revenue_growth, t.eps_cagr_10,
                t.debt_to_equity, t.current_ratio,
                t.net_debt, t.ebitda,
@@ -82,6 +82,7 @@ def _load_candidate(row_id: int) -> Optional[dict]:
                t.gross_margin_median, t.operating_margin_median,
                t.net_margin_median, t.roe_median, t.roic_median,
                t.revenue, t.fcf, t.period_end_price,
+               pm.peer_margin_median,
                s.consensus, s.buy_pct, s.upside_pct, s.total_analysts,
                s.eps_growth_next_yr
         FROM rns_announcements a
@@ -89,7 +90,7 @@ def _load_candidate(row_id: int) -> Optional[dict]:
         LEFT JOIN LATERAL (
             SELECT market_cap, price_to_earnings, dividends_per_share, period_end_price,
                    price_to_book, price_to_sales,
-                   roic, roe, operating_margin, fcf_margin,
+                   roic, roe, roce, operating_margin, fcf_margin,
                    revenue_growth, eps_cagr_10,
                    debt_to_equity, current_ratio,
                    net_debt, ebitda,
@@ -102,6 +103,20 @@ def _load_candidate(row_id: int) -> Optional[dict]:
             ORDER BY period_end_date DESC NULLS LAST
             LIMIT 1
         ) t ON TRUE
+        -- True industry-peer margin median for the WEAK MARGINS flag — NULL
+        -- when the industry has <5 usable names (min group size kept in sync
+        -- with PEER_MARGIN_MIN_GROUP in showcase.py). The stored
+        -- t.net_margin_median above is the company's OWN multi-year median
+        -- (consistency signal for the quality score), not a peer comparison.
+        LEFT JOIN LATERAL (
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY t2.net_income_margin)
+                       AS peer_margin_median
+            FROM ttm_financials t2
+            JOIN company_metadata m2 ON m2.symbol = t2.company_symbol
+            WHERE m2.industry = m.industry
+              AND t2.net_income_margin IS NOT NULL
+            HAVING COUNT(*) >= 5
+        ) pm ON TRUE
         LEFT JOIN LATERAL (
             SELECT consensus, buy_pct, upside_pct, total_analysts,
                    eps_growth_next_yr
@@ -346,8 +361,9 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         "down unless the announcement directly and materially de-levers the "
         "balance sheet. "
         "Weigh business quality too. A low quality score (<=3/10), a net margin "
-        "below the sector median (judge margins sector-relative — a thin margin "
-        "is normal in some sectors; below the sector's own norm is the red flag, "
+        "below the industry median (judge margins peer-relative — a thin margin "
+        "is normal in some industries and fine when capital returns are strong; "
+        "below the industry's own norm with weak returns is the red flag, "
         "loss-making doubly so), or a deteriorating margin / EPS trend means the "
         "underlying business is weak and converts good news into shareholder "
         "value poorly. For a positive catalyst on such a low-quality name, temper "
@@ -416,20 +432,30 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
     elif nd_to_mktcap is not None and nd_to_mktcap > 1:
         leverage_flag = "  !! net debt exceeds market cap"
 
-    # ── Quality: weak or below-sector-margin businesses convert good news ────
-    # poorly. Margins are judged sector-relative — thin-margin sectors aren't
-    # penalised wholesale, but a name below its own sector's median (or
+    # ── Quality: weak or below-peer-margin businesses convert good news ──────
+    # poorly. Margins are judged against the industry-peer median — thin-margin
+    # industries aren't penalised wholesale, but a name below its peers (or
     # loss-making) is fragile and a positive catalyst deserves a tempered score.
+    # Escape hatch: profitable + strong ROCE passes without the flag — a
+    # low-margin/high-ROCE model (reseller, distributor) is structure, not
+    # fragility. Floors (0.02 fallback, 0.15 ROCE) kept in sync with the
+    # showcase selection gates in showcase.py.
     nim = cand.get("net_income_margin")
-    nim_median = cand.get("net_margin_median")
+    nim_median = cand.get("peer_margin_median")
+    roce = cand.get("roce")
     margin_floor = max(0.0, nim_median) if nim_median is not None else 0.02
+    margin_ok = (
+        nim is None
+        or nim >= margin_floor
+        or (nim > 0 and roce is not None and roce >= 0.15)
+    )
     quality_flag = ""
     if qs is not None and qs <= 3:
         quality_flag = "  !! LOW QUALITY (weak fundamentals)"
-    elif nim is not None and nim < margin_floor:
+    elif not margin_ok:
         quality_flag = (
             "  !! WEAK MARGINS (loss-making)" if nim < 0
-            else "  !! WEAK MARGINS (below sector median)"
+            else "  !! WEAK MARGINS (below industry median)"
         )
 
     quality_str = f"{qs}/10" if qs is not None else "n/a"
@@ -452,7 +478,7 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         f"   Net debt/EBITDA: {_fmt_num(nd_to_ebitda, 1)}x"
         f"   Net debt/mkt cap: {_fmt_num(nd_to_mktcap, 1)}x{leverage_flag}\n"
         f"  P/B:          {_fmt_num(pb, 2)}x   P/S: {_fmt_num(ps, 2)}x\n"
-        f"  Net margin:   {_fmt_pct(nim)} (sector median {_fmt_pct(nim_median)})"
+        f"  Net margin:   {_fmt_pct(nim)} (industry median {_fmt_pct(nim_median)})"
         f"   Gross margin: {_fmt_pct(cand.get('gross_margin'))}\n"
         f"  Quality:      {quality_str}   Risk: {risk_str}{risk_label}{quality_flag}"
     )

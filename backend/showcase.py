@@ -45,7 +45,9 @@ HIGH_IMPACT_MIN_MARKET_CAP = 50_000_000  # £50m — keep to genuinely tradeable
 # the showcase entirely (they convert good news to shareholder value poorly). These
 # mirror the leverage/quality flags in the LLM ranker so the two stages agree.
 HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA = 3.0  # skip net debt > 3x profit (also skips net debt > market cap)
-HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # fallback margin floor when the sector median is missing
+HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # fallback margin floor when no usable peer median exists
+HIGH_IMPACT_MIN_ROCE = 0.15               # capital-returns escape hatch past the margin floor (profitable names only)
+PEER_MARGIN_MIN_GROUP = 5                 # industry margin medians need at least this many names to count
 HIGH_IMPACT_DEDUPE_DAYS = 30             # don't re-flag the same symbol within a month
 TRACK_DAYS = 31                          # monitoring window from the story date
 EXTEND_DAYS = 30                         # admin Extend button adds this per click
@@ -334,6 +336,20 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         FROM rns_announcements r
         JOIN ttm_financials t ON t.company_symbol = r.symbol
         LEFT JOIN company_metadata m ON m.symbol = r.symbol
+        -- True industry-peer margin median: trusts, banks and resellers each get
+        -- judged against their own economics rather than a whole-sector blend
+        -- (the Financial Services sector median is trust-inflated to ~0.70).
+        -- Yields NULL — and so falls back to the absolute floor — when the
+        -- industry has too few names for a meaningful median.
+        LEFT JOIN LATERAL (
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY t2.net_income_margin)
+                       AS margin_median
+            FROM ttm_financials t2
+            JOIN company_metadata m2 ON m2.symbol = t2.company_symbol
+            WHERE m2.industry = m.industry
+              AND t2.net_income_margin IS NOT NULL
+            HAVING COUNT(*) >= %s
+        ) pm ON TRUE
         WHERE r.symbol IS NOT NULL
           AND r.llm_processed_at IS NOT NULL
           AND r.llm_score >= %s
@@ -351,14 +367,19 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
               OR (t.net_debt > t.market_cap),
               FALSE
           )
-          -- Quality floor, sector-relative: require profitability at or above the
-          -- sector-median net margin, and never loss-making — so thin-margin
-          -- sectors aren't blanket-banned but below-par names within them are.
-          -- Falls back to an absolute floor when the sector median is missing;
-          -- missing margin data is left in.
+          -- Quality floor, peer-relative: require profitability at or above the
+          -- industry-median net margin, and never loss-making — so thin-margin
+          -- industries aren't blanket-banned but below-par names within them are.
+          -- Falls back to an absolute floor when no usable peer median exists;
+          -- missing margin data is left in. Escape hatch: a profitable name with
+          -- strong capital returns passes even below the margin median — a
+          -- low-margin/high-ROCE model (reseller, distributor) is structure,
+          -- not fragility. Loss-makers and over-levered names never pass via
+          -- the hatch (margin > 0 here, leverage floor above).
           AND (
               t.net_income_margin IS NULL
-              OR t.net_income_margin >= GREATEST(0, COALESCE(t.net_margin_median, %s))
+              OR t.net_income_margin >= GREATEST(0, COALESCE(pm.margin_median, %s))
+              OR (t.net_income_margin > 0 AND t.roce >= %s)
           )
           AND NOT EXISTS (
               SELECT 1 FROM high_impact_rns h
@@ -368,12 +389,14 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         ORDER BY r.llm_score DESC
         """,
         (
+            PEER_MARGIN_MIN_GROUP,
             HIGH_IMPACT_MIN_LLM_SCORE,
             list(HIGH_IMPACT_CATEGORIES),
             hours,
             HIGH_IMPACT_MIN_MARKET_CAP,
             HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA,
             HIGH_IMPACT_MIN_NET_MARGIN,
+            HIGH_IMPACT_MIN_ROCE,
             HIGH_IMPACT_DEDUPE_DAYS,
         ),
     )
