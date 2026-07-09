@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePostHog } from "posthog-js/react";
 import { API } from "@/lib/api";
-import { DigestSampleModal } from "@/components/DigestSample";
+import { DigestSample } from "@/components/DigestSample";
 
 /**
  * Email-digest signup band for the marketing landing ("/"). The landing page
@@ -22,7 +22,6 @@ export default function LandingSignup() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const [spots, setSpots] = useState<Spots | null>(null);
-  const [showSample, setShowSample] = useState(false);
 
   // Funnel instrumentation (no-op until NEXT_PUBLIC_POSTHOG_KEY is set). All
   // signup events carry source:"landing" so the landing band and the dedicated
@@ -140,18 +139,18 @@ export default function LandingSignup() {
           </p>
         )}
 
-        <button type="button" className="am-cta-sample" onClick={() => setShowSample(true)}>
-          See a sample email →
-        </button>
-
         <div className="am-cta-trust">
           <span><span className="am-tick" aria-hidden="true">●</span> No spam, ever</span>
           <span><span className="am-tick" aria-hidden="true">●</span> Weekday mornings only</span>
           <span><span className="am-tick" aria-hidden="true">●</span> One-click unsubscribe</span>
         </div>
-      </div>
 
-      <DigestSampleModal open={showSample} onClose={() => setShowSample(false)} />
+        {/* The sample email, inline — visitors see the product without a click. */}
+        <div className="am-cta-sample-inline">
+          <div className="am-cta-sample-label">A real morning, exactly as it lands:</div>
+          <DigestSample />
+        </div>
+      </div>
     </section>
   );
 }

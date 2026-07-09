@@ -1,15 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
-
 /**
  * A fuller, faithful mock of a morning RNS digest — multiple cap-bucket
  * sections, each with a couple of items — rendered in the real email's light
  * theme so visitors see exactly what lands in their inbox. Mirrors the layout
  * in backend/email_rns_digest.py (section heading bar + per-item card).
- *
- * Exports the inline body (`DigestSample`) and a lightweight modal wrapper
- * (`DigestSampleModal`) used by the landing signup band's "See a sample" link.
  *
  * The entries are real recent RNS announcements with their actual AI score,
  * thesis, risk and action — a static snapshot, not a live feed.
@@ -154,58 +149,6 @@ export function DigestSample() {
 
       <div style={{ marginTop: 18, color: "#aaa", fontSize: 11, fontFamily: "monospace", textAlign: "center" }}>
         Real RNS announcements, AI-ranked — an example morning.
-      </div>
-    </div>
-  );
-}
-
-export function DigestSampleModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden"; // lock background scroll while open
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
-    };
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Sample email digest"
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.72)",
-        display: "flex", alignItems: "flex-start", justifyContent: "center",
-        padding: "5vh 16px", overflowY: "auto",
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: "relative", width: "100%", maxWidth: 560, background: "#fff",
-          borderRadius: 10, boxShadow: "0 24px 60px rgba(0,0,0,0.5)", padding: "26px 22px 22px",
-        }}
-      >
-        <button
-          onClick={onClose}
-          aria-label="Close sample"
-          style={{
-            position: "absolute", top: 12, right: 12, width: 30, height: 30,
-            border: "1px solid #e5e5e5", background: "#fafafa", borderRadius: 6,
-            color: "#666", cursor: "pointer", fontSize: 18, lineHeight: 1,
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}
-        >
-          ×
-        </button>
-        <DigestSample />
       </div>
     </div>
   );

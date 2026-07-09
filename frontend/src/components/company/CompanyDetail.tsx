@@ -17,6 +17,7 @@ import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
 import StarButton from "@/components/screener/StarButton";
 import { useWatchlist } from "@/app/providers";
+import EmailDigestCTA from "@/components/EmailDigestCTA";
 
 // The waterfall's category labels ("Cost of Revenue", "Other Expenses", …) are
 // too wide to sit horizontally on mobile without overlapping. Rather than rotate
@@ -270,6 +271,8 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
 
   return (
     <div>
+      <EmailDigestCTA source="company_page" />
+
       {/* Header */}
       {isMobile ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 }}>

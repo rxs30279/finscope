@@ -5,6 +5,7 @@ import { useIsAdmin } from "@/hooks/useAdmin";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { lseStatus } from "@/lib/lse";
 import PageHeader from "@/components/layout/PageHeader";
+import EmailDigestCTA from "@/components/EmailDigestCTA";
 import ScorePill from "@/components/screener/ScorePill";
 
 // ── formatting ────────────────────────────────────────────────────────────────
@@ -861,6 +862,8 @@ export default function HighImpactRnsTab({ onSelect }) {
 
   return (
     <div>
+      <EmailDigestCTA source="high_impact_rns" />
+
       <PageHeader
         title={
           <>
