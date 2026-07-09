@@ -23,10 +23,21 @@ load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 from prices import refresh_prices
 from main import compute_and_store_scores, compute_and_store_valuations
-from market import _rebuild_fear_greed_history, warm_price_snapshots
+from market import _lse_open, _rebuild_fear_greed_history, warm_price_snapshots
 
 
 def main() -> int:
+    # Guards against a schedule firing before the close: today's bar doesn't
+    # exist yet on yfinance while the LSE is still trading, so every active
+    # symbol would come back "empty" — and refresh_prices() deactivates a
+    # symbol after 3 consecutive empty fetches (see _DEACTIVATE_AFTER in
+    # prices.py). Two Dokploy schedules (one tuned for BST, one for GMT) rely
+    # on this to make the "wrong season" trigger a safe no-op instead of
+    # mass-flagging the universe as delisted.
+    if _lse_open():
+        print("[prices] LSE still open — skipping this trigger, closed-market run will pick it up")
+        return 0
+
     print(f"[prices] refresh starting at {datetime.now(timezone.utc).isoformat()}")
     try:
         result = refresh_prices()
