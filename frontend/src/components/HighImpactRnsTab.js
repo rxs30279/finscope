@@ -222,7 +222,8 @@ function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height 
   // otherwise a 1-day-old story (sc=1) has only a single "since" point and no
   // line can be drawn, so the jump itself never gets coloured (only the dot).
   const since = sc > 0 ? coords.slice(Math.max(0, splitIdx - 1)) : [];
-  const baseColor = "#6366f1";
+  // Grey: the pre-story stretch is context only — the coloured "since" segment is the story.
+  const baseColor = "#64748b";
   const sinceColor = sinceUp == null ? "#94a3b8" : sinceUp ? "#10b981" : "#ef4444";
   const area =
     `M${coords[0][0].toFixed(1)},${height} ` +
@@ -924,7 +925,11 @@ export default function HighImpactRnsTab({ onSelect }) {
               })}
             </div>
           ) : (
-            <div style={{ overflow: "auto", maxHeight: "calc(100vh - 245px)", scrollbarGutter: "stable" }}>
+            // No height cap: the list stays short (31-day tracking window), so let
+            // the table size to its rows and the page scroll as one — an inner
+            // scrollbox left only a narrow strip visible once the pending-approval
+            // cards pushed it down. overflowX keeps the wide table scrollable.
+            <div style={{ overflowX: "auto", scrollbarGutter: "stable" }}>
               <table style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: 12, fontFamily: "monospace", tableLayout: "auto" }}>
                 <thead>
                   <tr>
