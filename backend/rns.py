@@ -1010,10 +1010,14 @@ def _build_row(raw: dict) -> dict:
 
 
 def _prune_old(days: int = 14) -> dict:
-    """Hard-delete rns_announcements older than `days` (by published_at).
+    """Hard-delete Tier C rns_announcements older than `days` (by published_at).
 
-    Keeps storage bounded — RNS volume is a few hundred rows/day and the UI
-    only ever reads the most recent window, so older rows have no value.
+    Tier C is routine paperwork (PDMR, TVR, buybacks) at high volume with no
+    lasting value, so it's still bounded at `days`. Tier A/B rows are kept
+    indefinitely — they carry llm_sentiment and are the prior-news history
+    shown on the High Impact showcase and fed to the ranker's per-issuer
+    history prompt (see rns_llm._load_history), so they must outlive the
+    showcase's own tracking window instead of a fixed cutoff.
     """
     pool = _get_pool()
     conn = pool.getconn()
@@ -1021,7 +1025,11 @@ def _prune_old(days: int = 14) -> dict:
     try:
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM rns_announcements WHERE published_at < NOW() - (%s || ' days')::interval",
+            """
+            DELETE FROM rns_announcements
+            WHERE published_at < NOW() - (%s || ' days')::interval
+              AND (tier IS NULL OR tier NOT IN ('A', 'B'))
+            """,
             (str(days),),
         )
         deleted = cur.rowcount

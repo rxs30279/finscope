@@ -8,15 +8,17 @@ Pipeline (all driven from run_rns.py after the LLM ranking stage):
      gate — the admin archives unsuitable entries after the fact instead.
   2. record_followups() — copies subsequent tier A/B announcements for each
      tracked company into high_impact_rns_followups, so bad news that surfaces
-     AFTER selection (Luceco-style CEO exit) is captured before the source prunes.
+     AFTER selection (Luceco-style CEO exit) is captured even though Tier C
+     source rows still prune at 14 days (A/B rows themselves are now kept).
 
 Entries stay on the public page indefinitely — there is no auto-archive; the
 admin archives a story manually when it no longer belongs.
 
 Endpoints serve the approved (public) and pending (admin) lists enriched with the
 same per-stock metrics as the watchlist plus MQVR scores, days-since / %-since the
-story, and the follow-up tally. Story data is snapshotted at flag time because
-rns_announcements is pruned after 14 days (run_rns.py) while monitoring runs ~30d.
+story, and the follow-up tally. Story data is snapshotted at flag time; Tier C
+rns_announcements rows still prune after 14 days (run_rns.py) but Tier A/B rows
+are retained indefinitely as prior-news history (see _prune_old).
 
 Main-module helpers (_watchlist_rows, the score functions) are imported lazily
 inside functions to avoid a circular import at load time — main.py registers this
@@ -483,7 +485,8 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
 # ── Follow-up recorder ────────────────────────────────────────────────────────
 def record_followups() -> dict:
     """Snapshot subsequent tier A/B announcements for every actively tracked
-    company, so post-selection news survives the 14-day source prune."""
+    company, so post-selection news survives even the (now Tier-C-only)
+    14-day source prune."""
     active = _q(
         "SELECT id, rns_id, symbol, published_at FROM high_impact_rns "
         "WHERE status IN ('pending', 'approved')"
@@ -604,6 +607,21 @@ def _enrich(entries: list[dict]) -> list[dict]:
     for f in furows:
         fu_map.setdefault(f["showcase_id"], []).append(f)
 
+    # Prior news: tier A/B history for these symbols, filtered per-entry below to
+    # published_at < the story's own date. One batched query for all symbols
+    # (retained indefinitely now that _prune_old spares A/B rows) rather than
+    # N+1 per entry.
+    prows = _q(
+        "SELECT symbol, published_at, headline, url, category, tier, "
+        "       llm_sentiment, llm_thesis, keyword_hits "
+        "FROM rns_announcements WHERE symbol = ANY(%s) AND tier IN ('A', 'B') "
+        "ORDER BY published_at DESC",
+        (symbols,),
+    )
+    prior_by_symbol: dict[str, list] = {}
+    for p in prows:
+        prior_by_symbol.setdefault(p["symbol"], []).append(p)
+
     now = datetime.now(timezone.utc)
     out = []
     for e in entries:
@@ -612,6 +630,10 @@ def _enrich(entries: list[dict]) -> list[dict]:
         })
         m = mqvr.get(e["symbol"], {})
         fus = fu_map.get(e["id"], [])
+        priors = [
+            p for p in prior_by_symbol.get(e["symbol"], [])
+            if p["published_at"] < e["published_at"]
+        ][:10]
 
         # % since news: story-date close (snapshotted at flag time) vs latest price.
         baseline = float(e["story_close"]) if e.get("story_close") is not None \
@@ -676,6 +698,22 @@ def _enrich(entries: list[dict]) -> list[dict]:
                     "category": f["category"],
                 }
                 for f in fus
+            ],
+            # Prior news: A/B announcements for this issuer before the story date.
+            # Empty for most entries today (history only started accumulating
+            # once _prune_old stopped deleting A/B rows) and fills in over time.
+            "prior_pos": sum(1 for p in priors if _sentiment(p) == "positive"),
+            "prior_neg": sum(1 for p in priors if _sentiment(p) == "negative"),
+            "prior_neutral": sum(1 for p in priors if _sentiment(p) == "neutral"),
+            "prior_news": [
+                {
+                    "headline": p["headline"],
+                    "url": p["url"],
+                    "published_at": p["published_at"],
+                    "category": p["category"],
+                    "sentiment": _sentiment(p),
+                }
+                for p in priors
             ],
             "story": {
                 "id": e["id"],

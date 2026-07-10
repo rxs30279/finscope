@@ -57,7 +57,7 @@ def main() -> int:
         except Exception as e:
             print(f"[rns] showcase stage FAILED (non-fatal) — {type(e).__name__}: {e}")
 
-        # Stage 4: Prune old rows (keep 14 days)
+        # Stage 4: Prune old rows (Tier C only, keep 14 days; A/B retained indefinitely)
         pruned = _prune_old(days=14)
         print(f"[rns] prune done — {pruned}")
 

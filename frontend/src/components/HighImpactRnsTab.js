@@ -1200,27 +1200,59 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 )}
                               </div>
 
+                              {/* Prior announcements before this story — builds up over time now
+                                  that tier A/B rows outlive the 14-day source prune (most stories
+                                  still show nothing until their issuer's history accumulates). */}
+                              {(r.prior_news || []).length > 0 && (
+                                <div style={{ marginTop: 12, paddingLeft: 4 }}>
+                                  <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>Previous announcements before this story</div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                    {r.prior_news.map((p, pi) => {
+                                      const c = p.sentiment === "positive" ? "#10b981" : p.sentiment === "negative" ? "#ef4444" : "#94a3b8";
+                                      const sym = p.sentiment === "positive" ? "▲" : p.sentiment === "negative" ? "▼" : "—";
+                                      const inner = (
+                                        <>
+                                          <span style={{ color: c, fontWeight: 700, width: 14, flexShrink: 0 }}>{sym}</span>
+                                          <span style={{ color: "#475569", fontSize: 10, width: 40, flexShrink: 0 }}>{fmtWhen(p.published_at)}</span>
+                                          <span style={{ color: "#cbd5e1", fontSize: 11.5 }}>{p.headline}</span>
+                                        </>
+                                      );
+                                      return p.url ? (
+                                        <a key={pi} href={p.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none" }}>
+                                          {inner}
+                                        </a>
+                                      ) : (
+                                        <div key={pi} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>{inner}</div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
                               {/* Subsequent announcements since tracking began */}
                               {(r.followups || []).length > 0 && (
-                                <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5, paddingLeft: 4 }}>
-                                  {r.followups.map((f, fi) => {
-                                    const c = f.sentiment === "positive" ? "#10b981" : f.sentiment === "negative" ? "#ef4444" : "#94a3b8";
-                                    const sym = f.sentiment === "positive" ? "▲" : f.sentiment === "negative" ? "▼" : "—";
-                                    const inner = (
-                                      <>
-                                        <span style={{ color: c, fontWeight: 700, width: 14, flexShrink: 0 }}>{sym}</span>
-                                        <span style={{ color: "#475569", fontSize: 10, width: 40, flexShrink: 0 }}>{fmtWhen(f.published_at)}</span>
-                                        <span style={{ color: "#cbd5e1", fontSize: 11.5 }}>{f.headline}</span>
-                                      </>
-                                    );
-                                    return f.url ? (
-                                      <a key={fi} href={f.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none" }}>
-                                        {inner}
-                                      </a>
-                                    ) : (
-                                      <div key={fi} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>{inner}</div>
-                                    );
-                                  })}
+                                <div style={{ marginTop: 10, paddingLeft: 4 }}>
+                                  <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>Since this story</div>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                    {r.followups.map((f, fi) => {
+                                      const c = f.sentiment === "positive" ? "#10b981" : f.sentiment === "negative" ? "#ef4444" : "#94a3b8";
+                                      const sym = f.sentiment === "positive" ? "▲" : f.sentiment === "negative" ? "▼" : "—";
+                                      const inner = (
+                                        <>
+                                          <span style={{ color: c, fontWeight: 700, width: 14, flexShrink: 0 }}>{sym}</span>
+                                          <span style={{ color: "#475569", fontSize: 10, width: 40, flexShrink: 0 }}>{fmtWhen(f.published_at)}</span>
+                                          <span style={{ color: "#cbd5e1", fontSize: 11.5 }}>{f.headline}</span>
+                                        </>
+                                      );
+                                      return f.url ? (
+                                        <a key={fi} href={f.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ display: "flex", alignItems: "baseline", gap: 8, textDecoration: "none" }}>
+                                          {inner}
+                                        </a>
+                                      ) : (
+                                        <div key={fi} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>{inner}</div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
                               )}
                             </td>
