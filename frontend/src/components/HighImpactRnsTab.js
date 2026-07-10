@@ -1155,8 +1155,10 @@ export default function HighImpactRnsTab({ onSelect }) {
                         {isStoryOpen && (
                           <tr style={{ background: baseBg }}>
                             <td colSpan={COLS.length} style={{ ...S.td, whiteSpace: "normal", borderBottom: "1px solid #1a1a1a", paddingTop: 0 }}>
-                              {/* Headline row */}
-                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                              {/* Headline row — capped to the analysis block's width so the
+                                  admin buttons stay on screen rather than at the far right
+                                  edge of the horizontally-scrolling table. */}
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", maxWidth: 760 }}>
                                 <a
                                   href={st.url}
                                   target="_blank"
