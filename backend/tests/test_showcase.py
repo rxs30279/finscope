@@ -238,15 +238,6 @@ def test_record_followups_excludes_story_and_tags_sentiment():
     assert ex.call_args[0][1][-1] == "negative"
 
 
-# ── expire_tracked_entries ────────────────────────────────────────────────────
-def test_expire_archives_only_expired_approved():
-    with patch.object(showcase, "_exec", return_value=3) as ex:
-        res = showcase.expire_tracked_entries()
-    assert res == {"archived": 3}
-    sql = ex.call_args[0][0]
-    assert "archived" in sql and "approved" in sql and "track_until" in sql
-
-
 # ── status endpoint ───────────────────────────────────────────────────────────
 def test_status_happy(client):
     with patch("main.query", return_value=[{"id": 5}]):
@@ -264,21 +255,6 @@ def test_status_not_found(client):
 def test_status_bad_value(client):
     r = client.post("/api/showcase/5/status", json={"status": "bogus"})
     assert r.status_code == 422
-
-
-# ── extend endpoint ───────────────────────────────────────────────────────────
-def test_extend_happy(client):
-    when = datetime(2026, 8, 1, tzinfo=timezone.utc)
-    with patch("main.query", return_value=[{"track_until": when}]):
-        r = client.post("/api/showcase/5/extend")
-    assert r.status_code == 200
-    assert r.json()["id"] == 5
-
-
-def test_extend_not_found(client):
-    with patch("main.query", return_value=[]):
-        r = client.post("/api/showcase/5/extend")
-    assert r.status_code == 404
 
 
 # ── list endpoint ─────────────────────────────────────────────────────────────

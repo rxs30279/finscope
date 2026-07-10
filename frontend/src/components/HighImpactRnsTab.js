@@ -65,9 +65,9 @@ const pctColor = (v) =>
 const TIER_COLOR = { A: "#f87171", B: "#fbbf24", C: "#94a3b8" };
 
 const VET_STYLE = {
-  include: { color: "#10b981", bg: "#0d2318", label: "manual screen: include" },
-  caution: { color: "#f59e0b", bg: "#2a1c00", label: "manual screen: caution" },
-  exclude: { color: "#ef4444", bg: "#2a0d0d", label: "manual screen: exclude" },
+  include: { color: "#10b981", bg: "#0d2318", label: "AI vet: include" },
+  caution: { color: "#f59e0b", bg: "#2a1c00", label: "AI vet: caution" },
+  exclude: { color: "#ef4444", bg: "#2a0d0d", label: "AI vet: exclude" },
 };
 
 const S = {
@@ -396,7 +396,7 @@ function PendingCard({ entry, onApprove, onReject }) {
       {st.llm_thesis && <div style={{ color: "#94a3b8", fontSize: 12, lineHeight: 1.45 }}>{st.llm_thesis}</div>}
       {vet && st.vet_rationale && (
         <div style={{ color: vet.color, fontSize: 11.5, lineHeight: 1.45, opacity: 0.9 }}>
-          <span style={{ fontWeight: 700 }}>Manual screen:</span> {st.vet_rationale}
+          <span style={{ fontWeight: 700 }}>AI vet:</span> {st.vet_rationale}
         </div>
       )}
       <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
@@ -450,22 +450,17 @@ function LabelledPill({ label, value, invert }) {
 // block as desktop but full-width, no horizontal scroll involved.
 function MobileCard({
   r, isOpen, onToggle, onSelect, isAdmin, live, price, changePct, rangePosValue,
-  isNewsSelected, onNewsSelect, dl, vet, st, extendTracking, setStatus,
+  isNewsSelected, onNewsSelect, vet, st, setStatus,
 }) {
   const [showMqvrInfo, setShowMqvrInfo] = useState(false);
-  const caretDanger = isAdmin && dl != null && dl <= 5;
-  const caretColor = isOpen ? "#f97316" : caretDanger ? "#ef4444" : "#93c5fd";
+  const caretColor = isOpen ? "#f97316" : "#93c5fd";
   return (
     <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 6, overflow: "hidden" }}>
       <div onClick={onSelect} style={{ padding: "12px 14px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8 }}>
           <button
             onClick={(e) => { e.stopPropagation(); onToggle(); }}
-            title={
-              caretDanger
-                ? `Tracking ${dl <= 0 ? "expired" : `ends in ${dl}d`} — open to Extend`
-                : isOpen ? "Hide story & analysis" : "Show story & analysis"
-            }
+            title={isOpen ? "Hide story & analysis" : "Show story & analysis"}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -473,7 +468,7 @@ function MobileCard({
               width: 28,
               height: 28,
               background: isOpen ? "rgba(249,115,22,0.18)" : "#1c2740",
-              border: `1px solid ${isOpen ? "#f97316" : caretDanger ? "#ef4444" : "#3d5273"}`,
+              border: `1px solid ${isOpen ? "#f97316" : "#3d5273"}`,
               borderRadius: 5,
               color: caretColor,
               cursor: "pointer",
@@ -496,8 +491,13 @@ function MobileCard({
           </button>
           <div style={{ width: 88, flexShrink: 0, marginLeft: 8 }}>
             <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
-            <div style={{ marginTop: 3 }}>
+            <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
               <IndexBadge index={r.ftse_index} full />
+              {vet && (
+                <span style={{ fontSize: 8.5, fontWeight: 700, color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "capitalize" }}>
+                  {st.vet_verdict}
+                </span>
+              )}
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, marginLeft: 2, flexShrink: 0 }}>
@@ -621,7 +621,7 @@ function MobileCard({
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 14 }}>
             <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
             <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
-            {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+            {vet && <AnalysisRow label={`AI vet · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
             {r.fwd_multiple != null && r.fwd_quote && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <AnalysisRow
@@ -667,12 +667,6 @@ function MobileCard({
 
           {isAdmin && (
             <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
-              {dl != null && dl <= 5 && (
-                <span style={{ color: dl <= 0 ? "#f87171" : "#f59e0b", fontSize: 10, fontWeight: 700 }}>
-                  {dl <= 0 ? "expired" : `${dl}d left`}
-                </span>
-              )}
-              <button onClick={() => extendTracking(r.showcase_id)} style={btn("#60a5fa")}>Extend</button>
               <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
             </div>
           )}
@@ -840,25 +834,12 @@ export default function HighImpactRnsTab({ onSelect }) {
     [refetch],
   );
 
-  const extendTracking = useCallback(
-    (id) =>
-      fetch(`${API}/showcase/${id}/extend`, { method: "POST", headers: adminHeaders() })
-        .then(() => refetch())
-        .catch(() => {}),
-    [refetch],
-  );
-
   const toggleStory = (id) =>
     setOpenStory((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-
-  const daysLeft = (r) => {
-    if (!r.track_until) return null;
-    return Math.ceil((new Date(r.track_until).getTime() - Date.now()) / 86400000);
-  };
 
   return (
     <div>
@@ -1011,18 +992,16 @@ export default function HighImpactRnsTab({ onSelect }) {
                     rangePosValue={rangePos(r)}
                     isNewsSelected={r.symbol === selectedNewsSymbol}
                     onNewsSelect={() => setSelectedNewsSymbol(r.symbol)}
-                    dl={daysLeft(r)}
-                    extendTracking={extendTracking}
                     setStatus={setStatus}
                   />
                 );
               })}
             </div>
           ) : (
-            // No height cap: the list stays short (31-day tracking window), so let
-            // the table size to its rows and the page scroll as one — an inner
-            // scrollbox left only a narrow strip visible once the pending-approval
-            // cards pushed it down. overflowX keeps the wide table scrollable.
+            // No height cap: the list stays curated and short, so let the table
+            // size to its rows and the page scroll as one — an inner scrollbox
+            // left only a narrow strip visible once the pending-approval cards
+            // pushed it down. overflowX keeps the wide table scrollable.
             <div style={{ overflowX: "auto", scrollbarGutter: "stable" }}>
               <table style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: 12, fontFamily: "monospace", tableLayout: "auto" }}>
                 <thead>
@@ -1039,7 +1018,6 @@ export default function HighImpactRnsTab({ onSelect }) {
                     const live = isLive(r);
                     const baseBg = i % 2 === 0 ? "#1e293b" : "#162032";
                     const st = r.story || {};
-                    const dl = daysLeft(r);
                     const isStoryOpen = openStory.has(r.showcase_id);
                     const vet = st.vet_verdict ? VET_STYLE[st.vet_verdict] : null;
                     return (
@@ -1056,11 +1034,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                                   e.stopPropagation();
                                   toggleStory(r.showcase_id);
                                 }}
-                                title={
-                                  isAdmin && dl != null && dl <= 5
-                                    ? `Tracking ${dl <= 0 ? "expired" : `ends in ${dl}d`} — open to Extend`
-                                    : isStoryOpen ? "Hide story & analysis" : "Show story & analysis"
-                                }
+                                title={isStoryOpen ? "Hide story & analysis" : "Show story & analysis"}
                                 style={{
                                   display: "inline-flex",
                                   alignItems: "center",
@@ -1068,10 +1042,9 @@ export default function HighImpactRnsTab({ onSelect }) {
                                   width: 28,
                                   height: 28,
                                   background: isStoryOpen ? "rgba(249,115,22,0.12)" : "#161b26",
-                                  // Red border = admin heads-up that tracking ends within 5 days.
-                                  border: `1px solid ${isStoryOpen ? "#f97316" : isAdmin && dl != null && dl <= 5 ? "#ef4444" : "#2a3444"}`,
+                                  border: `1px solid ${isStoryOpen ? "#f97316" : "#2a3444"}`,
                                   borderRadius: 5,
-                                  color: isStoryOpen ? "#f97316" : isAdmin && dl != null && dl <= 5 ? "#ef4444" : "#60a5fa",
+                                  color: isStoryOpen ? "#f97316" : "#60a5fa",
                                   cursor: "pointer",
                                   fontSize: 14,
                                   padding: 0,
@@ -1094,8 +1067,13 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 <div style={{ color: "#64748b", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                   {r.name}
                                 </div>
-                                <div style={{ marginTop: 3 }}>
+                                <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
                                   <IndexBadge index={r.ftse_index} full />
+                                  {vet && (
+                                    <span style={{ fontSize: 8.5, fontWeight: 700, color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "capitalize" }}>
+                                      {st.vet_verdict}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -1190,12 +1168,6 @@ export default function HighImpactRnsTab({ onSelect }) {
                                 </a>
                                 {isAdmin && (
                                   <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
-                                    {dl != null && dl <= 5 && (
-                                      <span style={{ color: dl <= 0 ? "#f87171" : "#f59e0b", fontSize: 10, fontWeight: 700 }}>
-                                        {dl <= 0 ? "expired" : `${dl}d left`}
-                                      </span>
-                                    )}
-                                    <button onClick={() => extendTracking(r.showcase_id)} style={btn("#60a5fa")}>Extend</button>
                                     <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
                                   </span>
                                 )}
@@ -1205,7 +1177,7 @@ export default function HighImpactRnsTab({ onSelect }) {
                               <div style={{ marginTop: 12, paddingLeft: 4, display: "flex", flexDirection: "column", gap: 14, whiteSpace: "normal", maxWidth: 760 }}>
                                 <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
                                 <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
-                                {vet && <AnalysisRow label={`Manual screen · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+                                {vet && <AnalysisRow label={`AI vet · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
                                 {r.fwd_multiple != null && r.fwd_quote && (
                                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                                     <AnalysisRow

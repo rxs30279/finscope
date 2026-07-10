@@ -1061,7 +1061,7 @@ If you don't want to open the RNS News page every morning, the app can bring the
 
 ### 8.6 High Impact RNS — the Curated Showcase
 
-The **High Impact RNS** page is the newest and most selective channel built on the RNS pipeline. Where the RNS News feed shows you *everything ranked* (typically dozens of items a day), High Impact RNS shows a **small, curated list of the best positive stories** — each one tracked for a month afterwards so you can see whether the signal actually played out.
+The **High Impact RNS** page is the newest and most selective channel built on the RNS pipeline. Where the RNS News feed shows you *everything ranked* (typically dozens of items a day), High Impact RNS shows a **small, curated list of the best positive stories** — each one tracked from the day it broke so you can see whether the signal actually played out.
 
 Think of the two pages as different altitudes over the same data:
 
@@ -1069,8 +1069,8 @@ Think of the two pages as different altitudes over the same data:
 |---|---|---|
 | **Volume** | Dozens of items per day | A handful of names at any time |
 | **Direction** | Positive, negative and neutral | Positive stories only |
-| **Selection** | Everything above your score filter | Six automated gates + an AI second opinion + human approval |
-| **Lifespan** | 14 days, then pruned | Snapshotted and tracked for 31 days from the story |
+| **Selection** | Everything above your score filter | Six automated gates + a sceptical AI vet |
+| **Lifespan** | 14 days, then pruned | Snapshotted and tracked from the story date until the curator retires it |
 | **Purpose** | Catch catalysts as they land | Watch whether the highest-conviction signals deliver |
 
 #### The selection funnel, gate by gate
@@ -1086,13 +1086,13 @@ Every announcement that survives the ranking stage ([§8.2](#82-the-two-layer-pi
 | 5 | **Size** | Market cap **≥ £50m** | Keeps the list to genuinely tradeable names with real liquidity |
 | 6 | **Balance sheet** | Excluded if net debt > 3× EBITDA, or the company carries net debt with no profit to service it, or net debt exceeds the entire market cap | Over-levered businesses convert good news into shareholder value poorly — the equity sits behind the debt |
 | 7 | **Quality** | Net margin must be at or above **max(0, its own industry's median)** — and never loss-making. The industry median is computed live across every company in the same industry and only trusted when the industry has at least **5 names** (otherwise a 2% absolute floor applies). **Escape hatch:** a profitable company with **ROCE ≥ 15%** passes even below the margin median | Peer-relative on purpose: a grocer's 3% margin can be best-in-class while a software firm's 3% is a red flag. Industry rather than sector because sector medians get distorted (investment trusts drag the Financial Services median to ~70%, which would ban every real bank). The hatch exists because some excellent businesses are *built* low-margin: a reseller doubling profits on strong capital returns is quality, not fragility |
-| 8 | **Freshness** | The same company can't be flagged twice within **30 days** | One story per name per month — the tracking window does the follow-up work |
+| 8 | **Freshness** | The same company can't be flagged twice within **30 days** | One story per name per month — the ongoing track does the follow-up work |
 
 Gates 6 and 7 deliberately **mirror the leverage and margin flags inside the AI ranker's prompt** — the two stages judge companies by the same standards, so a name the ranker was told to treat with caution can't slip through the showcase selection on a technicality.
 
-#### The AI second opinion ("manual screen")
+#### The AI second opinion (the "AI vet")
 
-Candidates that clear all eight gates get one more AI pass before a human sees them — a *sceptical* review with the opposite brief to the ranker. Instead of asking "is this important?", it asks: **"is this positive-looking story one the market might still punish?"** It specifically hunts for:
+Candidates that clear all eight gates get one more AI pass before going live — a *sceptical* review with the opposite brief to the ranker. Instead of asking "is this important?", it asks: **"is this positive-looking story one the market might still punish?"** It specifically hunts for:
 
 - a secondary or overseas listing dressed up as good news (fragments liquidity)
 - guidance quietly trimmed inside an upbeat results headline
@@ -1100,20 +1100,20 @@ Candidates that clear all eight gates get one more AI pass before a human sees t
 - profit flattered by one-off or non-cash gains
 - headline growth flattered by a weak base period — it is given the company's last five years of accounts from the app's own database and works out the implied *sequential* run-rate against the immediately preceding half, so a "+45% year-on-year" measured against a depressed comparator reads as the deceleration it really is (it is instructed to use only the supplied figures, never its own recollection of a company's accounts)
 
-Its verdict — **include / caution / exclude**, with a one-line rationale — appears on the page as the *manual screen* badge. It is **advisory only**: it never blocks a story automatically, it arms the human reviewer.
+Its verdict — **include / caution / exclude**, with a one-line rationale — appears on the page as the *AI vet* badge. It is **advisory only**: it never blocks a story automatically, it arms the reader's judgement.
 
-#### Human approval — the final gate
+#### Going live — and human oversight after the fact
 
-Nothing appears on the public page automatically. Flagged candidates land in a pending queue where a human reviews the story, the AI thesis and risks, and the sceptical verdict, then approves or rejects. What you see on the page is therefore: **rules filter → AI ranking → six quality gates → AI devil's-advocate review → human sign-off.**
+Stories that clear the gates appear on the public page automatically, vet badge and all. Human oversight works the other way round: a story that turns out not to belong is **archived** off the page rather than pre-approved onto it. What you see on the page is therefore: **rules filter → AI ranking → six quality gates → AI devil's-advocate review**, with unsuitable names removed as they are spotted.
 
-#### What happens after selection — the 31-day track
+#### What happens after selection — the ongoing track
 
 Selection is where most tools stop; here it is where the page starts. The moment a story is flagged:
 
 - The **story is snapshotted** — headline, AI analysis, summary, and the share price at the story date (the "story close"). This matters because the RNS feed itself is pruned after 14 days; the showcase keeps its own copy.
 - The **Change** column then tracks the share price from the story close to now — an honest, fixed-baseline record of what happened after the signal, whether you look the next day or three weeks later.
 - A **follow-up recorder** copies every *subsequent* Tier A/B announcement the company makes while it is being tracked, each tagged with the same ▲/▼/— sentiment engine. The **Follow-up RNS** column shows the tally — so if a company delivers great results and the CEO resigns a week later, the deterioration is visible on the page rather than lost to the feed prune.
-- After **31 days** from the story date the entry is automatically archived (tracking can be extended in 30-day steps where the story is still developing).
+- The entry **stays on the page, still tracking, until the curator retires it** — there is no fixed expiry, so a story that keeps developing keeps its scoreboard.
 
 #### Reading the table
 
@@ -1128,7 +1128,7 @@ Selection is where most tools stop; here it is where the page starts. The moment
 | **Follow-up RNS** | ▲/▼ tally of the company's announcements since the story |
 | **News** | Latest headlines for the selected name |
 
-Expanding a row reveals the full story block: the AI **thesis** and **risks** from ranking day, the **manual screen** verdict and rationale, the **verbatim sentence** any Fwd Multiple was computed from, and the announcement **summary** — the complete evidence trail for why the name was selected.
+Expanding a row reveals the full story block: the AI **thesis** and **risks** from ranking day, the **AI vet** verdict and rationale, the **verbatim sentence** any Fwd Multiple was computed from, and the announcement **summary** — the complete evidence trail for why the name was selected.
 
 #### The Fwd Multiple column
 
@@ -1155,7 +1155,7 @@ Where the forward figure is an EBITDA one, the expanded row also shows a **trail
 
 #### How to use it — and how not to
 
-- **It is a monitored watchlist, not a tip sheet.** Every name passed strict quality gates, but the 31-day track exists precisely because good stories sometimes fail. The Change and Follow-up columns are the scoreboard — read them, don't assume.
+- **It is a monitored watchlist, not a tip sheet.** Every name passed strict quality gates, but the ongoing track exists precisely because good stories sometimes fail. The Change and Follow-up columns are the scoreboard — read them, don't assume.
 - **Check how much has already moved.** The Change column is measured from the story date. If a name is +15% since its story, the easy part of the move may be gone; the question becomes whether the re-rating continues.
 - **Watch the follow-up sentiment.** A red ▼ appearing in the Follow-up column mid-track is exactly the early-warning signal the recorder was built for — open it before the market forces you to.
 - **Use the Fwd Multiple to judge what the re-rating has left to do.** A story on `<7× EV/EBITDA` of upgraded guidance is a very different proposition from the same story at 20× — and a consensus-based bound means the market's numbers haven't caught up with the company's own statement yet. Always glance at the quoted source sentence in the expanded row before leaning on the figure.

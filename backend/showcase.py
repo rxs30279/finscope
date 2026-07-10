@@ -3,13 +3,15 @@
 Pipeline (all driven from run_rns.py after the LLM ranking stage):
   1. flag_high_impact_candidates() — rules pick candidates (high llm_score,
      positive sentiment, performance-report category, market-cap floor), an
-     advisory LLM vet flags market-punished positives, and each lands as
-     status='pending' for a human to approve.
+     advisory LLM vet flags market-punished positives, and each lands directly
+     as status='approved' (live on the public page). There is no human approval
+     gate — the admin archives unsuitable entries after the fact instead.
   2. record_followups() — copies subsequent tier A/B announcements for each
      tracked company into high_impact_rns_followups, so bad news that surfaces
      AFTER selection (Luceco-style CEO exit) is captured before the source prunes.
-  3. expire_tracked_entries() — auto-archives approved entries 31 days after the
-     story date (admin Extend pushes that out).
+
+Entries stay on the public page indefinitely — there is no auto-archive; the
+admin archives a story manually when it no longer belongs.
 
 Endpoints serve the approved (public) and pending (admin) lists enriched with the
 same per-stock metrics as the watchlist plus MQVR scores, days-since / %-since the
@@ -25,7 +27,7 @@ import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -49,8 +51,6 @@ HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # fallback margin floor when no usable
 HIGH_IMPACT_MIN_ROCE = 0.15               # capital-returns escape hatch past the margin floor (profitable names only)
 PEER_MARGIN_MIN_GROUP = 5                 # industry margin medians need at least this many names to count
 HIGH_IMPACT_DEDUPE_DAYS = 30             # don't re-flag the same symbol within a month
-TRACK_DAYS = 31                          # monitoring window from the story date
-EXTEND_DAYS = 30                         # admin Extend button adds this per click
 
 
 # ── Sentiment (server-side port of RnsTab.js getSentiment) ────────────────────
@@ -337,9 +337,10 @@ def _vet_candidate(cand: dict, before=None) -> dict:
 
 # ── Auto-flag ─────────────────────────────────────────────────────────────────
 def flag_high_impact_candidates(hours: int = 48) -> dict:
-    """Flag rules-passing candidates from the last `hours` as pending showcase
-    entries. Advisory-vets each and snapshots the story. Idempotent via the
-    rns_id unique constraint. Returns a counts dict for cron logs."""
+    """Flag rules-passing candidates from the last `hours` straight onto the
+    approved (public) showcase. Advisory-vets each and snapshots the story.
+    Idempotent via the rns_id unique constraint. Returns a counts dict for
+    cron logs."""
     cands = _q(
         """
         SELECT r.id, r.symbol, r.company_name, r.headline, r.url, r.published_at,
@@ -438,7 +439,6 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         from showcase_fwd import extract_fwd_fields
         fwd = extract_fwd_fields(c)
 
-        track_until = c["published_at"] + timedelta(days=TRACK_DAYS)
         n = _exec(
             """
             INSERT INTO high_impact_rns
@@ -449,11 +449,11 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                  fwd_metric, fwd_value, fwd_currency, fwd_period, fwd_basis,
                  fwd_is_bound, fwd_quote, fwd_ev, fwd_multiple, fwd_model,
                  fwd_processed_at,
-                 track_until, status)
+                 status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, 'pending')
+                    'approved')
             ON CONFLICT (rns_id) DO NOTHING
             """,
             (
@@ -468,7 +468,6 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                 fwd["fwd_period"], fwd["fwd_basis"], fwd["fwd_is_bound"],
                 fwd["fwd_quote"], fwd["fwd_ev"], fwd["fwd_multiple"],
                 fwd["fwd_model"], fwd["fwd_processed_at"],
-                track_until,
             ),
         )
         flagged += n
@@ -515,16 +514,6 @@ def record_followups() -> dict:
                 ),
             )
     return {"active": len(active), "inserted": inserted}
-
-
-# ── Auto-archive ──────────────────────────────────────────────────────────────
-def expire_tracked_entries() -> dict:
-    """Archive approved entries whose 31-day tracking window has elapsed."""
-    n = _exec(
-        "UPDATE high_impact_rns SET status = 'archived', decided_at = NOW() "
-        "WHERE status = 'approved' AND track_until IS NOT NULL AND track_until < NOW()"
-    )
-    return {"archived": n}
 
 
 # ── Enrichment ────────────────────────────────────────────────────────────────
@@ -656,7 +645,6 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "pct_since_next_open": pct_next_open,
             "next_open": next_open,
             "spark_since": _spark_since_count(e["symbol"], e["published_at"]),
-            "track_until": e.get("track_until"),
             # Forward multiple (extraction-only LLM + Python arithmetic; see
             # showcase_fwd.py). fwd_multiple is NULL when nothing usable was
             # stated — the UI shows a dash, never a guess.
@@ -751,21 +739,6 @@ def set_status(entry_id: int, body: StatusBody):
     if not rows:
         raise HTTPException(404, "showcase entry not found")
     return {"id": entry_id, "status": new}
-
-
-@router.post("/{entry_id}/extend", dependencies=[Depends(require_admin_token)])
-def extend_tracking(entry_id: int):
-    """Admin — push an approved entry's tracking window out by EXTEND_DAYS."""
-    rows = _q(
-        "UPDATE high_impact_rns "
-        "SET track_until = GREATEST(COALESCE(track_until, NOW()), NOW()) "
-        "                  + (%s || ' days')::interval "
-        "WHERE id = %s AND status = 'approved' RETURNING track_until",
-        (EXTEND_DAYS, entry_id),
-    )
-    if not rows:
-        raise HTTPException(404, "approved showcase entry not found")
-    return {"id": entry_id, "track_until": rows[0]["track_until"]}
 
 
 @router.post("/flag", dependencies=[Depends(require_admin_token)])
