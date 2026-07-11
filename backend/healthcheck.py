@@ -17,6 +17,8 @@ What it checks
                        cron (stale > ~1 quarter, or last run degraded)
     - Dividends        pipeline_runs marker for the weekly dividend-history
                        refresh (stale > ~1.5 weeks, or last run degraded)
+    - Shorts           pipeline_runs marker for the daily FCA short-position
+                       refresh (stale > 3 days, or last run degraded)
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
     - Backend API      GET {API_BASE_URL}/api/filters
@@ -204,6 +206,22 @@ def run_db_checks() -> None:
         # Weekly Dokploy cron (finscope-dividends) — successive runs are ~7d
         # apart, so give a couple of days' slack before flagging a miss.
         status = _tier(d, warn_at=8, fail_at=10)
+        if row["status"] != "ok":
+            status = FAIL  # last run errored (see detail)
+        return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"
+
+    @check("shorts.refresh")
+    def _shorts_refresh():
+        row = _query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'shorts_refresh'"
+        )
+        if not row or row["last_run_at"] is None:
+            return FAIL, "no shorts_refresh marker in pipeline_runs"
+        d = _age_hours(row["last_run_at"]) / 24.0
+        # Weekday Dokploy cron -- weekend gaps are expected, so give slack
+        # before flagging a miss (warn > 3 days, fail > 5 days).
+        status = _tier(d, warn_at=3, fail_at=5)
         if row["status"] != "ok":
             status = FAIL  # last run errored (see detail)
         return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"

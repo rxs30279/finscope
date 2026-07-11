@@ -16,6 +16,7 @@ import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
 import DividendsTab from "./DividendsTab";
+import ShortInterestMetric from "./ShortInterestSection";
 import StarButton from "@/components/screener/StarButton";
 import { useWatchlist } from "@/app/providers";
 import EmailDigestCTA from "@/components/EmailDigestCTA";
@@ -544,6 +545,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
             {[["Current Ratio",snap.current_ratio,"ratio"],["Debt/Equity",snap.debt_to_equity,"ratio"],["Debt/Assets",snap.debt_to_assets,"ratio"],["Cash",snap.cash_and_equiv,"currency"],["Net Debt",snap.net_debt,"currency"],["Working Capital",snap.working_capital,"currency"],["Interest Coverage",snap.interest_coverage,"ratio"],["Book Value",snap.book_value,"currency"]].map(([l,v,t]: any) => (
               <MetricCard key={l} label={l} value={fmt(v, t, fcur)} />
             ))}
+            <ShortInterestMetric symbol={symbol} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
             <div style={S.card}>
