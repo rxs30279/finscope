@@ -15,6 +15,8 @@ What it checks
     - Analysts         MAX(snapshot_date) on analyst_snapshots
     - Index refresh    pipeline_runs marker for the quarterly index-membership
                        cron (stale > ~1 quarter, or last run degraded)
+    - Dividends        pipeline_runs marker for the weekly dividend-history
+                       refresh (stale > ~1.5 weeks, or last run degraded)
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
     - Backend API      GET {API_BASE_URL}/api/filters
@@ -189,6 +191,22 @@ def run_db_checks() -> None:
         if row["status"] != "ok":
             status = FAIL  # last run blocked its purges (or otherwise degraded)
         return status, f"last apply {d:.0f}d ago, status '{row['status']}', {row['detail']}"
+
+    @check("dividends.refresh")
+    def _dividends_refresh():
+        row = _query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'dividends_refresh'"
+        )
+        if not row or row["last_run_at"] is None:
+            return FAIL, "no dividends_refresh marker in pipeline_runs"
+        d = _age_hours(row["last_run_at"]) / 24.0
+        # Weekly Dokploy cron (finscope-dividends) — successive runs are ~7d
+        # apart, so give a couple of days' slack before flagging a miss.
+        status = _tier(d, warn_at=8, fail_at=10)
+        if row["status"] != "ok":
+            status = FAIL  # last run errored (see detail)
+        return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"
 
     @check("financials.rotation")
     def _financials():
