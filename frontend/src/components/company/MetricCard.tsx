@@ -1,7 +1,7 @@
 "use client";
 
 interface Props {
-  label: string;
+  label: React.ReactNode;
   value: React.ReactNode;
   color?: string;
   compact?: boolean;

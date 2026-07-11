@@ -15,6 +15,7 @@ import FairValueCard from "./FairValueCard";
 import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
+import DividendsTab from "./DividendsTab";
 import StarButton from "@/components/screener/StarButton";
 import { useWatchlist } from "@/app/providers";
 import EmailDigestCTA from "@/components/EmailDigestCTA";
@@ -223,7 +224,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
     return [lo < 0 ? lo - pad : lo, hi] as [number, number];
   })();
 
-  const tabs = ["chart", "overview", "financials", "valuation", "health", "growth", "analysts", "news"];
+  const tabs = ["chart", "overview", "financials", "valuation", "health", "growth", "dividends", "analysts", "news"];
 
   const descriptors = (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -610,6 +611,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
         </div>
       )}
 
+      {tab === "dividends" && <DividendsTab symbol={symbol} />}
       {tab === "analysts" && <AnalystTab symbol={symbol} />}
       {tab === "news" && <NewsTab symbol={symbol} split />}
     </div>

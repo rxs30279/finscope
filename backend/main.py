@@ -23,6 +23,7 @@ from subscribers import router as subscribers_router
 from feedback import router as feedback_router
 from showcase import router as showcase_router
 from research import router as research_router, published_slugs as _research_slugs
+from dividends import router as dividends_router
 from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
 
@@ -47,6 +48,7 @@ app.include_router(subscribers_router)
 app.include_router(feedback_router)
 app.include_router(showcase_router)
 app.include_router(research_router)
+app.include_router(dividends_router)
 
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
