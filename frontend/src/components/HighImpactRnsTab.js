@@ -703,13 +703,13 @@ const COLS = [
 ];
 
 // ── main component ────────────────────────────────────────────────────────────
-export default function HighImpactRnsTab({ onSelect }) {
+export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
   const isAdmin = useIsAdmin();
   const isMobile = useIsMobile();
 
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState(() => (Array.isArray(initialRows) ? initialRows : []));
   const [pending, setPending] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!Array.isArray(initialRows));
   const [liveQuotes, setLiveQuotes] = useState({});
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
   const [openStory, setOpenStory] = useState(() => new Set());
@@ -722,11 +722,19 @@ export default function HighImpactRnsTab({ onSelect }) {
 
   const symbols = useMemo(() => rows.map((r) => r.symbol), [rows]);
 
-  // Approved showcase (public) + pending candidates (admin only).
+  // Approved showcase (public) + pending candidates (admin only). The very
+  // first run reuses the SSR-fetched `initialRows` instead of re-requesting
+  // `/showcase` (it's already in the initial HTML) — any later run, forced by
+  // refetch() advancing refreshKey, always fetches fresh.
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    const jobs = [fetch(`${API}/showcase`).then((r) => (r.ok ? r.json() : []))];
+    const skipApproved = Array.isArray(initialRows) && refreshKey === 0;
+    if (!skipApproved) setLoading(true);
+    const jobs = [
+      skipApproved
+        ? Promise.resolve(null)
+        : fetch(`${API}/showcase`).then((r) => (r.ok ? r.json() : [])),
+    ];
     jobs.push(
       isAdmin
         ? fetch(`${API}/showcase/pending`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
@@ -735,7 +743,7 @@ export default function HighImpactRnsTab({ onSelect }) {
     Promise.all(jobs)
       .then(([approved, pend]) => {
         if (cancelled) return;
-        setRows(Array.isArray(approved) ? approved : []);
+        if (approved !== null) setRows(Array.isArray(approved) ? approved : []);
         setPending(Array.isArray(pend) ? pend : []);
         setLoading(false);
       })
@@ -743,7 +751,7 @@ export default function HighImpactRnsTab({ onSelect }) {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, refreshKey]);
+  }, [isAdmin, refreshKey, initialRows]);
 
   // Keep the news panel pointed at a valid share.
   useEffect(() => {

@@ -88,9 +88,9 @@ export default function RootLayout({
         {/* Google Analytics 4 */}
         <Script
           src="https://www.googletagmanager.com/gtag/js?id=G-4D7NSXL95B"
-          strategy="afterInteractive"
+          strategy="lazyOnload"
         />
-        <Script id="ga4-init" strategy="afterInteractive">
+        <Script id="ga4-init" strategy="lazyOnload">
           {`
             window.dataLayer = window.dataLayer || [];
             function gtag(){dataLayer.push(arguments);}
@@ -129,7 +129,9 @@ export default function RootLayout({
           </WatchlistProvider>
         </PostHogProvider>
         <Analytics />
-        <SpeedInsights />
+        {/* Sampled to conserve the Speed Insights data-point quota — still enough
+            volume per page to see trends (e.g. ~35+/period on high-impact-rns). */}
+        <SpeedInsights sampleRate={0.25} />
       </body>
     </html>
   );
