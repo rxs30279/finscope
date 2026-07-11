@@ -944,6 +944,10 @@ def _resolve_symbol(ticker: Optional[str]) -> Optional[str]:
     # Investegate tickers drop the .L suffix; some include a trailing dot (JD.)
     t = ticker.rstrip(".")
     candidates = [f"{t}.L", f"{ticker}.L", ticker]
+    # Share-class tickers (e.g. BT.A) use a dot on investegate but a hyphen on
+    # Yahoo (BT-A.L) — try that form too.
+    if "." in t:
+        candidates.append(f"{t.replace('.', '-')}.L")
     rows = _query(
         "SELECT symbol FROM company_metadata WHERE symbol = ANY(%s) LIMIT 1",
         (candidates,),
@@ -1273,12 +1277,14 @@ _MC_CACHE: dict[str, tuple[float, float]] = {}  # symbol -> (market_cap, timesta
 _MC_CACHE_TTL = 900  # 15 minutes
 
 # Symbols that Yahoo has told us don't exist (e.g. unresolved RNS tickers we
-# guessed a ".L" suffix for). Cached far longer than successes since these are
-# almost always permanently invalid, not a transient miss — without this,
-# every RNS-window request re-hits Yahoo (and logs a 404) for the same dead
-# symbol forever.
+# guessed a ".L" suffix for). These are almost always permanently invalid
+# (foreign CDIs, ETCs, bonds, AQSE-only names never onboarded into
+# company_metadata) rather than a transient miss, so the TTL is long — a 6h
+# window still means every one of them gets re-hit against Yahoo (and 404s)
+# 4x/day forever. 30 days still self-heals if a ticker later gets onboarded,
+# without the constant log spam.
 _MC_FAIL_CACHE: dict[str, float] = {}  # symbol -> timestamp
-_MC_FAIL_TTL = 21600  # 6 hours
+_MC_FAIL_TTL = 30 * 86400  # 30 days
 
 
 def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
