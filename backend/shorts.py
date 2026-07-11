@@ -429,18 +429,22 @@ def shorts(symbol: str = Query(...), response: Response = None):
     isin_rows = query("SELECT isin FROM company_metadata WHERE symbol = %s", (symbol,))
     isin = isin_rows[0]["isin"] if isin_rows else None
 
+    # 2y cap: change_1m only needs ~30d of lookback, so this is just keeping
+    # the ever-accumulating daily series from growing the response unbounded.
+    history_floor = date.today() - timedelta(days=730)
+
     agg_rows = []
     if isin:
         agg_rows = query(
             "SELECT disclosure_date, ansp_pct FROM short_positions_agg"
-            " WHERE isin = %s ORDER BY disclosure_date ASC",
-            (isin,),
+            " WHERE isin = %s AND disclosure_date >= %s ORDER BY disclosure_date ASC",
+            (isin, history_floor),
         )
     if not agg_rows:
         agg_rows = query(
             "SELECT disclosure_date, ansp_pct FROM short_positions_agg"
-            " WHERE company_symbol = %s ORDER BY disclosure_date ASC",
-            (symbol,),
+            " WHERE company_symbol = %s AND disclosure_date >= %s ORDER BY disclosure_date ASC",
+            (symbol, history_floor),
         )
 
     holder_rows = []

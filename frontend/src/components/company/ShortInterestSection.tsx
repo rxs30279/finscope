@@ -7,6 +7,7 @@ import InfoDot from "@/components/InfoDot";
 interface ShortData {
   symbol: string;
   current_pct: number | null;
+  change_1m: number | null;
 }
 
 export default function ShortInterestMetric({ symbol }: { symbol: string }) {
@@ -35,7 +36,16 @@ export default function ShortInterestMetric({ symbol }: { symbol: string }) {
           />
         </span>
       }
-      value={`${data.current_pct.toFixed(2)}%`}
+      value={
+        <>
+          {data.current_pct.toFixed(2)}%
+          {data.change_1m !== null && (
+            <span style={{ fontSize: 11, fontWeight: 400, marginLeft: 5, color: data.change_1m > 0 ? "#ef4444" : data.change_1m < 0 ? "#4ade80" : "#666" }}>
+              {data.change_1m > 0 ? "+" : ""}{data.change_1m.toFixed(1)}pp
+            </span>
+          )}
+        </>
+      }
       color={data.current_pct >= 5 ? "#ef4444" : undefined}
     />
   );
