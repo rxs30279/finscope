@@ -6,7 +6,7 @@ import {
   XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
 import { API } from "@/lib/api";
-import { fmt, gc, currSym, dividendDataUrl } from "@/lib/format";
+import { fmt, gc, currSym } from "@/lib/format";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { S } from "@/lib/theme";
 import MetricCard from "./MetricCard";
@@ -53,7 +53,7 @@ const LOGO_DOMAIN_OVERRIDES: Record<string, string> = {
 // pass fallback=404 so a miss fires the img onError and we drop back to the
 // original purple ticker-initials badge. Needs NEXT_PUBLIC_LOGODEV_TOKEN (a
 // publishable pk_ key); with no token set we skip the fetch and show initials.
-function LogoBadge({ symbol, paysDividend }: { symbol: string; paysDividend: boolean }) {
+function LogoBadge({ symbol }: { symbol: string }) {
   const [failed, setFailed] = useState(false);
   const label = symbol.replace(".L", "").slice(0, 4);
   const token = process.env.NEXT_PUBLIC_LOGODEV_TOKEN;
@@ -72,10 +72,9 @@ function LogoBadge({ symbol, paysDividend }: { symbol: string; paysDividend: boo
   const showLogo = !!logoUrl && !failed;
 
   const base = {
-    width: 64, height: 64, marginTop: 9, borderRadius: 12, flexShrink: 0,
+    width: 64, height: 64, borderRadius: 12, flexShrink: 0,
     display: "flex", alignItems: "center", justifyContent: "center",
     overflow: "hidden", textDecoration: "none",
-    cursor: paysDividend ? "pointer" : "default",
   } as const;
   const wrapStyle = showLogo
     ? { ...base, background: "transparent" }
@@ -92,13 +91,7 @@ function LogoBadge({ symbol, paysDividend }: { symbol: string; paysDividend: boo
     label
   );
 
-  return paysDividend ? (
-    <a href={dividendDataUrl(symbol)} target="_blank" rel="noopener noreferrer" title="View on Dividend Data" style={wrapStyle as any}>
-      {inner}
-    </a>
-  ) : (
-    <div style={wrapStyle as any}>{inner}</div>
-  );
+  return <div style={wrapStyle as any}>{inner}</div>;
 }
 
 interface Props {
@@ -151,11 +144,6 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
   // financial statements use. Multinationals that file in USD (HSBC, Shell, BP…)
   // otherwise show a $ on a GBP value. Mirrors the screener/trending fix.
   const qcur = meta?.currency || fcur;
-
-  const paysDividend =
-    (snap?.dividend_yield ?? 0) > 0 ||
-    (snap?.dividends_per_share ?? 0) > 0 ||
-    annual.some((r: any) => (r.dividends_paid ?? 0) < 0);
 
   const annualChart = annual.map((r: any) => ({
     year: r.period_end_date?.slice(0, 4),
@@ -235,12 +223,6 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
     </div>
   );
 
-  const dividendLink = paysDividend ? (
-    <a href={dividendDataUrl(symbol)} target="_blank" rel="noopener noreferrer" style={{ color: "#a78bfa", textDecoration: "none", borderBottom: "1px dashed #a78bfa55", paddingBottom: 1, fontFamily: "monospace", fontSize: 11, letterSpacing: 1, textTransform: "uppercase" }}>
-      Dividend Data ↗
-    </a>
-  ) : null;
-
   const descIsLong = (meta?.description?.length || 0) > 300;
   const description = meta?.description ? (
     <p style={{ color: "#94a3b8", fontSize: 13, maxWidth: 680, lineHeight: 1.7, margin: 0 }}>
@@ -281,7 +263,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
           <div style={{ position: "relative", display: "flex", justifyContent: "flex-start", alignItems: "flex-start", minHeight: 144 }}>
             {/* Logo with the market cap stacked beneath it, pinned left and out of flow */}
             <div style={{ position: "absolute", left: 0, top: 0 }}>
-              <LogoBadge symbol={symbol} paysDividend={paysDividend} />
+              <LogoBadge symbol={symbol} />
               <div style={{ marginTop: 18 }}>
                 <div style={{ fontSize: 22, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
                 <div style={{ fontSize: 11, color: "#64748b" }}>
@@ -289,10 +271,10 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
                 </div>
               </div>
             </div>
-            {/* Match the logo's vertical span (marginTop 9 + 64h) so the name sits on its midline.
+            {/* Match the logo's vertical span (64h) so the name sits on its midline.
                 Just a small right gutter so the name wraps naturally across the full available width
                 (no artificial narrowing); the ★ trails the name inline, glued to the last word. */}
-            <div style={{ marginTop: 9, minHeight: 64, marginLeft: 84, marginRight: 8, display: "flex", alignItems: "center" }}>
+            <div style={{ minHeight: 64, marginLeft: 84, marginRight: 8, display: "flex", alignItems: "center" }}>
               <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 22, color: "#f1f5f9" }}>
                 {nameHead && nameHead + " "}
                 {nameStar}
@@ -300,13 +282,12 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
             </div>
           </div>
           {description}
-          {dividendLink}
         </div>
       ) : (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
           <div>
             <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 10 }}>
-              <LogoBadge symbol={symbol} paysDividend={paysDividend} />
+              <LogoBadge symbol={symbol} />
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
@@ -315,7 +296,6 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
                   </span>
                 </div>
                 <div style={{ marginTop: 5 }}>{descriptors}</div>
-                {dividendLink && <div style={{ marginTop: 8 }}>{dividendLink}</div>}
               </div>
             </div>
             {description}
@@ -331,7 +311,12 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
       {/* Tabs */}
       <div style={{ display: "flex", flexWrap: isMobile ? "wrap" : "nowrap", rowGap: isMobile ? 2 : 0, columnGap: 2, borderBottom: isMobile ? "none" : "1px solid #334155", marginBottom: 24 }}>
         {tabs.map((t) => (
-          <button key={t} onClick={() => setTab(t)} style={{ ...S.tab, ...(isMobile ? { padding: "8px 10px", fontSize: 11 } : {}), ...(tab === t ? S.tabActive : {}) }}>
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`company-tab${tab === t ? " company-tab--active" : ""}`}
+            style={{ ...S.tab, ...(isMobile ? { padding: "8px 10px", fontSize: 11 } : {}), ...(tab === t ? S.tabActive : {}) }}
+          >
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}

@@ -55,6 +55,15 @@ body {
   animation: chevron-wobble 10s ease-in-out infinite;
 }
 
+/* Company page tab buttons: brighten inactive tabs on hover. Their resting
+   colors are inline styles (theme.ts S.tab), which beat plain CSS, so
+   !important is required; the :not() guard keeps the active tab's inline
+   orange styling untouched. */
+.company-tab:not(.company-tab--active):hover {
+  color: #cbd5e1 !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
 /* Scrollbar styling — hidden on sidebar, thin elsewhere */
 ::-webkit-scrollbar {
   width: 6px;

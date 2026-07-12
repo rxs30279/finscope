@@ -4,6 +4,7 @@ import { API, adminHeaders } from "@/lib/api";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { lseStatus } from "@/lib/lse";
+import Link from "next/link";
 import PageHeader from "@/components/layout/PageHeader";
 import EmailDigestCTA from "@/components/EmailDigestCTA";
 import ScorePill from "@/components/screener/ScorePill";
@@ -872,7 +873,19 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
             </sup>
           </>
         }
-        subtitle="Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication."
+        subtitle={
+          <>
+            Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication.
+            <div style={{ marginTop: 6 }}>
+              <Link
+                href="/research/how-i-use-ai-to-find-winning-uk-stocks-from-7am-rns-news"
+                style={{ color: "#a78bfa", textDecoration: "none", borderBottom: "1px dashed #a78bfa55", paddingBottom: 1 }}
+              >
+                Read how this works on the Research blog →
+              </Link>
+            </div>
+          </>
+        }
         right={
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
             {loading ? "loading…" : `${rows.length} tracked`}

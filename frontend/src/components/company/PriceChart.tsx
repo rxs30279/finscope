@@ -84,9 +84,10 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   const sRSI = simple ? false : showRSI;
 
   // Reserved width for the Y axis (price labels). The candle overlay mirrors this
-  // as its plotLeft, so keep them sourced from one constant. `simple` (Trending)
-  // uses a tighter layout; the full company view keeps the original width.
-  const Y_AXIS_W = simple ? 44 : 64;
+  // as its plotLeft, so keep them sourced from one constant. 44px (down from the
+  // original 64) keeps the labels in their own gutter — mirrored-inside ticks
+  // were tried but overlapped the price line — while letting the plot stretch.
+  const Y_AXIS_W = 44;
 
   // Skip the mount run so the mobile line-chart default (above) doesn't overwrite
   // the user's saved candle preference — only actual toggles persist.
@@ -433,7 +434,7 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
     // whole site left. Recharts keeps tooltips inside the plot area, so this
     // clips nothing legitimate. See investigation 2026-06-25.
     <div style={{ overflow: "hidden" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 28 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             {["1M", "3M", "6M", "1Y", "3Y", "5Y"].map((r) => (
@@ -470,7 +471,7 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
 
       <div ref={containerRef} style={{ position: "relative" }}>
         {overlayPrice && priceContent != null && (
-          <div style={{ position: "absolute", top: PRICE_TOP - 10, right: 5, textAlign: "right", zIndex: 11, pointerEvents: "none", background: "rgba(15,15,15,0.65)", borderRadius: 6, padding: "4px 10px", backdropFilter: "blur(2px)" }}>
+          <div style={{ position: "absolute", top: -24, right: 5, textAlign: "right", zIndex: 11, pointerEvents: "none", background: "rgba(15,15,15,0.65)", borderRadius: 6, padding: "4px 10px", backdropFilter: "blur(2px)" }}>
             {priceContent}
           </div>
         )}

@@ -64,6 +64,7 @@ export const S: Record<string, CSSProperties> = {
     color: "#666",
     cursor: "pointer",
     borderBottom: "2px solid transparent",
+    borderRadius: "6px 6px 0 0",
     transition: "all 0.15s",
     fontSize: 12,
     fontFamily: "monospace",
@@ -74,6 +75,7 @@ export const S: Record<string, CSSProperties> = {
     color: "#f97316",
     borderBottom: "2px solid #f97316",
     fontWeight: 700,
+    background: "linear-gradient(180deg, rgba(249,115,22,0.04), rgba(249,115,22,0.13))",
   },
   navBtn: {
     background: "none",
