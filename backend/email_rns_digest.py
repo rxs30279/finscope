@@ -602,20 +602,21 @@ def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
 
 
 def _dry_run_report(rows: list[dict], total_all: int, subject: str,
-                    segment_id: str | None, api_key: str | None) -> int:
+                    segment_id: str | None, api_key: str | None) -> dict:
     """Render the digest and report what a real send *would* do, without ever
     calling Resend. Backs `--dry-run` and /api/digest?dry_run=true so the full
     fetch → render path can be exercised as a smoke check without emailing
-    anyone. Returns 0 on a valid render, 1 if the render or validation fails."""
+    anyone. Returns a stats dict (see main()); exit_code 0 on a valid render,
+    1 if the render or validation fails."""
     try:
         html_body = _render_html(rows, total_all)
     except Exception as e:
         print(f"[digest] DRY RUN: render FAILED: {e}")
-        return 1
+        return {"exit_code": 1, "mode": "dry_run", "recipients": 0}
     if not subject or len(html_body) < 200:
         print(f"[digest] DRY RUN: validation FAILED "
               f"(subject={subject!r}, html_len={len(html_body)})")
-        return 1
+        return {"exit_code": 1, "mode": "dry_run", "recipients": 0}
 
     # How many recipients a real send would hit right now.
     recipients = 0
@@ -633,14 +634,23 @@ def _dry_run_report(rows: list[dict], total_all: int, subject: str,
     print(f'[digest] DRY RUN: would send "{subject}" '
           f'({len(rows)} rows, {len(html_body)} bytes) to '
           f'{recipients} recipient(s) — no email sent')
-    return 0
+    return {"exit_code": 0, "mode": "dry_run", "recipients": recipients}
 
 
-def main(dry_run: bool = False) -> int:
+def main(dry_run: bool = False) -> dict:
+    """Fetch, render and send (or dry-run) the digest.
+
+    Returns a stats dict surfaced by /api/digest so cron-job.org's execution
+    history records which path ran and to how many recipients:
+      exit_code   — 0 ok, 1 config/render failure, 2 partial segment send
+      mode        — "segment" | "fallback" | "none" | "dry_run"
+      recipients  — addresses a send targeted (or would target, for dry_run)
+      sent/failed — per-recipient outcomes (segment mode only)
+    """
     api_key = os.environ.get("RESEND_API_KEY")
     if not api_key and not dry_run:
         print("[digest] RESEND_API_KEY missing — aborting")
-        return 1
+        return {"exit_code": 1, "mode": "none", "recipients": 0}
 
     from_addr = os.environ.get("DIGEST_FROM", _DEFAULT_FROM)
     segment_id = os.environ.get("RESEND_SEGMENT_ID")
@@ -680,7 +690,8 @@ def main(dry_run: bool = False) -> int:
                 else:
                     failed += 1
             print(f"[digest] segment send complete: {sent} sent, {failed} failed (of {len(contacts)})")
-            return 0 if failed == 0 else 2
+            return {"exit_code": 0 if failed == 0 else 2, "mode": "segment",
+                    "recipients": len(contacts), "sent": sent, "failed": failed}
 
         print("[digest] segment configured but empty — falling back to DIGEST_TO")
 
@@ -688,7 +699,7 @@ def main(dry_run: bool = False) -> int:
     to_addr = (os.environ.get("DIGEST_TO") or "").strip()
     if not to_addr:
         print("[digest] no DIGEST_TO configured and no segment recipients — nothing to send")
-        return 0
+        return {"exit_code": 0, "mode": "none", "recipients": 0}
     # Best-effort unsub footer for the fallback recipient (only if base + secret set).
     footer = ""
     headers: dict | None = None
@@ -708,10 +719,10 @@ def main(dry_run: bool = False) -> int:
     html_body = _render_html(rows, total_all, sub_footer_html=footer)
     result = _send_via_resend(subject, html_body, to_addr, from_addr, api_key, extra_headers=headers)
     print(f"[digest] sent to {to_addr} — id={result.get('id')}")
-    return 0
+    return {"exit_code": 0, "mode": "fallback", "recipients": 1, "sent": 1, "failed": 0}
 
 
 if __name__ == "__main__":
     # `--dry-run` renders + validates the digest and prints what would be sent,
     # without contacting Resend. Everything else is a normal send.
-    sys.exit(main(dry_run="--dry-run" in sys.argv))
+    sys.exit(main(dry_run="--dry-run" in sys.argv)["exit_code"])

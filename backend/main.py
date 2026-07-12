@@ -2167,9 +2167,23 @@ def digest(
     if not hmac.compare_digest(supplied, _DIGEST_TOKEN):
         raise HTTPException(403, "Invalid token")
 
-    exit_code = run_digest(dry_run=dry_run)
+    stats = run_digest(dry_run=dry_run)
+    exit_code = stats.get("exit_code", 1)
+    # mode/recipients land in cron-job.org's stored response, so its execution
+    # history shows whether segment mode ran and to how many addresses — a
+    # silent DIGEST_TO fallback is indistinguishable from a healthy send
+    # otherwise (it burned us from 03 Jun to 10 Jul 2026).
+    resp = {
+        "ok": exit_code == 0,
+        "dry_run": dry_run,
+        "mode": stats.get("mode"),
+        "recipients": stats.get("recipients", 0),
+    }
+    if "sent" in stats:
+        resp["sent"] = stats["sent"]
+        resp["failed"] = stats["failed"]
     if exit_code == 0:
-        msg = "Digest rendered (dry run — not sent)" if dry_run else "Digest sent"
-        return {"ok": True, "message": msg, "dry_run": dry_run}
+        resp["message"] = "Digest rendered (dry run — not sent)" if dry_run else "Digest sent"
     else:
-        return {"ok": False, "error": f"Digest failed with exit code {exit_code}", "dry_run": dry_run}
+        resp["error"] = f"Digest failed with exit code {exit_code}"
+    return resp
