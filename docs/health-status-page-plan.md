@@ -104,7 +104,33 @@ commit 1eec0e2).
   the reduce logic from `report()`).
 - Health is computed live each call; CI comes from the cached client.
 
-### 5. Env var
+### 5. Digest send notification (data source)
+
+Goal: the page shows "this morning's digest emails went out (N recipients)"
+without depending on cron-job.org's UI. Today the send stats only exist in
+cron-job.org's stored HTTP responses — no DB trace — so there is nothing for
+the page to read. Fix with the existing migration-008 convention:
+
+- **Stamp `pipeline_runs` on every real send.** In `email_rns_digest.main()`,
+  after a non-dry-run send completes, upsert `pipeline = 'rns_digest'` with
+  `status` = `ok` (clean segment send) / `degraded` (fallback mode, partial
+  failures, or nothing to send) / `failed`, and `detail` =
+  `{"mode", "recipients", "sent", "failed"}`. Mirror `record_run()` in
+  `dividends.py` (uses the shared pool + `ON CONFLICT (pipeline) DO UPDATE`).
+  Best-effort `try/except` — a marker failure must never fail the send.
+  `dry_run` never stamps.
+- **New healthcheck** `@check("digest.sent")` reading that row (same shape as
+  `shorts.refresh`, healthcheck.py): weekday 07:30 cron with weekend gaps →
+  `_tier(days, warn_at=3, fail_at=5)`; force FAIL if `status != 'ok'` —
+  which now catches the silent-fallback failure mode (the 03 Jun–10 Jul
+  incident) from the daily GHA healthcheck, not just this page. Detail line
+  includes mode + sent/failed counts.
+- **Endpoint extra:** `/api/status` also returns a top-level
+  `digest: {last_run_at, status, mode, recipients, sent, failed} | null`
+  (one pooled query on `pipeline_runs`), so the frontend can render a
+  dedicated card rather than parsing the check's detail string.
+
+### 6. Env var
 
 - `GITHUB_STATUS_TOKEN` — fine-grained PAT, **read-only**, scoped to the single
   `finscope` repo, permission **Actions: read** (+ Contents/Metadata: read as
@@ -130,6 +156,11 @@ Follow the `research/admin` pattern exactly.
   - Render with `PageHeader` + the `colors`/`S` theme from `@/lib/theme`.
 
 ### Rendering
+- **Email digest** card (top of page): headline notification — "Digest sent
+  HH:MM · segment · 27/27 delivered" with a green tick when `status = ok` and
+  the send is from today (or last Friday's on a weekend); amber/red banner
+  with the detail when degraded/failed/stale; muted "no send recorded yet" if
+  `digest` is null. Data comes from the `digest` object in `/api/status`.
 - **System Health** section: one row per check — status chip
   (PASS green `#10b981` / WARN amber / FAIL red `#ef4444`, reuse the sentiment
   colors already in the codebase), check name, detail text. Sort FAIL→WARN→PASS
@@ -160,15 +191,23 @@ an anonymous visitor).
 4. **Page**: `npm run dev`, unlock via `/?admin=<token>`, open `/status`; confirm
    both panels render, a forced FAIL (e.g. point a check at an empty table)
    shows red, and an anonymous browser sees the locked state.
-5. Add `GITHUB_STATUS_TOKEN` to Dokploy, redeploy, and load `/status` on prod.
+5. **Digest marker**: run `/api/digest?dry_run=true` (must NOT stamp), then a
+   real send (or wait for the next 07:30 cron) and confirm the `rns_digest`
+   row lands in `pipeline_runs`, `healthcheck.py --verbose` shows
+   `digest.sent`, and the card renders on `/status`. Unit-test the stamp
+   status mapping (ok/degraded/failed) with the send mocked.
+6. Add `GITHUB_STATUS_TOKEN` to Dokploy, redeploy, and load `/status` on prod.
 
 ## Build order
 
 1. `healthcheck.py` `collect()` refactor + pooled `query_one` (+ CLI regression check).
-2. `ci_status.py` (GitHub client + cache + graceful degrade).
-3. `GET /api/status` endpoint + `test_status.py`.
-4. Frontend `/status` page.
-5. `GITHUB_STATUS_TOKEN` PAT → Dokploy env → redeploy → verify on prod.
+2. Digest `pipeline_runs` stamp in `email_rns_digest.py` + `digest.sent` check
+   (independently valuable: alerts on silent-fallback regressions via the
+   daily GHA healthcheck even before the page exists).
+3. `ci_status.py` (GitHub client + cache + graceful degrade).
+4. `GET /api/status` endpoint (health + ci + digest) + `test_status.py`.
+5. Frontend `/status` page (digest card + health + CI panels).
+6. `GITHUB_STATUS_TOKEN` PAT → Dokploy env → redeploy → verify on prod.
 
 ## Open questions for the build session
 
