@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Reuse prices.py's connection pool + read helper rather than opening a second
 # pool — market.py only touches the DB for the Fear & Greed history table.
-from prices import query as _db_query, _get_pool as _db_pool
+from db import query as _db_query, get_pool as _db_pool
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 

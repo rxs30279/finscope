@@ -55,45 +55,10 @@ app.include_router(research_router)
 app.include_router(dividends_router)
 app.include_router(shorts_router)
 
-DB_CONFIG = {
-    "dbname": os.environ.get("DB_NAME", "postgres"),
-    "user": os.environ.get("DB_USER", "postgres"),
-    "password": os.environ.get("DB_PASSWORD", ""),
-    "host": os.environ.get("DB_HOST", ""),
-    "port": os.environ.get("DB_PORT", "5432"),
-    "sslmode": "require",
-}
-
-_pool = None
-
-
-def get_pool():
-    global _pool
-    if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **DB_CONFIG)
-    return _pool
-
-
-def query(sql, params=None):
-    pool = get_pool()
-    conn = pool.getconn()
-    try:
-        conn.autocommit = True
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-        return [dict(r) for r in rows]
-    except psycopg2.OperationalError:
-        # Connection was dropped (e.g. SSL timeout) — discard it and retry once
-        pool.putconn(conn, close=True)
-        conn = pool.getconn()
-        conn.autocommit = True
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        pool.putconn(conn)
+# DB pool + helpers live in db.py (one process-wide pool, shared by every
+# router — see item #6 of the 2026-07-12 review). Re-exported here so existing
+# `from main import query / get_pool` call sites keep working.
+from db import DB_CONFIG, get_pool, query
 
 
 SITEMAP_BASE = os.environ.get("SITE_URL", "https://app.alphamoveai.co.uk").rstrip("/")

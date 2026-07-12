@@ -81,39 +81,20 @@ def _get_llm_client():
     return _llm_client
 
 
-# ── DB ────────────────────────────────────────────────────────────────────────
-
-_DB_CONFIG = {
-    "dbname":   os.environ.get("DB_NAME", "postgres"),
-    "user":     os.environ.get("DB_USER", "postgres"),
-    "password": os.environ.get("DB_PASSWORD", ""),
-    "host":     os.environ.get("DB_HOST", ""),
-    "port":     os.environ.get("DB_PORT", "5432"),
-    "sslmode":  "require",
-}
-
-_pool = None
-
-
-def _get_pool():
-    global _pool
-    if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **_DB_CONFIG)
-    return _pool
+# ── DB — shared process-wide pool (see db.py). `_get_pool` is re-exported for
+# this module's write call sites; `_query` keeps its fetch= flag but now reads
+# via the shared query() (which retries on a dropped connection). ─────────────
+from db import get_pool as _get_pool, query as _db_query, connection
 
 
 def _query(sql, params=None, fetch=True):
-    pool = _get_pool()
-    conn = pool.getconn()
-    conn.autocommit = True
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    if fetch:
+        return _db_query(sql, params)
+    with connection() as conn:
+        conn.autocommit = True
+        cur = conn.cursor()
         cur.execute(sql, params)
-        if not fetch:
-            return None
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        pool.putconn(conn)
+        return None
 
 
 _schema_ready = False

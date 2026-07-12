@@ -20,33 +20,9 @@ router = APIRouter(prefix="/api/analysts", tags=["analysts"])
 
 # ── DB (own pool) ─────────────────────────────────────────────────────────────
 
-_DB_CONFIG = {
-    "dbname":   os.environ.get("DB_NAME", "postgres"),
-    "user":     os.environ.get("DB_USER", "postgres"),
-    "password": os.environ.get("DB_PASSWORD", ""),
-    "host":     os.environ.get("DB_HOST", ""),
-    "port":     os.environ.get("DB_PORT", "5432"),
-    "sslmode":  "require",
-}
-
-_pool = None
-
-def _get_pool():
-    global _pool
-    if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, **_DB_CONFIG)
-    return _pool
-
-def _query(sql, params=None):
-    pool = _get_pool()
-    conn = pool.getconn()
-    conn.autocommit = True
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        pool.putconn(conn)
+# DB — shared process-wide pool + query (see db.py), re-exported under this
+# module's historical names.
+from db import query as _query, get_pool as _get_pool
 
 
 # ── Pure parsing helpers ───────────────────────────────────────────────────────

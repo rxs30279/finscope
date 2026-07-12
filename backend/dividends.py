@@ -14,38 +14,9 @@ load_dotenv()
 
 router = APIRouter()
 
-# ── DB (own pool to avoid circular import with main.py) ───────────────────────
-
-_DB_CONFIG = {
-    "dbname": os.environ.get("DB_NAME", "postgres"),
-    "user": os.environ.get("DB_USER", "postgres"),
-    "password": os.environ.get("DB_PASSWORD", ""),
-    "host": os.environ.get("DB_HOST", ""),
-    "port": os.environ.get("DB_PORT", "5432"),
-    "sslmode": "require",
-}
-
-_pool = None
-
-
-def _get_pool():
-    global _pool
-    if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 5, **_DB_CONFIG)
-    return _pool
-
-
-def query(sql, params=None):
-    pool = _get_pool()
-    conn = pool.getconn()
-    conn.autocommit = True  # prevent idle-in-transaction; query() is read-only
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql, params)
-        rows = cur.fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        pool.putconn(conn)
+# ── DB — shared process-wide pool + query (see db.py). Re-exported under the
+# module's historical names (`from dividends import query` in run_dividends). ──
+from db import query, get_pool as _get_pool
 
 
 # ── Ingestion ──────────────────────────────────────────────────────────────────
