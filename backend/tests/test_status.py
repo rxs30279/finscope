@@ -27,10 +27,10 @@ def mocked_status(monkeypatch):
     monkeypatch.setattr(main, "_collect_health", lambda query_one=None: fake_checks)
     monkeypatch.setattr(
         main, "_ci_latest_runs",
-        lambda: {"available": True, "workflows": [
+        lambda force=False: {"available": True, "workflows": [
             {"workflow": "healthcheck.yml", "status": "completed",
              "conclusion": "success", "run_started_at": "2026-07-12T06:00:00Z",
-             "html_url": "https://github.com/x/runs/1"},
+             "html_url": "https://github.com/x/runs/1", "dispatchable": False},
         ]},
     )
     monkeypatch.setattr(
@@ -65,12 +65,58 @@ def test_status_summary_fail_wins(client, monkeypatch):
         {"name": "b", "status": "WARN", "detail": ""},
         {"name": "c", "status": "FAIL", "detail": ""},
     ])
-    monkeypatch.setattr(main, "_ci_latest_runs", lambda: {"available": False, "error": "no token"})
+    monkeypatch.setattr(main, "_ci_latest_runs", lambda force=False: {"available": False, "error": "no token"})
     monkeypatch.setattr(main, "_digest_marker", lambda: None)
     body = client.get("/api/status").json()
     assert body["health"]["summary"] == "fail"
     assert body["ci"]["available"] is False
     assert body["digest"] is None
+
+
+# ── on-demand workflow dispatch (POST /api/ci/run) ─────────────────────────────
+
+def test_ci_run_rejects_non_dispatchable_workflow(client):
+    # Only the smoke/e2e suites are dispatchable; everything else (including
+    # real workflow files like healthcheck.yml) must 400, not dispatch.
+    assert client.post("/api/ci/run?workflow=healthcheck.yml").status_code == 400
+    assert client.post("/api/ci/run?workflow=evil.yml").status_code == 400
+
+
+def test_ci_run_dispatches_and_invalidates_cache(client, monkeypatch):
+    dispatched, invalidated = [], []
+    monkeypatch.setattr(
+        main.gh_actions, "dispatch",
+        lambda wf: (dispatched.append(wf), "2026-07-12T20:00:00Z")[1],
+    )
+    monkeypatch.setattr(main.ci_status, "invalidate", lambda: invalidated.append(True))
+    r = client.post("/api/ci/run?workflow=smoke.yml")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "dispatched"
+    assert body["workflow"] == "smoke.yml"
+    assert dispatched == ["smoke.yml"]
+    assert invalidated  # stale pre-dispatch CI cache must be dropped
+
+
+def test_ci_run_dispatch_failure_returns_502(client, monkeypatch):
+    def boom(wf):
+        raise RuntimeError("GH_DISPATCH_TOKEN env var not set")
+    monkeypatch.setattr(main.gh_actions, "dispatch", boom)
+    r = client.post("/api/ci/run?workflow=e2e.yml")
+    assert r.status_code == 502
+
+
+def test_status_fresh_ci_bypasses_cache(client, monkeypatch):
+    forces = []
+    monkeypatch.setattr(main, "_collect_health", lambda query_one=None: [])
+    monkeypatch.setattr(main, "_digest_marker", lambda: None)
+    monkeypatch.setattr(
+        main, "_ci_latest_runs",
+        lambda force=False: (forces.append(force), {"available": False, "error": "x"})[1],
+    )
+    client.get("/api/status")
+    client.get("/api/status?fresh_ci=true")
+    assert forces == [False, True]
 
 
 # ── digest send-status mapping (email_rns_digest._send_status) ─────────────────

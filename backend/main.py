@@ -12,6 +12,7 @@ import os
 import re
 import hmac
 import statistics
+import urllib.error
 from datetime import timezone
 from email.utils import format_datetime
 from market import router as market_router
@@ -60,6 +61,8 @@ app.include_router(shorts_router)
 # `from main import query / get_pool` call sites keep working.
 from db import DB_CONFIG, get_pool, query
 from healthcheck import collect as _collect_health, summarize as _summarize_health
+import ci_status
+import gh_actions
 from ci_status import latest_runs as _ci_latest_runs
 
 
@@ -2224,10 +2227,13 @@ def _digest_marker():
 
 
 @app.get("/api/status", dependencies=[Depends(require_admin_token)])
-def status():
+def status(fresh_ci: bool = Query(default=False)):
     """Admin-only system status: live health (reuses healthcheck.py against the
     shared pool), the latest CI workflow runs (cached GitHub client), and the
     last RNS digest send. Guarded by X-Admin-Token like the other admin routes.
+
+    `fresh_ci=true` bypasses the CI cache — the frontend polls with it after
+    dispatching a workflow so the new run shows up without waiting out the TTL.
 
     Each panel degrades independently: a GitHub outage leaves ci.available
     False, and each health check catches its own exception as a FAIL, so the
@@ -2237,6 +2243,28 @@ def status():
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "health": {"summary": _summarize_health(checks), "checks": checks},
-        "ci": _ci_latest_runs(),
+        "ci": _ci_latest_runs(force=fresh_ci),
         "digest": _digest_marker(),
     }
+
+
+@app.post("/api/ci/run", dependencies=[Depends(require_admin_token)])
+def ci_run(workflow: str = Query(...)):
+    """Dispatch one of the on-demand CI suites (smoke/e2e) from the /status
+    page. Uses GH_DISPATCH_TOKEN (Actions read+write) like /api/analysts/
+    refresh — NOT the read-only GITHUB_STATUS_TOKEN the CI panel reads with.
+
+    Fire-and-forget: GitHub returns 204 with no run id, and the run record
+    takes a few seconds to appear, so the caller re-polls /api/status with
+    fresh_ci=true rather than expecting instant feedback."""
+    if workflow not in ci_status.DISPATCHABLE:
+        raise HTTPException(400, f"workflow must be one of {sorted(ci_status.DISPATCHABLE)}")
+    try:
+        dispatched_at = gh_actions.dispatch(workflow)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace") if getattr(e, "fp", None) else str(e)
+        raise HTTPException(status_code=502, detail=f"GitHub dispatch failed ({e.code}): {detail}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"GitHub dispatch failed: {e}")
+    ci_status.invalidate()  # next /api/status refetches instead of serving the pre-dispatch cache
+    return {"status": "dispatched", "workflow": workflow, "dispatched_at": dispatched_at}

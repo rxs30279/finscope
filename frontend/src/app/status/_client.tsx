@@ -18,6 +18,7 @@ interface CiWorkflow {
   conclusion: string | null; // success | failure | cancelled | null
   run_started_at: string | null;
   html_url: string | null;
+  dispatchable?: boolean; // smoke/e2e: can be kicked off via POST /api/ci/run
 }
 interface DigestMarker {
   last_run_at: string | null;
@@ -35,6 +36,12 @@ interface StatusResponse {
 }
 
 const REFRESH_MS = 60_000; // auto-refresh cadence
+// After dispatching a workflow, re-poll (bypassing the backend CI cache) at
+// these offsets — GitHub takes a few seconds to create the run record.
+const DISPATCH_POLL_MS = [5_000, 15_000, 30_000, 60_000];
+// Treat a dispatch as pending until GitHub shows a newer run or this expires
+// (mirrors gh_actions.pipeline_status's 90s "queueing" hold).
+const DISPATCH_PENDING_MS = 90_000;
 
 const HEALTH_COLOR: Record<string, string> = {
   PASS: colors.green,
@@ -145,11 +152,17 @@ export default function StatusClient() {
   // Re-render the "…ago" stamps on a ticker without refetching.
   const [, setTick] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // workflow file -> dispatch epoch ms; row shows "dispatched" until GitHub
+  // reports a run started after this (or it expires).
+  const [dispatched, setDispatched] = useState<Record<string, number>>({});
+  const pollTimeouts = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (freshCi = false) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/status`, { headers: adminHeaders() });
+      const res = await fetch(`${API}/status${freshCi ? "?fresh_ci=true" : ""}`, {
+        headers: adminHeaders(),
+      });
       if (res.status === 403) {
         setError("Admin token rejected — re-unlock with /?admin=<token>.");
         setData(null);
@@ -168,14 +181,39 @@ export default function StatusClient() {
     }
   }, []);
 
+  const runWorkflow = useCallback(async (workflow: string) => {
+    setDispatched((d) => ({ ...d, [workflow]: Date.now() }));
+    try {
+      const res = await fetch(`${API}/ci/run?workflow=${encodeURIComponent(workflow)}`, {
+        method: "POST",
+        headers: adminHeaders(),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // GitHub creates the run record a few seconds after the 204; re-poll
+      // with the CI cache bypassed so the row flips to queued/running.
+      pollTimeouts.current.push(
+        ...DISPATCH_POLL_MS.map((ms) => setTimeout(() => load(true), ms)),
+      );
+    } catch {
+      setDispatched((d) => {
+        const next = { ...d };
+        delete next[workflow];
+        return next;
+      });
+      setError(`Could not dispatch ${workflow}.`);
+    }
+  }, [load]);
+
   useEffect(() => {
     if (!isAdmin) return;
     load();
-    timer.current = setInterval(load, REFRESH_MS);
+    timer.current = setInterval(() => load(), REFRESH_MS);
     const tickId = setInterval(() => setTick((t) => t + 1), 15_000);
+    const timeouts = pollTimeouts.current;
     return () => {
       if (timer.current) clearInterval(timer.current);
       clearInterval(tickId);
+      timeouts.forEach(clearTimeout);
     };
   }, [isAdmin, load]);
 
@@ -199,7 +237,7 @@ export default function StatusClient() {
         subtitle={data ? `Updated ${ago(data.generated_at)}` : "Admin-only operations dashboard"}
         right={
           <button
-            onClick={load}
+            onClick={() => load()}
             disabled={loading}
             style={{
               fontFamily: "monospace",
@@ -261,12 +299,39 @@ export default function StatusClient() {
           </div>
         ) : (
           (ci.workflows || []).map((w) => {
-            const c = ciChip(w);
+            // A just-dispatched workflow shows "dispatched" until GitHub
+            // reports a run started after the dispatch (then the normal
+            // queued/running chip takes over) or the hold expires.
+            const dispatchedAt = dispatched[w.workflow];
+            const pending =
+              !!dispatchedAt &&
+              Date.now() - dispatchedAt < DISPATCH_PENDING_MS &&
+              (!w.run_started_at || new Date(w.run_started_at).getTime() < dispatchedAt);
+            const c = pending ? { label: "dispatched", color: colors.amber } : ciChip(w);
             return (
               <div key={w.workflow} style={rowStyle}>
                 <span style={chip(c.color)}>{c.label}</span>
                 <span style={{ color: colors.text, minWidth: 190, flexShrink: 0 }}>{w.workflow}</span>
                 <span style={{ color: colors.textMuted, flex: 1 }}>{ago(w.run_started_at)}</span>
+                {w.dispatchable && (
+                  <button
+                    onClick={() => runWorkflow(w.workflow)}
+                    disabled={pending}
+                    style={{
+                      fontFamily: "monospace",
+                      fontSize: 11,
+                      color: pending ? colors.textDim : colors.accent,
+                      border: `1px solid ${colors.border}`,
+                      background: "transparent",
+                      padding: "2px 10px",
+                      borderRadius: 2,
+                      cursor: pending ? "default" : "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {pending ? "queued…" : "run now"}
+                  </button>
+                )}
                 {w.html_url && (
                   <a href={w.html_url} target="_blank" rel="noreferrer" style={{ color: colors.accent, textDecoration: "none" }}>
                     view run →

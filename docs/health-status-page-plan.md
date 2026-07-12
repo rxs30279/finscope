@@ -250,6 +250,15 @@ Built in commit-pending form; open questions settled as:
   sequential worst case); failures cached 60s instead of 300s.
 - Digest card: an "ok" send older than the most recent expected weekday-07:30
   slot now renders amber "stale" instead of a green tick.
+- On-demand CI runs: "run now" buttons on the smoke/e2e rows →
+  `POST /api/ci/run` (admin-guarded, whitelist in `ci_status.DISPATCHABLE`)
+  dispatches via `gh_actions.dispatch()` (`GH_DISPATCH_TOKEN`, read+write —
+  the CI panel keeps reading with the read-only `GITHUB_STATUS_TOKEN`).
+  Dispatch invalidates the CI cache; the frontend re-polls
+  `/api/status?fresh_ci=true` until the new run appears (90s "dispatched"
+  hold, mirroring `gh_actions.pipeline_status`). backend-tests (runs on every
+  push) and healthcheck (duplicates the live panel) deliberately have no
+  button.
 
 The `pipeline_runs('rns_digest')` marker convention exists because of the
 silent single-recipient fallback incident — background and detection playbook

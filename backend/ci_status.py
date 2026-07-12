@@ -38,6 +38,12 @@ WORKFLOWS = [
     "refresh-financials.yml",
 ]
 
+# Workflows the /status page may dispatch on demand (POST /api/ci/run). Only
+# the schedule/dispatch-only prod verification suites: backend-tests runs on
+# every push anyway, healthcheck duplicates the live health panel, and the
+# refresh crons have their own trigger endpoints.
+DISPATCHABLE = {"smoke.yml", "e2e.yml"}
+
 _CACHE_TTL = 300  # seconds; a page refresh within this window is served cached
 _ERROR_TTL = 60   # cache failures for less, so a transient GitHub blip clears fast
 _cache: dict | None = None
@@ -61,6 +67,7 @@ def _fetch_one(client: httpx.Client, workflow: str) -> dict:
             "conclusion": None,
             "run_started_at": None,
             "html_url": None,
+            "dispatchable": workflow in DISPATCHABLE,
         }
     run = runs[0]
     return {
@@ -69,6 +76,7 @@ def _fetch_one(client: httpx.Client, workflow: str) -> dict:
         "conclusion": run.get("conclusion"),    # success | failure | cancelled | null
         "run_started_at": run.get("run_started_at"),
         "html_url": run.get("html_url"),
+        "dispatchable": workflow in DISPATCHABLE,
     }
 
 
@@ -100,8 +108,8 @@ def latest_runs(force: bool = False) -> dict:
 
     Returns {"available": True, "workflows": [...]} on success, or
     {"available": False, "error": "..."} if the token is unset or GitHub is
-    unreachable. `force=True` bypasses the cache (used by nothing yet; handy
-    for a future manual re-poll)."""
+    unreachable. `force=True` bypasses the cache (used by GET /api/status
+    ?fresh_ci=true while the frontend polls a just-dispatched run)."""
     global _cache, _cache_at
     now = time.time()
     if _cache is not None and not force:
@@ -111,3 +119,12 @@ def latest_runs(force: bool = False) -> dict:
     _cache = _load()
     _cache_at = now
     return _cache
+
+
+def invalidate() -> None:
+    """Drop the cache so the next latest_runs() refetches — called after a
+    workflow_dispatch so the just-kicked run shows up without waiting out
+    the TTL."""
+    global _cache, _cache_at
+    _cache = None
+    _cache_at = 0.0
