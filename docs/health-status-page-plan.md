@@ -209,10 +209,32 @@ an anonymous visitor).
 5. Frontend `/status` page (digest card + health + CI panels).
 6. `GITHUB_STATUS_TOKEN` PAT → Dokploy env → redeploy → verify on prod.
 
-## Open questions for the build session
+## Build session decisions (resolved 2026-07-12)
 
-- **Auto-refresh cadence** on the page (fixed 60s, or manual-only?).
-- **CI panel scope**: GHA workflows only (this plan), or also surface the Dokploy
-  cron freshness explicitly as its own labelled group within panel 1?
-- Whether to add a tiny e2e `status.spec.ts` (locked-state only) — low value,
-  optional.
+Built in commit-pending form; open questions settled as:
+
+- **Auto-refresh:** 60s auto-refresh **and** a manual Refresh button; the
+  "Updated Ns ago" stamps re-tick every 15s without refetching.
+- **CI panel scope:** GHA workflows only, as planned. Dokploy cron freshness
+  stays in the health panel (the `*.refresh` / `digest.sent` checks) — not
+  duplicated as a labelled group.
+- **e2e `status.spec.ts`:** skipped (low value); the endpoint's 403-gate and
+  the digest status mapping are covered by `backend/tests/test_status.py`.
+
+### What shipped
+- `healthcheck.py`: `collect(query_one)` + `summarize()`; `run_db_checks()`
+  takes an injectable `query_one`; new `digest.sent` check. CLI unchanged.
+- `email_rns_digest.py`: `main()` now wraps `_send_digest()` and stamps
+  `pipeline_runs('rns_digest')` on real sends; pure `_send_status()` helper.
+- `ci_status.py`: cached GitHub Actions client, fails soft.
+- `main.py`: `GET /api/status` (admin-guarded) → health + ci + digest.
+- `frontend/src/app/status/{page,_client}.tsx`: admin-gated page, noindex,
+  not in nav/sitemap.
+- Tests: `backend/tests/test_status.py`. Full backend suite green; `tsc` clean.
+
+### Still manual (not done in the build session)
+- Provision `GITHUB_STATUS_TOKEN` (fine-grained PAT, Actions:read on finscope)
+  → add to Dokploy backend env → redeploy so the CI panel populates in prod.
+- First real digest send (next weekday 07:30, or a manual trigger) will write
+  the first `rns_digest` marker; until then `digest.sent` reads FAIL and the
+  card shows "no send recorded yet" — expected.

@@ -637,7 +637,7 @@ def _dry_run_report(rows: list[dict], total_all: int, subject: str,
     return {"exit_code": 0, "mode": "dry_run", "recipients": recipients}
 
 
-def main(dry_run: bool = False) -> dict:
+def _send_digest(dry_run: bool = False) -> dict:
     """Fetch, render and send (or dry-run) the digest.
 
     Returns a stats dict surfaced by /api/digest so cron-job.org's execution
@@ -720,6 +720,70 @@ def main(dry_run: bool = False) -> dict:
     result = _send_via_resend(subject, html_body, to_addr, from_addr, api_key, extra_headers=headers)
     print(f"[digest] sent to {to_addr} — id={result.get('id')}")
     return {"exit_code": 0, "mode": "fallback", "recipients": 1, "sent": 1, "failed": 0}
+
+
+def _send_status(stats: dict) -> str:
+    """Map a send stats dict to a pipeline_runs status. Pure (no I/O) so the
+    ok/degraded/failed decision can be unit-tested.
+
+      'ok'       — clean segment send to every recipient
+      'degraded' — fallback mode, partial segment send, or nothing sent (the
+                   silent-fallback failure mode; healthcheck forces FAIL on it)
+      'failed'   — config/render failure, no mail went out
+    """
+    if stats.get("exit_code", 1) == 1:
+        return "failed"
+    if stats.get("mode") == "segment" and stats.get("failed", 0) == 0:
+        return "ok"
+    return "degraded"  # partial send (exit 2), fallback mode, or nothing sent
+
+
+def _record_send(stats: dict) -> None:
+    """Stamp pipeline_runs('rns_digest') so the send leaves a DB trace that
+    healthcheck.py's `digest.sent` check and the /status page can read — Resend
+    was previously the only record, so a silent DIGEST_TO fallback (03 Jun–10
+    Jul 2026) was indistinguishable from a healthy send. Migration-008
+    convention; mirrors dividends.record_run(). Best-effort: a marker failure
+    must never fail (or appear to fail) an otherwise-good send.
+    """
+    status = _send_status(stats)
+    detail = {
+        "mode": mode,
+        "recipients": stats.get("recipients", 0),
+        "sent": stats.get("sent"),
+        "failed": stats.get("failed"),
+    }
+    try:
+        import psycopg2.extras
+        from db import connection
+        with connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO pipeline_runs (pipeline, last_run_at, status, detail)
+                VALUES ('rns_digest', NOW(), %s, %s)
+                ON CONFLICT (pipeline) DO UPDATE SET
+                    last_run_at = EXCLUDED.last_run_at,
+                    status      = EXCLUDED.status,
+                    detail      = EXCLUDED.detail
+                """,
+                (status, psycopg2.extras.Json(detail)),
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"[digest] WARNING: could not record pipeline_runs marker: {e}")
+
+
+def main(dry_run: bool = False) -> dict:
+    """Run the digest and, for real sends only, record a pipeline_runs marker.
+
+    Thin wrapper over `_send_digest` so /api/digest and the CLI get the same
+    stats dict as before while every non-dry-run send now leaves a DB trace.
+    """
+    stats = _send_digest(dry_run=dry_run)
+    if not dry_run:
+        _record_send(stats)
+    return stats
 
 
 if __name__ == "__main__":

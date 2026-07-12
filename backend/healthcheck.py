@@ -19,6 +19,8 @@ What it checks
                        refresh (stale > ~1.5 weeks, or last run degraded)
     - Shorts           pipeline_runs marker for the daily FCA short-position
                        refresh (stale > 3 days, or last run degraded)
+    - Digest           pipeline_runs marker for the weekday 07:30 RNS email
+                       send (stale > 3 days, or last send in fallback/partial)
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
     - Backend API      GET {API_BASE_URL}/api/filters
@@ -27,9 +29,10 @@ What it checks
   to ping); their success is covered by the data-freshness checks above plus
   Dokploy's own per-run status.
 
-Known gap (not checked): the email digest leaves no DB trace — Resend is the
-source of truth — and hitting /api/digest would actually send mail, so this
-script does not verify it.
+The digest is now verified via a pipeline_runs marker (see Digest above):
+email_rns_digest.main() stamps 'rns_digest' after each real send, so a missed
+or silently-degraded send (e.g. the 03 Jun–10 Jul 2026 fallback incident) fails
+this check without this script having to send any mail itself.
 
 Env vars (same DB_* set the refresh workflows already use):
   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
@@ -126,14 +129,19 @@ def _tier(value: float, warn_at: float, fail_at: float) -> str:
 
 # ── Data-freshness checks ─────────────────────────────────────────────────────
 
-def run_db_checks() -> None:
+def run_db_checks(query_one=None) -> None:
+    # `query_one` lets an in-process caller (the /api/status endpoint) inject a
+    # pooled query so each check reuses the shared connection pool instead of
+    # opening a fresh SSL connection. The CLI passes nothing → standalone
+    # `_query_one`.
+    query_one = query_one or _query_one
     if not DB_CONFIG["host"]:
         record("database", FAIL, "DB_HOST not set — cannot run freshness checks")
         return
 
     @check("rns.fetched_at")
     def _rns():
-        row = _query_one("SELECT MAX(fetched_at) AS t, COUNT(*) AS n FROM rns_announcements")
+        row = query_one("SELECT MAX(fetched_at) AS t, COUNT(*) AS n FROM rns_announcements")
         if not row or row["t"] is None:
             return FAIL, "rns_announcements is empty"
         h = _age_hours(row["t"])
@@ -142,7 +150,7 @@ def run_db_checks() -> None:
 
     @check("prices.nightly_refresh")
     def _scores():
-        row = _query_one("SELECT MAX(computed_at) AS t, COUNT(*) AS n FROM screener_scores")
+        row = query_one("SELECT MAX(computed_at) AS t, COUNT(*) AS n FROM screener_scores")
         if not row or row["t"] is None:
             return FAIL, "screener_scores is empty — nightly refresh never ran"
         h = _age_hours(row["t"])
@@ -154,7 +162,7 @@ def run_db_checks() -> None:
 
     @check("prices.feed_date")
     def _prices():
-        row = _query_one("SELECT MAX(date) AS d FROM price_history")
+        row = query_one("SELECT MAX(date) AS d FROM price_history")
         if not row or row["d"] is None:
             return FAIL, "price_history is empty"
         d = _age_days(row["d"])
@@ -164,7 +172,7 @@ def run_db_checks() -> None:
 
     @check("analysts.snapshot")
     def _analysts():
-        row = _query_one(
+        row = query_one(
             "SELECT MAX(snapshot_date) AS d, "
             "COUNT(*) FILTER (WHERE snapshot_date = (SELECT MAX(snapshot_date) "
             "FROM analyst_snapshots)) AS n FROM analyst_snapshots"
@@ -180,7 +188,7 @@ def run_db_checks() -> None:
 
     @check("index.membership_refresh")
     def _index_refresh():
-        row = _query_one(
+        row = query_one(
             "SELECT last_run_at, status, detail FROM pipeline_runs "
             "WHERE pipeline = 'index_refresh'"
         )
@@ -196,7 +204,7 @@ def run_db_checks() -> None:
 
     @check("dividends.refresh")
     def _dividends_refresh():
-        row = _query_one(
+        row = query_one(
             "SELECT last_run_at, status, detail FROM pipeline_runs "
             "WHERE pipeline = 'dividends_refresh'"
         )
@@ -212,7 +220,7 @@ def run_db_checks() -> None:
 
     @check("shorts.refresh")
     def _shorts_refresh():
-        row = _query_one(
+        row = query_one(
             "SELECT last_run_at, status, detail FROM pipeline_runs "
             "WHERE pipeline = 'shorts_refresh'"
         )
@@ -226,9 +234,28 @@ def run_db_checks() -> None:
             status = FAIL  # last run errored (see detail)
         return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"
 
+    @check("digest.sent")
+    def _digest_sent():
+        row = query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'rns_digest'"
+        )
+        if not row or row["last_run_at"] is None:
+            return FAIL, "no rns_digest marker in pipeline_runs"
+        d = _age_hours(row["last_run_at"]) / 24.0
+        # Weekday 07:30 cron-job.org send — weekend gaps are expected, so give
+        # a few days' slack before flagging a miss (warn > 3 days, fail > 5).
+        status = _tier(d, warn_at=3, fail_at=5)
+        if row["status"] != "ok":
+            # Non-ok = fallback mode / partial send / nothing sent. This is the
+            # signal that went dark 03 Jun–10 Jul 2026 (silent DIGEST_TO
+            # fallback); forcing FAIL surfaces it in the daily GHA run.
+            status = FAIL
+        return status, f"last send {d:.1f}d ago, status '{row['status']}', {row['detail']}"
+
     @check("financials.rotation")
     def _financials():
-        row = _query_one(
+        row = query_one(
             "SELECT MAX(financials_updated) AS newest, "
             "MIN(financials_updated) AS oldest, "
             "COUNT(*) AS total, "
@@ -275,6 +302,37 @@ def run_http_checks() -> None:
         if not isinstance(body, dict):
             return WARN, f"200 but unexpected body type {type(body).__name__}"
         return PASS, f"200 OK, {len(body)} filter keys"
+
+
+# ── Structured collector (in-process callers) ─────────────────────────────────
+
+def collect(query_one=None) -> list[dict]:
+    """Run every check once and return structured results.
+
+    Reentrant entry point for in-process callers such as the /api/status admin
+    endpoint (the CLI keeps using main()/report(), which read the raw tuple
+    list). Clears the module result buffer, runs the DB + HTTP checks, and
+    returns ``[{"name", "status", "detail"}, ...]``.
+
+    Pass a pooled ``query_one(sql) -> row`` (see the /api/status endpoint) so
+    the DB checks reuse the shared connection pool instead of opening a fresh
+    SSL connection each; omit it to use the standalone ``_query_one``.
+    """
+    _results.clear()
+    run_db_checks(query_one=query_one)
+    run_http_checks()
+    return [{"name": n, "status": s, "detail": d} for n, s, d in _results]
+
+
+def summarize(checks: list[dict]) -> str:
+    """Reduce structured checks to one overall verdict: 'fail' if any FAIL,
+    else 'warn' if any WARN, else 'pass' (lower-cased for the JSON API)."""
+    statuses = {c["status"] for c in checks}
+    if FAIL in statuses:
+        return "fail"
+    if WARN in statuses:
+        return "warn"
+    return "pass"
 
 
 # ── Reporting ─────────────────────────────────────────────────────────────────

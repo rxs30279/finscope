@@ -59,6 +59,8 @@ app.include_router(shorts_router)
 # router — see item #6 of the 2026-07-12 review). Re-exported here so existing
 # `from main import query / get_pool` call sites keep working.
 from db import DB_CONFIG, get_pool, query
+from healthcheck import collect as _collect_health, summarize as _summarize_health
+from ci_status import latest_runs as _ci_latest_runs
 
 
 SITEMAP_BASE = os.environ.get("SITE_URL", "https://app.alphamoveai.co.uk").rstrip("/")
@@ -2187,3 +2189,54 @@ def digest(
     else:
         resp["error"] = f"Digest failed with exit code {exit_code}"
     return resp
+
+
+# ── Admin health/status page ──────────────────────────────────────────────────
+
+def _pooled_query_one(sql):
+    """Adapter so healthcheck.collect() reuses the shared pool instead of
+    opening a fresh SSL connection per DB check. healthcheck calls query_one(sql)
+    with a bare SELECT and reads row["col"]; db.query returns list[dict]."""
+    rows = query(sql)
+    return rows[0] if rows else None
+
+
+def _digest_marker():
+    """Latest rns_digest send from pipeline_runs (stamped by
+    email_rns_digest._record_send), or None if no send has been recorded yet."""
+    rows = query(
+        "SELECT last_run_at, status, detail FROM pipeline_runs "
+        "WHERE pipeline = 'rns_digest'"
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    detail = row.get("detail") or {}
+    ts = row.get("last_run_at")
+    return {
+        "last_run_at": ts.isoformat() if ts else None,
+        "status": row.get("status"),
+        "mode": detail.get("mode"),
+        "recipients": detail.get("recipients"),
+        "sent": detail.get("sent"),
+        "failed": detail.get("failed"),
+    }
+
+
+@app.get("/api/status", dependencies=[Depends(require_admin_token)])
+def status():
+    """Admin-only system status: live health (reuses healthcheck.py against the
+    shared pool), the latest CI workflow runs (cached GitHub client), and the
+    last RNS digest send. Guarded by X-Admin-Token like the other admin routes.
+
+    Each panel degrades independently: a GitHub outage leaves ci.available
+    False, and each health check catches its own exception as a FAIL, so the
+    endpoint returns 200 with partial data rather than 500-ing."""
+    from datetime import datetime
+    checks = _collect_health(query_one=_pooled_query_one)
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "health": {"summary": _summarize_health(checks), "checks": checks},
+        "ci": _ci_latest_runs(),
+        "digest": _digest_marker(),
+    }
