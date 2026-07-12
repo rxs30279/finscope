@@ -1,7 +1,7 @@
 import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
@@ -27,6 +27,8 @@ from dividends import router as dividends_router
 from shorts import router as shorts_router
 from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
+from admin_auth import require_admin_token
+from request_utils import client_ip
 
 load_dotenv()
 
@@ -2147,6 +2149,26 @@ def heatmap(response: Response, ftse_index: Optional[str] = None, live: bool = F
     out.sort(key=lambda r: r["market_cap"], reverse=True)
     _heatmap_cache[cache_key] = (out, now)
     return out
+
+
+@app.get("/api/whoami", dependencies=[Depends(require_admin_token)])
+def whoami(request: Request):
+    """Admin-only diagnostic: what the proxy chain actually forwards, and which
+    value request_utils.client_ip resolves for rate-limit keying.
+
+    Exists to verify (from outside) that x-vercel-forwarded-for survives the
+    Vercel rewrite → Traefik → uvicorn hop chain. If it goes missing, site
+    traffic falls back to bucketing by the rightmost XFF hop (a Vercel egress
+    IP) — stricter than intended, never looser — and this endpoint shows that
+    directly. Token-guarded because proxy internals aren't for the public.
+    """
+    return {
+        "resolved_ip": client_ip(request),
+        "x_vercel_forwarded_for": request.headers.get("x-vercel-forwarded-for"),
+        "x_forwarded_for": request.headers.get("x-forwarded-for"),
+        "x_real_ip": request.headers.get("x-real-ip"),
+        "socket_peer": request.client.host if request.client else None,
+    }
 
 
 # ── Cron-job.org digest endpoint ──────────────────────────────────────────────
