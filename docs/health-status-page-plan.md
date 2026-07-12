@@ -233,8 +233,24 @@ Built in commit-pending form; open questions settled as:
 - Tests: `backend/tests/test_status.py`. Full backend suite green; `tsc` clean.
 
 ### Still manual (not done in the build session)
-- Provision `GITHUB_STATUS_TOKEN` (fine-grained PAT, Actions:read on finscope)
-  → add to Dokploy backend env → redeploy so the CI panel populates in prod.
+- ~~Provision `GITHUB_STATUS_TOKEN`~~ — done 2026-07-12: PAT created, added to
+  Dokploy backend env, redeployed; CI panel populates in prod.
 - First real digest send (next weekday 07:30, or a manual trigger) will write
   the first `rns_digest` marker; until then `digest.sent` reads FAIL and the
   card shows "no send recorded yet" — expected.
+
+### Post-build fixes (2026-07-12 review)
+- `_record_send` had an undefined-name bug (`mode` instead of
+  `stats.get("mode")`) that would have crashed `main()` *after* a successful
+  send — 500 back to cron-job.org, marker never stamped. Fixed; the stamp path
+  and its never-raises contract are now covered in `tests/test_status.py`.
+- `healthcheck.collect()` serialised with a lock (concurrent /api/status calls
+  interleaved the module-global results).
+- `ci_status`: parallel workflow fetches with a 5s timeout (was 6×15s
+  sequential worst case); failures cached 60s instead of 300s.
+- Digest card: an "ok" send older than the most recent expected weekday-07:30
+  slot now renders amber "stale" instead of a green tick.
+
+The `pipeline_runs('rns_digest')` marker convention exists because of the
+silent single-recipient fallback incident — background and detection playbook
+in [digest-segment-fallback-incident.md](digest-segment-fallback-incident.md).

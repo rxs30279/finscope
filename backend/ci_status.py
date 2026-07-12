@@ -22,6 +22,7 @@ Env:
 """
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
@@ -38,6 +39,7 @@ WORKFLOWS = [
 ]
 
 _CACHE_TTL = 300  # seconds; a page refresh within this window is served cached
+_ERROR_TTL = 60   # cache failures for less, so a transient GitHub blip clears fast
 _cache: dict | None = None
 _cache_at: float = 0.0
 
@@ -82,8 +84,12 @@ def _load() -> dict:
         "X-GitHub-Api-Version": "2022-11-28",
     }
     try:
-        with httpx.Client(headers=headers, timeout=15.0) as client:
-            workflows = [_fetch_one(client, wf) for wf in WORKFLOWS]
+        # Fetch in parallel with a short timeout: worst case is one slow
+        # request (~5s), not len(WORKFLOWS) sequential ones, so a GitHub
+        # slowdown can't hold the /api/status response for tens of seconds.
+        with httpx.Client(headers=headers, timeout=5.0) as client:
+            with ThreadPoolExecutor(max_workers=len(WORKFLOWS)) as ex:
+                workflows = list(ex.map(lambda wf: _fetch_one(client, wf), WORKFLOWS))
         return {"available": True, "workflows": workflows}
     except Exception as e:
         return {"available": False, "error": f"{type(e).__name__}: {e}"}
@@ -98,8 +104,10 @@ def latest_runs(force: bool = False) -> dict:
     for a future manual re-poll)."""
     global _cache, _cache_at
     now = time.time()
-    if not force and _cache is not None and now - _cache_at < _CACHE_TTL:
-        return _cache
+    if _cache is not None and not force:
+        ttl = _CACHE_TTL if _cache.get("available") else _ERROR_TTL
+        if now - _cache_at < ttl:
+            return _cache
     _cache = _load()
     _cache_at = now
     return _cache

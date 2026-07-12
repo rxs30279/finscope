@@ -71,6 +71,21 @@ function clockTime(iso: string | null): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// The digest cron fires weekdays at 07:30 UK. A send older than the most
+// recent expected slot means today's (or Friday's, over a weekend) send is
+// missing — an old "ok" must not show a green tick. Viewer-local time is fine:
+// the only admin is in the UK, and the 1h slack absorbs cron drift + BST.
+function digestIsStale(iso: string | null): boolean {
+  if (!iso) return true;
+  const sent = new Date(iso).getTime();
+  if (Number.isNaN(sent)) return true;
+  const slot = new Date();
+  slot.setHours(8, 30, 0, 0); // 07:30 send + 1h slack
+  if (slot.getTime() > Date.now()) slot.setDate(slot.getDate() - 1);
+  while (slot.getDay() === 0 || slot.getDay() === 6) slot.setDate(slot.getDate() - 1);
+  return sent < slot.getTime();
+}
+
 // Map a CI run to a {label, color}. success→green, failure→red, running→amber,
 // anything else (no runs / unknown) → grey.
 function ciChip(w: CiWorkflow): { label: string; color: string } {
@@ -276,7 +291,11 @@ function DigestCard({ digest, loaded }: { digest: DigestMarker | null | undefine
   if (digest) {
     const sent = digest.sent ?? "?";
     const recips = digest.recipients ?? "?";
-    if (digest.status === "ok") {
+    if (digest.status === "ok" && digestIsStale(digest.last_run_at)) {
+      // Last send was clean but a newer one should have happened by now.
+      tone = colors.amber;
+      headline = `! Digest stale · last send ${ago(digest.last_run_at)} · ${digest.mode} · ${sent}/${recips} delivered`;
+    } else if (digest.status === "ok") {
       tone = colors.green;
       headline = `✓ Digest sent ${clockTime(digest.last_run_at)} · ${digest.mode} · ${sent}/${recips} delivered`;
     } else if (digest.status === "failed") {

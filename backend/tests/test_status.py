@@ -7,9 +7,11 @@ the network.
 import pytest
 from fastapi.testclient import TestClient
 
+import contextlib
+
 import main
 from main import app
-from email_rns_digest import _send_status
+from email_rns_digest import _record_send, _send_status
 
 
 # ── /api/status endpoint ──────────────────────────────────────────────────────
@@ -82,3 +84,62 @@ def test_status_summary_fail_wins(client, monkeypatch):
 ])
 def test_send_status_mapping(stats, expected):
     assert _send_status(stats) == expected
+
+
+# ── pipeline_runs stamp (email_rns_digest._record_send) ────────────────────────
+
+class _FakeCursor:
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+
+
+class _FakeConn:
+    def __init__(self):
+        self.cur = _FakeCursor()
+        self.committed = False
+
+    def cursor(self):
+        return self.cur
+
+    def commit(self):
+        self.committed = True
+
+
+def test_record_send_stamps_marker(monkeypatch):
+    """The full stamp path must run (a NameError here once slipped past the
+    pure-mapping tests): status + detail land in the upsert params."""
+    import db
+    conn = _FakeConn()
+
+    @contextlib.contextmanager
+    def fake_connection():
+        yield conn
+
+    monkeypatch.setattr(db, "connection", fake_connection)
+    _record_send({"exit_code": 0, "mode": "segment",
+                  "recipients": 27, "sent": 27, "failed": 0})
+
+    assert conn.committed
+    (sql, params), = conn.cur.executed
+    assert "pipeline_runs" in sql and "'rns_digest'" in sql
+    status, detail_json = params
+    assert status == "ok"
+    assert detail_json.adapted == {
+        "mode": "segment", "recipients": 27, "sent": 27, "failed": 0,
+    }
+
+
+def test_record_send_never_raises(monkeypatch):
+    """Best-effort contract: a DB failure (or any bug in the stamp path) must
+    not propagate — main() calls this after the mail has already gone out."""
+    import db
+
+    def boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(db, "connection", boom)
+    _record_send({"exit_code": 0, "mode": "segment",
+                  "recipients": 27, "sent": 27, "failed": 0})  # must not raise

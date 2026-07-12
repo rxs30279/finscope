@@ -746,14 +746,14 @@ def _record_send(stats: dict) -> None:
     convention; mirrors dividends.record_run(). Best-effort: a marker failure
     must never fail (or appear to fail) an otherwise-good send.
     """
-    status = _send_status(stats)
-    detail = {
-        "mode": mode,
-        "recipients": stats.get("recipients", 0),
-        "sent": stats.get("sent"),
-        "failed": stats.get("failed"),
-    }
     try:
+        status = _send_status(stats)
+        detail = {
+            "mode": stats.get("mode"),
+            "recipients": stats.get("recipients", 0),
+            "sent": stats.get("sent"),
+            "failed": stats.get("failed"),
+        }
         import psycopg2.extras
         from db import connection
         with connection() as conn:

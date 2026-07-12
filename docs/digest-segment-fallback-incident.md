@@ -84,6 +84,12 @@ A recurrence of this incident would instead show
 
 ## How to check the send path (any time)
 
+- **Admin /status page:** every real send now stamps
+  `pipeline_runs('rns_digest')` (mode/recipients/sent/failed); the digest card
+  on `/status` and the daily `digest.sent` healthcheck read it, and a fallback
+  or partial send forces FAIL. See
+  [health-status-page-plan.md](health-status-page-plan.md).
+
 - **Resend dashboard / `GET /emails`:** count rows per digest day — one row
   per recipient. A single row on a day with >1 active contact = fallback.
 - **Container logs:** grep `[digest]` — segment mode logs one

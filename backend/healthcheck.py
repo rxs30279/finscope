@@ -46,6 +46,7 @@ Usage:
 import json
 import os
 import sys
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, date, timezone
@@ -76,6 +77,11 @@ PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
 # Collected results: list of (name, status, detail).
 _results: list[tuple[str, str, str]] = []
+
+# The checks report through this module-global, so concurrent collect() calls
+# (e.g. two overlapping /api/status requests) would interleave their results.
+# Serialise them; the CLI is single-threaded and never contends.
+_collect_lock = threading.Lock()
 
 
 def record(name: str, status: str, detail: str) -> None:
@@ -318,10 +324,11 @@ def collect(query_one=None) -> list[dict]:
     the DB checks reuse the shared connection pool instead of opening a fresh
     SSL connection each; omit it to use the standalone ``_query_one``.
     """
-    _results.clear()
-    run_db_checks(query_one=query_one)
-    run_http_checks()
-    return [{"name": n, "status": s, "detail": d} for n, s, d in _results]
+    with _collect_lock:
+        _results.clear()
+        run_db_checks(query_one=query_one)
+        run_http_checks()
+        return [{"name": n, "status": s, "detail": d} for n, s, d in _results]
 
 
 def summarize(checks: list[dict]) -> str:
