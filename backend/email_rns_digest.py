@@ -601,9 +601,44 @@ def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
         return False
 
 
-def main() -> int:
+def _dry_run_report(rows: list[dict], total_all: int, subject: str,
+                    segment_id: str | None, api_key: str | None) -> int:
+    """Render the digest and report what a real send *would* do, without ever
+    calling Resend. Backs `--dry-run` and /api/digest?dry_run=true so the full
+    fetch → render path can be exercised as a smoke check without emailing
+    anyone. Returns 0 on a valid render, 1 if the render or validation fails."""
+    try:
+        html_body = _render_html(rows, total_all)
+    except Exception as e:
+        print(f"[digest] DRY RUN: render FAILED: {e}")
+        return 1
+    if not subject or len(html_body) < 200:
+        print(f"[digest] DRY RUN: validation FAILED "
+              f"(subject={subject!r}, html_len={len(html_body)})")
+        return 1
+
+    # How many recipients a real send would hit right now.
+    recipients = 0
+    if segment_id and api_key:
+        try:
+            from subscribers import list_active_contacts
+            recipients = sum(
+                1 for c in list_active_contacts() if (c.get("email") or "").strip()
+            )
+        except Exception as e:
+            print(f"[digest] DRY RUN: could not count segment contacts: {e}")
+    elif (os.environ.get("DIGEST_TO") or "").strip():
+        recipients = 1
+
+    print(f'[digest] DRY RUN: would send "{subject}" '
+          f'({len(rows)} rows, {len(html_body)} bytes) to '
+          f'{recipients} recipient(s) — no email sent')
+    return 0
+
+
+def main(dry_run: bool = False) -> int:
     api_key = os.environ.get("RESEND_API_KEY")
-    if not api_key:
+    if not api_key and not dry_run:
         print("[digest] RESEND_API_KEY missing — aborting")
         return 1
 
@@ -620,6 +655,10 @@ def main() -> int:
         subject = f"RNS Digest {now_uk.strftime('%a %d %b')} — {len(rows)} items"
     else:
         subject = f"RNS Digest {now_uk.strftime('%a %d %b')} — no significant items"
+
+    # ── Dry run: render + validate, never send ────────────────────────────────
+    if dry_run:
+        return _dry_run_report(rows, total_all, subject, segment_id, api_key)
 
     # ── Segment mode ──────────────────────────────────────────────────────────
     if segment_id:
@@ -673,4 +712,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # `--dry-run` renders + validates the digest and prints what would be sent,
+    # without contacting Resend. Everything else is a normal send.
+    sys.exit(main(dry_run="--dry-run" in sys.argv))

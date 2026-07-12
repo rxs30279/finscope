@@ -2145,6 +2145,7 @@ _DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
 @app.get("/api/digest")
 def digest(
     token: str = Query(default=""),
+    dry_run: bool = Query(default=False),
     x_digest_token: str = Header(default=""),
 ):
     """HTTP endpoint for cron-job.org to trigger the RNS email digest.
@@ -2153,6 +2154,10 @@ def digest(
     DIGEST_CRON_TOKEN, supplied either as the `X-Digest-Token` header (preferred
     — keeps the secret out of URLs and access logs) or, for back-compat, as the
     `?token=` query param.
+
+    `?dry_run=true` fetches + renders + validates the digest but never contacts
+    Resend, so the smoke suite can exercise the full path without emailing
+    anyone. The flag only ever *removes* the send, so it fails safe.
     """
     if not _DIGEST_TOKEN:
         return {"ok": False, "error": "DIGEST_CRON_TOKEN not configured"}
@@ -2162,8 +2167,9 @@ def digest(
     if not hmac.compare_digest(supplied, _DIGEST_TOKEN):
         raise HTTPException(403, "Invalid token")
 
-    exit_code = run_digest()
+    exit_code = run_digest(dry_run=dry_run)
     if exit_code == 0:
-        return {"ok": True, "message": "Digest sent"}
+        msg = "Digest rendered (dry run — not sent)" if dry_run else "Digest sent"
+        return {"ok": True, "message": msg, "dry_run": dry_run}
     else:
-        return {"ok": False, "error": f"Digest failed with exit code {exit_code}"}
+        return {"ok": False, "error": f"Digest failed with exit code {exit_code}", "dry_run": dry_run}

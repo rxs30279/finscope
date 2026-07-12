@@ -1,0 +1,7 @@
+# Test-only dependencies (not installed in production).
+# Kept deliberately small so the smoke workflow can install *only* this file
+# (pytest + httpx) without pulling the full app runtime.
+#   pip install -r backend/requirements.txt -r backend/requirements-dev.txt   # unit tests
+#   pip install -r backend/requirements-dev.txt                               # smoke tests
+pytest==8.3.*
+httpx==0.28.*   # required by Starlette's TestClient and used directly by smoke/

@@ -1,0 +1,47 @@
+name: backend-tests
+
+# Hermetic unit tests for the FastAPI backend. Runs on every push / PR that
+# touches backend/**. No DB and no secrets: the suite tests pure functions and
+# mocks its fetchers, and db.get_pool() is lazy so importing main.py opens no
+# connection. A failing run blocks the PR and (on push) sends the usual GitHub
+# failure email.
+
+on:
+  push:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-tests.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-tests.yml'
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        # Full requirements needed: main.py imports yfinance/openai at module load.
+        run: pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+
+      - name: Run unit tests
+        working-directory: backend
+        run: python -m pytest
