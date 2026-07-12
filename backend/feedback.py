@@ -15,7 +15,7 @@ Endpoint:
 Env:
   RESEND_API_KEY   — required, same key the digest uses
   DIGEST_FROM      — verified sender (default: Alpha Move AI <digest@alphamoveai.co.uk>)
-  FEEDBACK_TO      — where feedback lands (default: DIGEST_TO, then hard default)
+  FEEDBACK_TO      — where feedback lands (falls back to DIGEST_TO; one is required)
 """
 import os
 import re
@@ -36,7 +36,6 @@ router = APIRouter()
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 _DEFAULT_FROM = "Alpha Move AI <digest@alphamoveai.co.uk>"
-_DEFAULT_TO   = "richard_stephens@hotmail.co.uk"
 
 _MAX_MESSAGE = 5000
 
@@ -47,7 +46,10 @@ _feedback_limiter = SlidingWindowLimiter(limit=5, window_seconds=600)
 
 
 def _feedback_to() -> str:
-    return os.environ.get("FEEDBACK_TO") or os.environ.get("DIGEST_TO") or _DEFAULT_TO
+    to = (os.environ.get("FEEDBACK_TO") or os.environ.get("DIGEST_TO") or "").strip()
+    if not to:
+        raise HTTPException(500, "FEEDBACK_TO / DIGEST_TO not configured")
+    return to
 
 
 def _send_via_resend(body: dict) -> dict:

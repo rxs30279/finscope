@@ -1,7 +1,7 @@
 import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 import psycopg2.extras
@@ -10,6 +10,7 @@ from typing import Optional
 from dotenv import load_dotenv
 import os
 import re
+import hmac
 import statistics
 from datetime import timezone
 from email.utils import format_datetime
@@ -2177,15 +2178,23 @@ _DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
 
 
 @app.get("/api/digest")
-def digest(token: str = Query(...)):
+def digest(
+    token: str = Query(default=""),
+    x_digest_token: str = Header(default=""),
+):
     """HTTP endpoint for cron-job.org to trigger the RNS email digest.
 
-    Called by cron-job.org Mon–Fri at 07:30 UK time.
-    Requires ?token=<DIGEST_CRON_TOKEN> for basic auth.
+    Called by cron-job.org Mon–Fri at 07:30 UK time. Authenticate with the
+    DIGEST_CRON_TOKEN, supplied either as the `X-Digest-Token` header (preferred
+    — keeps the secret out of URLs and access logs) or, for back-compat, as the
+    `?token=` query param.
     """
     if not _DIGEST_TOKEN:
         return {"ok": False, "error": "DIGEST_CRON_TOKEN not configured"}
-    if token != _DIGEST_TOKEN:
+    supplied = x_digest_token or token
+    # Constant-time compare so a caller can't infer the token byte-by-byte from
+    # response timing.
+    if not hmac.compare_digest(supplied, _DIGEST_TOKEN):
         raise HTTPException(403, "Invalid token")
 
     exit_code = run_digest()

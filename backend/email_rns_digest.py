@@ -17,7 +17,7 @@ Environment:
   RESEND_SEGMENT_ID     — optional; if set, send to all active contacts
   UNSUBSCRIBE_SECRET    — required when segment mode is on (HMAC secret)
   PUBLIC_BASE_URL       — public app URL used in unsub links (e.g. https://...)
-  DIGEST_TO             — fallback single recipient (default: richard_stephens@hotmail.co.uk)
+  DIGEST_TO             — fallback single recipient (used only when no segment)
   DIGEST_FROM           — sender   (default: digest@alphamoveai.co.uk)
   DB_*                  — same vars as the rest of the backend
 """
@@ -44,7 +44,6 @@ _WINDOW_H   = 24
 _MIN_MARKET_CAP = 15_000_000   # drop stories below £15m (and any with no determinable cap)
 # Public app URL for company-page links; mirrors the frontend seo.ts default.
 _SITE_URL   = (os.environ.get("PUBLIC_BASE_URL") or "https://app.alphamoveai.co.uk").rstrip("/")
-_DEFAULT_TO = "richard_stephens@hotmail.co.uk"
 _DEFAULT_FROM = "Alpha Move AI <digest@alphamoveai.co.uk>"
 _KOFI_URL   = "https://ko-fi.com/alphamoveai"  # same page the in-app Support button links to
 
@@ -647,7 +646,10 @@ def main() -> int:
         print("[digest] segment configured but empty — falling back to DIGEST_TO")
 
     # ── Single-recipient fallback (original behaviour) ────────────────────────
-    to_addr = os.environ.get("DIGEST_TO", _DEFAULT_TO)
+    to_addr = (os.environ.get("DIGEST_TO") or "").strip()
+    if not to_addr:
+        print("[digest] no DIGEST_TO configured and no segment recipients — nothing to send")
+        return 0
     # Best-effort unsub footer for the fallback recipient (only if base + secret set).
     footer = ""
     headers: dict | None = None
