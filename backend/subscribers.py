@@ -5,9 +5,10 @@ for the subscriber list (Audiences are deprecated). This module is a thin
 proxy over those endpoints; we do not keep a parallel DB table.
 
 Endpoints:
-  POST /api/subscribers/signup          — body {"email": "..."}
-  GET  /api/unsubscribe?email=&t=       — confirmation page + unsub
-  POST /api/unsubscribe                 — RFC 8058 one-click unsub
+  POST /api/subscribers/signup           — body {"email": "..."}
+  GET  /api/unsubscribe?email=&t=        — confirmation page + unsub (HMAC-signed)
+  POST /api/unsubscribe                  — RFC 8058 one-click unsub
+  POST /api/subscribers/unsubscribe-self — website form; emails the signed link
 
 Env:
   RESEND_API_KEY        — Resend API key (same one the digest uses)
@@ -27,6 +28,8 @@ import urllib.error
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+from request_utils import client_ip, SlidingWindowLimiter
 
 
 router = APIRouter()
@@ -293,16 +296,60 @@ class UnsubSelfBody(BaseModel):
     email: str
 
 
+# Each accepted request may send a confirmation email, so damp scripted abuse.
+_unsub_limiter = SlidingWindowLimiter(limit=3, window_seconds=600)
+
+
 @router.post("/api/subscribers/unsubscribe-self")
-def unsubscribe_self(body: UnsubSelfBody):
-    """User-initiated unsubscribe from the website form. No HMAC token
-    required (the user is already proving access to the email field) — we
-    just verify the address shape and PATCH Resend."""
+def unsubscribe_self(body: UnsubSelfBody, request: Request):
+    """User-initiated unsubscribe from the website form.
+
+    Typing an address into a form proves nothing — acting on it directly would
+    let anyone silently unsubscribe anyone else. So this emails the address its
+    signed one-click unsubscribe link (the same HMAC link the digest footer
+    carries): only the inbox owner can complete it.
+
+    The response is identical whether or not the address is subscribed, so the
+    form can't be used to probe who's on the list; the email itself is only
+    sent to genuine active subscribers, so the form can't be used to spam
+    strangers either.
+    """
+    if not _unsub_limiter.allow(client_ip(request)):
+        raise HTTPException(429, "Too many requests — please wait a few minutes and try again")
+
     email = body.email.strip().lower()
     if not _EMAIL_RE.match(email):
         raise HTTPException(400, "Invalid email address")
-    _do_unsubscribe(email)
-    return {"ok": True, "status": "unsubscribed"}
+
+    try:
+        active = list_active_contacts()
+    except RuntimeError as e:
+        raise HTTPException(502, f"Resend error: {e}")
+
+    if any((c.get("email") or "").lower() == email for c in active):
+        url = build_unsubscribe_url(email)
+        from feedback import _send_via_resend  # same Resend relay + env
+        _send_via_resend({
+            "from": os.environ.get("DIGEST_FROM", "Alpha Move AI <digest@alphamoveai.co.uk>"),
+            "to": [email],
+            "subject": "Confirm your unsubscribe — Alpha Move AI",
+            "text": (
+                "Someone (hopefully you) asked to unsubscribe this address from "
+                "the Alpha Move AI daily digest.\n\n"
+                f"Click to confirm: {url}\n\n"
+                "If this wasn't you, ignore this email and nothing changes."
+            ),
+            "html": (
+                '<div style="font-family:monospace;font-size:14px;color:#111;">'
+                "<p>Someone (hopefully you) asked to unsubscribe this address "
+                "from the Alpha Move AI daily digest.</p>"
+                f'<p><a href="{url}">Confirm unsubscribe</a></p>'
+                '<p style="color:#666;">If this wasn\'t you, ignore this email '
+                "and nothing changes.</p></div>"
+            ),
+        })
+
+    return {"ok": True, "status": "confirmation_sent"}
 
 
 # ── Helper exported for the digest sender ─────────────────────────────────────

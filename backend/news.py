@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from dotenv import load_dotenv
 
 from admin_auth import require_admin_token  # noqa: F401 (kept for the re-gate path on /{symbol}/summary)
+from request_utils import client_ip as _client_ip
 
 load_dotenv()
 
@@ -42,6 +43,10 @@ _SUMMARY_COOLDOWN_HOURS = 24
 # by the summary_rate_hits table so the cap is shared across workers.
 _SUMMARY_RATE_LIMIT = 20
 _SUMMARY_RATE_WINDOW_HOURS = 24
+# Service-wide ceiling on fresh generations per window, since per-IP buckets can
+# be diversified by forged proxy headers (see request_utils.client_ip). This is
+# the hard bound on daily DeepSeek spend. Env-tunable without a redeploy.
+_SUMMARY_GLOBAL_LIMIT = int(os.environ.get("SUMMARY_GLOBAL_RATE_LIMIT", "60"))
 
 _DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -566,23 +571,19 @@ def _generate_summary(symbol: str) -> dict:
     }
 
 
-def _client_ip(request: Request) -> str:
-    """Real client IP. Behind the Dokploy/Traefik proxy request.client.host is
-    the proxy, so prefer the first hop of X-Forwarded-For."""
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
 def _check_summary_rate_limit(ip: str) -> None:
     """Reserve a slot in this IP's rolling window, or raise 429. Backed by the
     summary_rate_hits table so the cap is shared across both workers (the old
     in-process counter gave each worker its own quota). One CTE prunes expired
     rows, counts what's left in-window, and inserts a new hit only if still
-    under the limit. It's a soft cap: two simultaneous requests take separate
+    under the limits. It's a soft cap: two simultaneous requests take separate
     snapshots and could both pass at the boundary, so the effective ceiling is
-    limit + (concurrent requests - 1) — at most one over with two workers."""
+    limit + (concurrent requests - 1) — at most one over with two workers.
+
+    Two limits: per-IP for fairness, plus a service-wide cap. The per-IP key
+    can be diversified by a caller who forges proxy headers against the API
+    origin directly (see request_utils.client_ip), so the global cap is what
+    actually bounds worst-case DeepSeek spend per window."""
     rows = _query(
         """
         WITH pruned AS (
@@ -590,20 +591,35 @@ def _check_summary_rate_limit(ip: str) -> None:
             WHERE hit_at < NOW() - make_interval(hours => %(window)s)
         ),
         win AS (
-            SELECT COUNT(*) AS n FROM summary_rate_hits
-            WHERE ip = %(ip)s
-              AND hit_at > NOW() - make_interval(hours => %(window)s)
+            SELECT COUNT(*) FILTER (WHERE ip = %(ip)s) AS n_ip,
+                   COUNT(*) AS n_all
+            FROM summary_rate_hits
+            WHERE hit_at > NOW() - make_interval(hours => %(window)s)
         ),
         ins AS (
             INSERT INTO summary_rate_hits (ip)
-            SELECT %(ip)s FROM win WHERE win.n < %(limit)s
+            SELECT %(ip)s FROM win
+            WHERE win.n_ip < %(limit)s AND win.n_all < %(global_limit)s
             RETURNING 1
         )
-        SELECT (SELECT n FROM win) AS n, (SELECT COUNT(*) FROM ins) AS inserted
+        SELECT (SELECT n_ip FROM win) AS n_ip,
+               (SELECT n_all FROM win) AS n_all,
+               (SELECT COUNT(*) FROM ins) AS inserted
         """,
-        {"ip": ip, "window": _SUMMARY_RATE_WINDOW_HOURS, "limit": _SUMMARY_RATE_LIMIT},
+        {
+            "ip": ip,
+            "window": _SUMMARY_RATE_WINDOW_HOURS,
+            "limit": _SUMMARY_RATE_LIMIT,
+            "global_limit": _SUMMARY_GLOBAL_LIMIT,
+        },
     )
     if not rows or rows[0]["inserted"] == 0:
+        if rows and (rows[0]["n_all"] or 0) >= _SUMMARY_GLOBAL_LIMIT:
+            raise HTTPException(
+                429,
+                "The AI summariser has hit its service-wide daily budget. "
+                "Try again tomorrow — cached summaries are unaffected.",
+            )
         raise HTTPException(
             429,
             f"Rate limit: max {_SUMMARY_RATE_LIMIT} fresh summaries per "

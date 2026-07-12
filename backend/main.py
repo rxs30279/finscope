@@ -1649,6 +1649,25 @@ def screener(
 
 _quote_cache: dict = {}
 _QUOTE_TTL = 60  # seconds
+# Symbol-list endpoints take arbitrary user input, so bound both dimensions:
+# how many symbols one request may carry (each /api/quotes miss is a yfinance
+# fetch on a thread pool) and what a symbol may look like. The shape check
+# covers LSE tickers plus the ^index / FX=X forms yfinance uses; anything else
+# is silently dropped rather than fetched-and-cached.
+_MAX_LIST_SYMBOLS = 100
+_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.^=-]{1,15}$")
+# The quote cache holds only 2-tuples, but garbage symbols would still grow it
+# without bound on a long-lived process — prune expired entries past this size.
+_QUOTE_CACHE_MAX = 2000
+
+
+def _parse_symbol_list(symbols: str) -> list[str]:
+    """Comma-separated symbols → deduped, shape-validated list (order kept).
+    Raises 400 when the request asks for more than _MAX_LIST_SYMBOLS."""
+    requested = list(dict.fromkeys(s.strip() for s in symbols.split(",") if s.strip()))
+    if len(requested) > _MAX_LIST_SYMBOLS:
+        raise HTTPException(400, f"Too many symbols (max {_MAX_LIST_SYMBOLS} per request)")
+    return [s for s in requested if _SYMBOL_RE.match(s)]
 
 
 @app.get("/api/quotes")
@@ -1658,7 +1677,7 @@ def quotes(symbols: str, response: Response):
     import yfinance as yf
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    requested = _parse_symbol_list(symbols)
     if not requested:
         return {}
 
@@ -1702,6 +1721,12 @@ def quotes(symbols: str, response: Response):
                 out[sym] = price
                 _quote_cache[sym] = (price, now)
 
+    # Bound the cache: real tickers are a finite set, but unknown-symbol probes
+    # would otherwise accumulate one dead entry each, forever.
+    if len(_quote_cache) > _QUOTE_CACHE_MAX:
+        for k in [k for k, v in _quote_cache.items() if now - v[1] >= _QUOTE_TTL]:
+            del _quote_cache[k]
+
     return out
 
 
@@ -1717,7 +1742,7 @@ def watchlist(symbols: str, response: Response = None):
     a handful of bulk queries rather than per-stock. Prices are in pence (LSE
     convention); the frontend converts and derives day-change / range / target-gap.
     """
-    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    requested = _parse_symbol_list(symbols)
     if not requested:
         return []
 

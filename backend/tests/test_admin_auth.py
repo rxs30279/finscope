@@ -16,8 +16,8 @@ GUARDED = [
     "/api/rns/rank",
     "/api/rns/rank/1",
     "/api/showcase/1/status",
-    "/api/showcase/1/extend",
     "/api/showcase/flag",
+    "/api/showcase/extract-fwd",
     # /api/news/{symbol}/summary is intentionally public (per-symbol 24h
     # cooldown guards DeepSeek spend instead of an admin token) — not listed.
 ]

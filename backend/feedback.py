@@ -24,8 +24,10 @@ import html
 import urllib.request
 import urllib.error
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from request_utils import client_ip, SlidingWindowLimiter
 
 
 router = APIRouter()
@@ -37,6 +39,11 @@ _DEFAULT_FROM = "Alpha Move AI <digest@alphamoveai.co.uk>"
 _DEFAULT_TO   = "richard_stephens@hotmail.co.uk"
 
 _MAX_MESSAGE = 5000
+
+# The honeypot only stops dumb bots; without a rate limit a script that leaves
+# it blank can pump unlimited mail through the Resend account into the owner's
+# inbox. Nobody sends feedback five times in ten minutes legitimately.
+_feedback_limiter = SlidingWindowLimiter(limit=5, window_seconds=600)
 
 
 def _feedback_to() -> str:
@@ -79,10 +86,13 @@ class FeedbackBody(BaseModel):
 
 
 @router.post("/api/feedback")
-def submit_feedback(body: FeedbackBody):
+def submit_feedback(body: FeedbackBody, request: Request):
     # Honeypot tripped — pretend success so the bot doesn't retry/learn.
     if (body.company or "").strip():
         return {"ok": True}
+
+    if not _feedback_limiter.allow(client_ip(request)):
+        raise HTTPException(429, "Too many messages — please wait a few minutes and try again")
 
     message = (body.message or "").strip()
     if not message:

@@ -24,9 +24,7 @@ import re
 import sys
 import os
 import html
-import time
 import hashlib
-import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,6 +36,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from admin_auth import require_admin_token
+from request_utils import client_ip as _client_ip, SlidingWindowLimiter
 
 router = APIRouter(prefix="/api/research", tags=["research"])
 
@@ -50,13 +49,13 @@ _MAX_AUTHOR = 80
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 # Comment flood control (the honeypot only stops dumb bots): a per-IP sliding
-# window on submissions, plus a cap on how many pending comments one post can
-# accumulate before we stop accepting more.
+# window on submissions (keyed on the proxy-verified IP — see
+# request_utils.client_ip), plus a cap on how many pending comments one post
+# can accumulate before we stop accepting more.
 _RATE_LIMIT = 3           # accepted submissions …
 _RATE_WINDOW = 60         # … per IP per this many seconds
 _MAX_PENDING_PER_POST = 50
-_rate_lock = threading.Lock()
-_rate_hits: dict[str, list[float]] = {}  # ip -> recent submission timestamps
+_comment_limiter = SlidingWindowLimiter(_RATE_LIMIT, _RATE_WINDOW)
 
 
 def _q(sql, params=None):
@@ -83,34 +82,6 @@ def _unique_slug(base: str, exclude_id: Optional[int] = None) -> str:
             return slug
         n += 1
         slug = f"{base}-{n}"
-
-
-def _client_ip(request: Request) -> str:
-    """Real client IP: first hop of X-Forwarded-For (we're behind Traefik /
-    Vercel's proxy), falling back to the socket peer."""
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _rate_limited(ip: str) -> bool:
-    """True if this IP has already submitted _RATE_LIMIT comments in the last
-    _RATE_WINDOW seconds. Records the attempt when allowed."""
-    now = time.time()
-    with _rate_lock:
-        # Keep the map bounded — a slow scan across many IPs must not grow it
-        # forever (the process is long-lived on Dokploy).
-        if len(_rate_hits) > 1000:
-            for k in [k for k, v in _rate_hits.items() if not v or v[-1] < now - _RATE_WINDOW]:
-                del _rate_hits[k]
-        hits = [t for t in _rate_hits.get(ip, []) if t > now - _RATE_WINDOW]
-        if len(hits) >= _RATE_LIMIT:
-            _rate_hits[ip] = hits
-            return True
-        hits.append(now)
-        _rate_hits[ip] = hits
-        return False
 
 
 def _notify_new_comment(post_title: str, post_slug: str, author: str,
@@ -255,7 +226,7 @@ def submit_comment(slug: str, payload: CommentBody, request: Request,
     if (payload.website or "").strip():
         return {"ok": True, "pending": True}  # honeypot — silently discard
 
-    if _rate_limited(_client_ip(request)):
+    if not _comment_limiter.allow(_client_ip(request)):
         raise HTTPException(429, "Too many comments — please wait a minute and try again")
 
     author = (payload.author or "").strip()

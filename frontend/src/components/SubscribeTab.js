@@ -186,9 +186,10 @@ export default function SubscribeTab() {
   async function submitUnsub(e) {
     e.preventDefault();
     setUnsubBusy(true); setUnsubMsg(null);
-    // The public unsubscribe endpoint requires an HMAC token that only the
-    // backend can compute, so the form posts to /subscribers/unsubscribe-self
-    // — a thin helper that re-derives the token server-side from the email.
+    // Typing an email proves nothing, so the backend doesn't unsubscribe
+    // directly — it emails the address its signed unsubscribe link, and only
+    // the inbox owner can complete it. The response is the same whether or
+    // not the address is subscribed.
     try {
       const res = await fetch(`${API}/subscribers/unsubscribe-self`, {
         method: "POST",
@@ -197,7 +198,7 @@ export default function SubscribeTab() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        setUnsubMsg({ kind: "ok", text: `✓ Unsubscribed — ${unsubEmail}` });
+        setUnsubMsg({ kind: "ok", text: `✓ If ${unsubEmail} is subscribed, a confirmation link is on its way — click it to finish unsubscribing.` });
         setUnsubEmail("");
       } else {
         setUnsubMsg({ kind: "err", text: data.detail || `Error (${res.status})` });
@@ -272,7 +273,8 @@ export default function SubscribeTab() {
           <>
             <div style={{ ...LABEL, color: "#94a3b8" }}>Unsubscribe</div>
             <div style={{ color: "#666", fontSize: 12, fontFamily: "monospace", marginBottom: 12 }}>
-              Or use the one-click link in any digest email footer.
+              We&apos;ll email you a confirmation link — or use the one-click
+              link in any digest email footer.
             </div>
             <form onSubmit={submitUnsub} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <input
