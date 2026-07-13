@@ -103,8 +103,14 @@ def test_sentiment_uses_llm_field_then_thesis_then_hits():
 
 def test_company_url_strips_dot_l_suffix():
     assert d._company_url({"symbol": "TSCO.L"}).endswith("/company/TSCO")
-    # Falls back to ticker when symbol is missing.
-    assert d._company_url({"ticker": "azn"}).endswith("/company/AZN")
+
+
+def test_company_url_unresolved_symbol_links_to_yahoo():
+    # NULL symbol = ticker never resolved against company_metadata, i.e. the
+    # company is outside our universe — its page would be empty, so link out.
+    assert d._company_url({"ticker": "azn"}) == "https://finance.yahoo.com/quote/AZN.L"
+    # Trailing dot in investegate tickers (e.g. JD.) is stripped before .L.
+    assert d._company_url({"ticker": "JD.", "symbol": None}) == "https://finance.yahoo.com/quote/JD.L"
 
 
 # ── _esc ───────────────────────────────────────────────────────────────────────
@@ -123,6 +129,12 @@ def test_render_row_contains_company_headline_and_link():
     assert "https://example.com/rns/1" in html
     assert "/company/TSCO" in html            # company-page link
     assert "Interim Results" in html          # category label
+
+
+def test_render_row_out_of_universe_links_to_yahoo():
+    html = d._render_row(_row(symbol=None))
+    assert "finance.yahoo.com/quote/TSCO.L" in html
+    assert "/company/TSCO" not in html
 
 
 def test_render_row_escapes_hostile_markup_in_name():

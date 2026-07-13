@@ -255,9 +255,20 @@ def _render_sentiment(r: dict) -> str:
 
 
 def _company_url(r: dict) -> str:
-    """Public company-page URL for a row. Mirrors the frontend tickerSlug():
-    strip the '.L' suffix, upper-case, URL-encode (e.g. TSCO.L -> /company/TSCO)."""
-    sym = (r.get("symbol") or r.get("ticker") or "").strip()
+    """Company link for a row's ticker.
+
+    In-universe rows (symbol resolved against company_metadata at ingest) link
+    to our company page, mirroring the frontend tickerSlug(): strip the '.L'
+    suffix, upper-case, URL-encode (e.g. TSCO.L -> /company/TSCO).
+
+    Rows with a NULL symbol never resolved — the company isn't in our universe
+    and its page would render empty, so link out to Yahoo Finance instead
+    (same TICKER.L construction the market-cap backfill uses)."""
+    sym = (r.get("symbol") or "").strip()
+    if not sym:
+        ticker = (r.get("ticker") or "").strip()
+        yahoo = f"{ticker.rstrip('.').upper()}.L" if ticker else ""
+        return f"https://finance.yahoo.com/quote/{urllib.parse.quote(yahoo)}"
     slug = sym[:-2] if sym.upper().endswith(".L") else sym
     return f"{_SITE_URL}/company/{urllib.parse.quote(slug.upper())}"
 

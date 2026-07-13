@@ -141,6 +141,15 @@ function getSentiment(r) {
   return "neutral";
 }
 
+// Yahoo Finance quote URL for tickers that never resolved against our
+// universe (r.symbol is null) — their company page would be empty, so link
+// out instead. Same TICKER.L construction the digest email uses.
+function yahooQuoteUrl(ticker) {
+  return `https://finance.yahoo.com/quote/${encodeURIComponent(
+    `${ticker.replace(/\.+$/, "").toUpperCase()}.L`
+  )}`;
+}
+
 function SentimentBadge({ row }) {
   const s = getSentiment(row);
   const map = {
@@ -490,9 +499,25 @@ export default function RnsTab({ refreshKey, onSelect }) {
                   </span>
                 </span>
               ) : (
-                <span style={{ color: "#e5e5e5", fontWeight: 700 }}>
+                <a
+                  href={yahooQuoteUrl(r.ticker)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`View ${r.ticker} on Yahoo Finance`}
+                  style={{ color: "#e5e5e5", fontWeight: 700, textDecoration: "none" }}
+                >
                   {r.ticker}
-                </span>
+                  <span
+                    style={{
+                      color: "#666",
+                      marginLeft: 4,
+                      fontWeight: 400,
+                      fontSize: 10,
+                    }}
+                  >
+                    ↗
+                  </span>
+                </a>
               ))}
             {r.company_name && (
               <span style={{ color: "#94a3b8", fontSize: 11, overflowWrap: "anywhere" }}>
@@ -627,7 +652,25 @@ export default function RnsTab({ refreshKey, onSelect }) {
               </span>
             </span>
           ) : (
-            r.ticker
+            <a
+              href={yahooQuoteUrl(r.ticker)}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`View ${r.ticker} on Yahoo Finance`}
+              style={{ color: "#e5e5e5", textDecoration: "none" }}
+            >
+              {r.ticker}
+              <span
+                style={{
+                  color: "#666",
+                  marginLeft: 4,
+                  fontWeight: 400,
+                  fontSize: 10,
+                }}
+              >
+                ↗
+              </span>
+            </a>
           )
         ) : (
           "—"
