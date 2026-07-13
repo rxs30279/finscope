@@ -142,12 +142,33 @@ def _discover_ansp_urls():
     return _absolutize(current_url), _absolutize(historic_url)
 
 
-def _read_ansp_table(url):
+def _to_date(val):
+    """Coerce an FCA date cell to a datetime.date, or None.
+
+    The CSVs carry dd/mm/yyyy strings ('19/06/2026'); XLSX cells may already be
+    datetimes. Parsed here (dayfirst) rather than passed raw to Postgres, whose
+    default MDY DateStyle would reject 19/06/2026 and silently swap 01/07/2026.
+    """
+    import pandas as pd
+
+    if val is None:
+        return None
+    ts = pd.to_datetime(val, dayfirst=True, errors="coerce")
+    return None if pd.isna(ts) else ts.date()
+
+
+def _read_ansp_table(url, fallback_disclosure_date=None):
     """Download + parse one ANSP file (CSV preferred, XLSX fallback) into rows.
 
     Returns a list of dicts with keys: issuer_name, isin, ansp_pct, position_date,
-    disclosure_date. Column names in the FCA output aren't finalised until the
-    first real publication (Mon 13 July), so this matches loosely on substrings.
+    disclosure_date. Matches columns loosely on substrings; the first real
+    publication (Mon 13 July 2026) uses:
+      current:  ISIN / Name of Company / Aggregated net short position (%) /
+                Position date (of latest position date notified)
+      historic: same + Date the aggregated net short position became historical
+
+    The current file has no publication-date column, so callers pass
+    fallback_disclosure_date (the scrape date) to key that day's snapshot.
     """
     import pandas as pd
     import requests
@@ -172,11 +193,11 @@ def _read_ansp_table(url):
                 return c
         return None
 
-    col_issuer = _find("name of issuer") or _find("issuer")
+    col_issuer = _find("name of issuer") or _find("name of company") or _find("issuer") or _find("company")
     col_isin = _find("isin")
     col_pct = _find("net short") or _find("aggregate")
     col_posdate = _find("position date")
-    col_discdate = _find("disclosure") or _find("publication")
+    col_discdate = _find("disclosure") or _find("publication") or _find("historical")
 
     rows = []
     for _, row in df.iterrows():
@@ -185,8 +206,12 @@ def _read_ansp_table(url):
         if not isin or not issuer:
             continue
         pct = row.get(col_pct) if col_pct else None
-        pos_date = row.get(col_posdate) if col_posdate else None
-        disc_date = row.get(col_discdate) if col_discdate else pos_date
+        if pct is not None and pd.isna(pct):
+            pct = None
+        pos_date = _to_date(row.get(col_posdate)) if col_posdate else None
+        disc_date = _to_date(row.get(col_discdate)) if col_discdate else None
+        if disc_date is None:
+            disc_date = fallback_disclosure_date or pos_date
 
         rows.append(
             {
@@ -211,10 +236,13 @@ def refresh_shorts():
     by_isin, by_name = _build_universe_index()
 
     all_rows = []
-    for url in (current_url, historic_url):
+    # Current file carries no publication date -- key today's snapshot on the
+    # scrape date so the daily series accumulates one row per issuer per day.
+    # Historic rows key on their own "became historical" column.
+    for url, fallback in ((current_url, date.today()), (historic_url, None)):
         if not url:
             continue
-        all_rows.extend(_read_ansp_table(url))
+        all_rows.extend(_read_ansp_table(url, fallback_disclosure_date=fallback))
 
     n_written = 0
     n_unresolved = 0
