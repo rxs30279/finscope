@@ -48,7 +48,7 @@ export default function TrendingList({ title, accent, up, items, selected, onSel
                 <StreakBadge days={it.streak} up={up} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ color: "#e5e5e5", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{it.symbol.replace(".L", "")}</div>
-                  <div style={{ color: "#64748b", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+                  <div style={{ color: "#94a3b8", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
                   <div style={{ color: "#f1f5f9", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{fmtPence(it.price)}</div>
