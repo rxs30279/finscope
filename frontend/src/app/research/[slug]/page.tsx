@@ -60,13 +60,23 @@ export default async function ResearchPostPage({ params }: PageProps) {
     description: post.summary || undefined,
     url,
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
-    image: post.image
-      ? [post.image.startsWith("http") ? post.image : `${SITE_URL}${post.image}`]
-      : undefined,
+    // Posts without a custom image fall back to the generated share card
+    // (opengraph-image.tsx) so `image` is always present for rich results.
+    image: [
+      post.image
+        ? post.image.startsWith("http")
+          ? post.image
+          : `${SITE_URL}${post.image}`
+        : `${url}/opengraph-image`,
+    ],
     datePublished: post.published_at || undefined,
     dateModified: post.updated_at || undefined,
-    author: { "@type": "Organization", name: "Alpha Move AI" },
-    publisher: { "@type": "Organization", name: "Alpha Move AI" },
+    author: { "@type": "Organization", name: "Alpha Move AI", url: SITE_URL },
+    publisher: {
+      "@type": "Organization",
+      name: "Alpha Move AI",
+      logo: { "@type": "ImageObject", url: `${SITE_URL}/android-chrome-512.png` },
+    },
     keywords: post.tags?.join(", ") || undefined,
   };
 
