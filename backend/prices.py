@@ -92,6 +92,12 @@ _BATCH_SIZE = 25  # yfinance chokes on large batches — keep small
 _BATCH_SLEEP_S = 1.5  # delay between batches to avoid rate limiting
 _MAX_RETRIES = 2  # retry a failed batch once
 _DEACTIVATE_AFTER = 3  # consecutive empty refreshes before a symbol is dropped
+# Yahoo revises closes after the fact: the post-close run stores a preliminary
+# figure, and the official closing-auction print (or an outright correction —
+# BARC.L 2026-07-08 was off by 3%) lands later. Re-fetching this many calendar
+# days (~5 trading days) behind the latest stored bar gives each bar several
+# nightly passes to converge; the ON CONFLICT upsert overwrites stale values.
+_REVISION_DAYS = 7
 
 
 def _fetch_ohlcv_batch(symbols, start_date):
@@ -358,8 +364,10 @@ def refresh_prices():
     groups = {}  # start_date -> [symbols]
     for sym in all_symbols:
         if sym in latest and latest[sym] is not None:
-            # Top-up from latest stored date (skip weekends)
-            top_up_start = _next_trading_day(latest[sym] + timedelta(days=1))
+            # Top-up from a trailing window behind the latest stored date (not
+            # just the day after it) so post-close revisions to recent bars are
+            # picked up — see _REVISION_DAYS.
+            top_up_start = _next_trading_day(latest[sym] - timedelta(days=_REVISION_DAYS))
             groups.setdefault(top_up_start, []).append(sym)
             # Backfill if we don't have 5Y of history
             if sym in earliest and earliest[sym] > target_start:
@@ -611,9 +619,10 @@ def refresh_symbol(symbol: str):
         fetched = _fetch_ohlcv([symbol], target_start)
         total += _upsert_rows(fetched)
 
-    # Top-up from latest stored date to today (skip weekends)
+    # Top-up from a trailing window behind the latest stored date so post-close
+    # revisions to recent bars are picked up — see _REVISION_DAYS.
     if latest is not None:
-        top_up_start = _next_trading_day(latest + timedelta(days=1))
+        top_up_start = _next_trading_day(latest - timedelta(days=_REVISION_DAYS))
         if top_up_start <= date.today():
             fetched = _fetch_ohlcv([symbol], top_up_start)
             total += _upsert_rows(fetched)

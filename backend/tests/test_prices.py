@@ -49,6 +49,32 @@ def test_refresh_returns_summary(client):
     mock_activity.assert_called_once()
 
 
+def test_refresh_refetches_trailing_window(client):
+    """Bulk refresh fetches from ~_REVISION_DAYS behind the latest stored bar
+    (not the day after it) so Yahoo's post-close revisions overwrite the
+    preliminary closes stored just after the close."""
+    import prices
+    from datetime import date as _date
+    today = _date.today()
+    with patch('prices._fetch_ohlcv', return_value=[]) as mock_fetch, \
+         patch('prices.query') as mock_query, \
+         patch('prices._upsert_rows', return_value=0), \
+         patch('prices._update_activity', return_value=[]):
+        mock_query.side_effect = [
+            # active symbols
+            [{'symbol': 'SHEL.L'}],
+            # latest stored date — fully up to date
+            [{'symbol': 'SHEL.L', 'latest': today}],
+            # earliest stored date — 5Y+ present, no backfill group
+            [{'symbol': 'SHEL.L', 'earliest': today - timedelta(days=6 * 365)}],
+        ]
+        r = client.post('/api/prices/refresh')
+    assert r.status_code == 200
+    mock_fetch.assert_called_once()
+    called_start = mock_fetch.call_args[0][1]
+    assert today - timedelta(days=prices._REVISION_DAYS) <= called_start <= today
+
+
 def test_refresh_deactivates_persistently_empty_symbols():
     """A symbol that comes back empty crosses the threshold and is deactivated."""
     import prices
@@ -181,16 +207,23 @@ def test_get_prices_404_when_no_data(client):
 
 # ── POST /api/prices/refresh/{symbol} ────────────────────────────────────────
 
-def test_refresh_symbol_already_up_to_date(client):
+def test_refresh_symbol_up_to_date_refetches_revision_window(client):
+    """A symbol with history through today still re-fetches the trailing
+    revision window so post-close corrections to recent bars are picked up."""
+    import prices
     from datetime import date as _date
     today = _date.today()
-    yesterday = today - timedelta(days=1)
-    # earliest old enough to skip backfill; latest=today so no top-up either
+    # earliest old enough to skip backfill; latest=today so only the top-up runs
     with patch('prices.query',
-               return_value=[{'earliest': _date(2018, 1, 1), 'latest': today}]):
+               return_value=[{'earliest': _date(2018, 1, 1), 'latest': today}]), \
+         patch('prices._fetch_ohlcv', return_value=[]) as mock_fetch, \
+         patch('prices._upsert_rows', return_value=0):
         r = client.post('/api/prices/refresh/SHEL.L')
     assert r.status_code == 200
     assert r.json() == {'rows_added': 0}
+    mock_fetch.assert_called_once()
+    called_start = mock_fetch.call_args[0][1]
+    assert today - timedelta(days=prices._REVISION_DAYS) <= called_start <= today
 
 
 def test_refresh_symbol_fetches_missing_rows(client):

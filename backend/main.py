@@ -1778,23 +1778,28 @@ def _watchlist_rows(requested: list[str]) -> list[dict]:
     price_rows = query(
         """
         WITH numbered AS (
-            SELECT symbol, close,
+            SELECT symbol, close, date,
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
             FROM price_history
             WHERE symbol = ANY(%s)
         )
-        SELECT symbol, close FROM numbered WHERE rn <= 252 ORDER BY symbol, rn DESC
+        SELECT symbol, close, date FROM numbered WHERE rn <= 252 ORDER BY symbol, rn DESC
         """,
         (requested,),
     )
     closes_map = {}
+    latest_date_map = {}  # rows are oldest-first per symbol, so the last write wins
     for r in price_rows:
         closes_map.setdefault(r["symbol"], []).append(float(r["close"]))
+        latest_date_map[r["symbol"]] = r["date"]
 
     for sym, r in by_symbol.items():
         closes = closes_map.get(sym, [])
         r["current_price"] = closes[-1] if closes else None
         r["prev_close"] = closes[-2] if len(closes) >= 2 else None
+        # Lets the frontend detect a live quote from a session the stored
+        # history doesn't have yet and pick the right day-change baseline.
+        r["latest_close_date"] = str(latest_date_map[sym]) if sym in latest_date_map else None
         r["high_52w"] = round(max(closes), 4) if closes else None
         r["low_52w"] = round(min(closes), 4) if closes else None
         r["streak"] = _trailing_streak(closes)

@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import { API } from "@/lib/api";
 import { currSym, fmtUKDate } from "@/lib/format";
+import { latestSessionDate } from "@/lib/lse";
 import { loadChartPrefs, saveChartPrefs } from "@/lib/storage";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { S } from "@/lib/theme";
@@ -196,7 +197,30 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   const latest = priceData.length ? new Date(priceData[priceData.length - 1].date) : new Date();
   const cutoff = cutoffDays ? new Date(latest.getTime() - cutoffDays * 86400000) : null;
 
-  const chartData = priceData
+  const lastClose = priceData.length ? priceData[priceData.length - 1].close : null;
+  const prevClose = priceData.length >= 2 ? priceData[priceData.length - 2].close : null;
+  const lastBarDate = priceData.length ? priceData[priceData.length - 1].date : null;
+  // The nightly cron only stores a session's bar after the close (and the edge
+  // cache can hold the served series up to a further day), so during a trading
+  // day the live quote belongs to a session the history doesn't have yet.
+  const liveIsNewSession =
+    liveQuote != null && lastBarDate != null && latestSessionDate() > lastBarDate;
+  const shownPrice = liveQuote != null ? liveQuote : lastClose;
+  // Day-change baseline: the close of the session *before* the one shownPrice
+  // belongs to. Measuring a new-session live quote against prevClose (two
+  // sessions back) showed a two-day move as "today's" change.
+  const dayBase = liveIsNewSession ? lastClose : prevClose;
+  const dayPct = shownPrice != null && dayBase ? (shownPrice / dayBase - 1) * 100 : null;
+
+  interface ChartPoint {
+    date: string;
+    open: number | null; high: number | null; low: number | null;
+    close: number; volume: number | null;
+    ma20: number | null; ma50: number | null;
+    macd: number | null; signal: number | null; hist: number | null; rsi: number | null;
+  }
+
+  const chartData: ChartPoint[] = priceData
     .map((d, i) => ({
       date: d.date,
       open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume,
@@ -204,6 +228,17 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
       macd: macdArr[i], signal: signalArr[i], hist: histArr[i], rsi: rsiArr[i],
     }))
     .filter((d) => !cutoff || new Date(d.date) >= cutoff);
+
+  // Extend the line to the live quote so its endpoint matches the displayed
+  // price during a session the history doesn't cover yet. OHLC/volume stay
+  // null (no candle/bar is drawn) and indicators are left off the point.
+  if (liveIsNewSession && chartData.length) {
+    chartData.push({
+      date: latestSessionDate(),
+      open: null, high: null, low: null, close: liveQuote!, volume: null,
+      ma20: null, ma50: null, macd: null, signal: null, hist: null, rsi: null,
+    });
+  }
 
   const tickFormatter = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -396,11 +431,6 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
       ["3M", pct(closeAtOrBefore(new Date(lastDate.getTime() - 90 * 86400000)))],
     ] as [string, number | null][];
   })();
-
-  const lastClose = priceData.length ? priceData[priceData.length - 1].close : null;
-  const prevClose = priceData.length >= 2 ? priceData[priceData.length - 2].close : null;
-  const shownPrice = liveQuote != null ? liveQuote : lastClose;
-  const dayPct = shownPrice != null && prevClose ? (shownPrice / prevClose - 1) * 100 : null;
 
   if (loading) return (
     <div style={{ height: 400, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontFamily: "monospace" }}>

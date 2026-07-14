@@ -54,6 +54,31 @@ export function nextOpenLabel(year: number, month: number, day: number) {
   return 'Closed';
 }
 
+// ISO date (London) of the most recent LSE session that has *started* — i.e.
+// the session a live quote belongs to: today once 08:00 passes on a trading
+// day, otherwise the previous trading day. Used to decide whether a live quote
+// is from a newer session than the last stored EOD bar (the nightly cron only
+// writes a session's bar after the close, and the edge cache can hold the
+// served series up to a further day).
+export function latestSessionDate(now = new Date()): string {
+  const p = londonParts(now);
+  let hour = parseInt(p.hour, 10);
+  if (hour === 24) hour = 0;
+  const secNow = hour * 3600 + parseInt(p.minute, 10) * 60 + parseInt(p.second, 10);
+  const iso = `${p.year}-${p.month}-${p.day}`;
+  if (isLseTradingDay(iso, p.weekday) && secNow >= LSE_OPEN_SEC) return iso;
+  const d = new Date(Date.UTC(
+    parseInt(p.year, 10), parseInt(p.month, 10) - 1, parseInt(p.day, 10), 12,
+  ));
+  for (let i = 0; i < 14; i++) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    const wd = d.getUTCDay();
+    const prevIso = d.toISOString().slice(0, 10);
+    if (wd !== 0 && wd !== 6 && !UK_HOLIDAYS.has(prevIso)) return prevIso;
+  }
+  return iso;
+}
+
 export type LseStatus =
   | { open: true;  secondsToClose: number }
   | { open: false; nextOpen: string };

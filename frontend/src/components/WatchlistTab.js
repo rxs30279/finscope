@@ -4,7 +4,7 @@ import { API } from "@/lib/api";
 import { loadTargets, saveTargets, DEFAULT_LIST_ID } from "@/lib/storage";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
-import { lseStatus } from "@/lib/lse";
+import { lseStatus, latestSessionDate } from "@/lib/lse";
 import PageHeader from "@/components/layout/PageHeader";
 
 // Relative time for recent items ("2h", "3d"); a real date once past a week,
@@ -824,8 +824,15 @@ export default function WatchlistTab({
   const isLive = (r) => liveQuotes[r.symbol] != null;
   const dayPct = (r) => {
     const p = priceOf(r);
-    if (p == null || !r.prev_close) return null;
-    return (p / r.prev_close - 1) * 100;
+    // A live quote from a session the stored history doesn't have yet must be
+    // measured against the last close — using prev_close (two sessions back)
+    // showed a two-day move as "today's" change.
+    const base =
+      isLive(r) && r.latest_close_date && latestSessionDate() > r.latest_close_date
+        ? r.current_price
+        : r.prev_close;
+    if (p == null || !base) return null;
+    return (p / base - 1) * 100;
   };
   const rangePos = (r) => {
     const p = priceOf(r);
