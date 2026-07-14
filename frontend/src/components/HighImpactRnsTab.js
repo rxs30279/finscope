@@ -200,8 +200,8 @@ function FollowupTally({ pos, neg, expanded, onToggle }) {
 
 // Trend line over the last ~3 months. The segment SINCE the pick was selected
 // (the last `sinceCount` closes) is drawn in a gain/loss colour — green if up
-// since selection, red if down — with a dot marking the selection point, so you
-// can see at a glance how the stock has moved since the story.
+// since selection, red if down — so you can see at a glance how the stock has
+// moved since the story. On day one only, a dot marks the latest point.
 function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height = 26 }) {
   if (!points || points.length < 2)
     return <span style={{ color: "#3a3a3a", fontSize: 11 }}>—</span>;
@@ -240,13 +240,12 @@ function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height 
       {since.length >= 2 && (
         <path d={toPath(since)} fill="none" stroke={sinceColor} strokeWidth={1.6} strokeLinejoin="round" strokeLinecap="round" />
       )}
-      {sc > 0 && splitIdx < n ? (
-        <circle cx={coords[splitIdx][0]} cy={coords[splitIdx][1]} r={1.7} fill={sinceColor} />
-      ) : sc === 0 ? (
+      {sc === 0 && (
         // Picked today: no post-selection close exists yet to colour a "since" segment,
-        // so just mark the latest point instead of leaving the row unmarked.
+        // so mark the latest point instead of leaving the row unmarked. From day two
+        // onwards the coloured segment tells the story and no dot is drawn.
         <circle cx={coords[n - 1][0]} cy={coords[n - 1][1]} r={1.7} fill={sinceColor} />
-      ) : null}
+      )}
     </svg>
   );
 }
