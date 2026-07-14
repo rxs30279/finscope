@@ -12,6 +12,7 @@ import { S } from "@/lib/theme";
 import MetricCard from "./MetricCard";
 import InfoDot from "@/components/InfoDot";
 import FairValueCard from "./FairValueCard";
+import ScoreStrip from "./ScoreStrip";
 import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
@@ -281,6 +282,10 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
               </h2>
             </div>
           </div>
+          {/* Full-width row of its own: the market cap above lives in an
+              absolutely-positioned block that can't grow the header, so the
+              strip sits just after it and lands directly under the EV line. */}
+          <ScoreStrip snap={snap} />
           {description}
         </div>
       ) : (
@@ -304,6 +309,9 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
             <div style={{ fontSize: 30, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
             <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
             {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>EV: {fmt(snap.enterprise_value, "currency", qcur)}</div>}
+            <div style={{ marginTop: 10 }}>
+              <ScoreStrip snap={snap} align="right" />
+            </div>
           </div>
         </div>
       )}

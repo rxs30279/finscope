@@ -194,6 +194,21 @@ def snapshot(symbol: str = Query(...), response: Response = None):
     row["symbol"] = symbol
     _attach_risk_score([row])
     row.pop("symbol", None)
+    # M/Q/V for the company-header factor strip. Momentum comes precomputed from
+    # screener_scores; quality/value are recomputed on the screener's own column
+    # set (scrubbed + PEGY-attached, via showcase's copy of that SELECT) rather
+    # than on this snapshot row, so the header pills always agree with the
+    # screener and the scrub never blanks metrics the page itself displays.
+    from showcase import _MQVR_SQL
+
+    mrows = query(_MQVR_SQL, ([symbol],))
+    if mrows:
+        m = mrows[0]
+        _scrub_screener_metrics([m])
+        _attach_pegy([m])
+        row["momentum_score"] = m.get("momentum_score")
+        row["quality_score"] = _quality_score(m)
+        row["value_score"] = _value_score(m)
     return row
 
 
