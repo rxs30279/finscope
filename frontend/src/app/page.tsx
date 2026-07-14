@@ -156,6 +156,13 @@ export default function Home() {
           <span><span className="am-tick" aria-hidden="true">●</span> AI-scored RNS news</span>
           <span><span className="am-tick" aria-hidden="true">●</span> Free — no spreadsheets required</span>
         </div>
+        <Link href="/research" className="am-research-cta am-reveal">
+          <span className="am-research-label">Latest research</span>
+          <span className="am-research-title">Analysis &amp; market notes on UK equities</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 12h14M13 6l6 6-6 6" />
+          </svg>
+        </Link>
       </header>
 
       <section className="am-caps" id="caps">
