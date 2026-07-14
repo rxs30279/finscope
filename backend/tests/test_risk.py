@@ -475,10 +475,28 @@ def test_snapshot_includes_risk_fields(client):
         'net_income_growth': 0.06, 'fcf_cagr_10': 0.05, 'equity_cagr_10': 0.04,
     }
 
+    # The MQVR fetch for the header factor strip (showcase._MQVR_SQL): momentum
+    # comes stored, quality/value are computed from these columns.
+    mqvr_row = {
+        'symbol': 'SHEL.L', 'sector': 'Energy', 'industry': 'Oil & Gas',
+        'market_cap': 5e9, 'revenue': 3e9, 'net_debt': 5e8, 'ebitda': 9e8,
+        'price_to_earnings': 12.0, 'price_to_book': 3.0, 'price_to_sales': 1.0,
+        'roe': 0.15, 'roic': 0.12,
+        'gross_margin': 0.4, 'operating_margin': 0.25, 'net_income_margin': 0.17,
+        'eps_cagr_10': 0.05, 'eps_diluted': 1.2, 'fcf_margin': 0.13,
+        'dividends_per_share': 0.5, 'dividend_yield': 0.04,
+        'period_end_price': 25.0, 'fcf': 4e8,
+        'gross_margin_median': 0.38, 'operating_margin_median': 0.23,
+        'net_margin_median': 0.15, 'roe_median': 0.14, 'roic_median': 0.11,
+        'total_analysts': None, 'eps_growth_next_yr': None,
+        'eps_est_current_yr': None, 'momentum_score': 7,
+    }
+
     with patch('main.query', side_effect=[
         [snap_row],               # SELECT * FROM ttm_financials
         [_fin_row('SHEL.L')],     # _attach_risk_score fundamentals
         _prices('SHEL.L'),        # _attach_risk_score price_history
+        [mqvr_row],               # _MQVR_SQL for the header factor strip
     ]):
         r = client.get('/api/snapshot?symbol=SHEL.L')
 
@@ -489,3 +507,6 @@ def test_snapshot_includes_risk_fields(client):
     assert 'altman_z' in data
     assert 'volatility_annualised' in data
     assert 'risk_components' in data
+    assert data['momentum_score'] == 7
+    assert isinstance(data['quality_score'], int)
+    assert isinstance(data['value_score'], int)
