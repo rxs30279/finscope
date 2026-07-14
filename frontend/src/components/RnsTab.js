@@ -220,36 +220,6 @@ function ActionPill({ action }) {
   );
 }
 
-function KeywordTags({ hits }) {
-  if (!hits || hits.length === 0) return null;
-  return (
-    <span style={{ marginLeft: 8 }}>
-      {hits.map((h, i) => {
-        const [kind] = h.split(":");
-        const colour =
-          kind === "neg" ? "#ef4444" : kind === "pos" ? "#10b981" : "#f59e0b";
-        return (
-          <span
-            key={i}
-            style={{
-              fontSize: 9,
-              color: colour,
-              fontFamily: "monospace",
-              padding: "1px 5px",
-              border: `1px solid ${colour}`,
-              borderRadius: 2,
-              marginLeft: 4,
-              opacity: 0.8,
-            }}
-          >
-            {h}
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
 export default function RnsTab({ refreshKey, onSelect }) {
   // Use the stacked single-column layout on phones AND tablet-width screens
   // (e.g. a Surface Pro in portrait, ~912px). The full desktop table has too
@@ -580,7 +550,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
           >
             {r.headline}
           </a>
-          <KeywordTags hits={r.keyword_hits} />
           {r.llm_thesis && (
             <div
               style={{ marginTop: 6, color: "#888", fontSize: 12, lineHeight: 1.4 }}
@@ -708,7 +677,6 @@ export default function RnsTab({ refreshKey, onSelect }) {
         >
           {r.headline}
         </a>
-        <KeywordTags hits={r.keyword_hits} />
         {r.llm_thesis && (
           <div
             style={{
