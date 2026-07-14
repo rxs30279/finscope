@@ -166,7 +166,7 @@ export default function SubscribeTab() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         const verb = data.status === "reactivated" ? "back" : "in";
-        setSignupMsg({ kind: "ok", text: `✓ You're ${verb} — your first briefing lands at 07:30 on the next market day.` });
+        setSignupMsg({ kind: "ok", text: `✓ You're ${verb} — your first briefing lands at 07:30 on the next market day. If it's not in your inbox, check your junk/spam folder and mark it as safe.` });
         setSignupEmail("");
         ph?.capture("signup_completed", { source: "subscribe_page", status: verb });
         // Optimistically reflect the taken spot (endpoint is cached ~60s).

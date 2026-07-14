@@ -63,7 +63,7 @@ export default function LandingSignup() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         const verb = data.status === "reactivated" ? "back" : "in";
-        setMsg({ kind: "ok", text: `You're ${verb} — first briefing lands at 07:30 on the next market day.` });
+        setMsg({ kind: "ok", text: `You're ${verb} — first briefing lands at 07:30 on the next market day. If it's not in your inbox, check your junk/spam folder and mark it as safe.` });
         setEmail("");
         ph?.capture("signup_completed", { source: "landing", status: verb });
         // Optimistically reflect the taken spot (endpoint is cached ~60s).
