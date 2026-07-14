@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import requests
 import psycopg2.extras
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Reuse prices.py's connection pool + read helper rather than opening a second
@@ -729,11 +729,24 @@ def _compute_rotation():
     return results
 
 
+def _value_at_or_before(rows_dict, target_iso):
+    """Latest (date, value) in rows_dict with date <= target_iso, else None.
+    Dates are zero-padded YYYY-MM-DD strings, so plain string comparison is safe.
+    """
+    eligible = [d for d in rows_dict if d <= target_iso]
+    if not eligible:
+        return None
+    d = max(eligible)
+    return d, rows_dict[d]
+
+
 def _fetch_boe_gilt_yields():
     """Fetch UK nominal zero coupon gilt yields from Bank of England.
     - 5Y/10Y/20Y: BoE IADB API (single request, series IUDSNZC/IUDMNZC/IUDLNZC)
     - 2Y/30Y: BoE zip file (glcnominalddata.zip, sheet '4. spot curve')
-    Returns {"snapshot": {2: float, 5: float, ...}}
+    Returns {"snapshot": {2: float, ...}, "week_ago": {...}, "month_ago": {...},
+    "as_of": {"snapshot": date, "week_ago": date, "month_ago": date}} — the ghost
+    snapshots let the frontend overlay how the curve has shifted over ~1w / ~1m.
     """
     import io, zipfile
 
@@ -883,13 +896,96 @@ def _fetch_boe_gilt_yields():
     if not any(all_series.values()):
         return {"snapshot": {}}
 
-    # Snapshot: latest value per maturity
-    snapshot = {}
+    # Snapshot: latest value per maturity, plus ~1w / ~1m ghost curves.
+    # Targets are anchored to each maturity's OWN latest date (not now()) so
+    # weekends/holidays and the IADB-vs-zip publish-lag skew snap cleanly.
+    snapshot, week_ago, month_ago = {}, {}, {}
+    latest_dates, week_dates, month_dates = [], [], []
     for maturity, rows_dict in all_series.items():
-        if rows_dict:
-            snapshot[maturity] = rows_dict[max(rows_dict.keys())]
+        if not rows_dict:
+            continue
+        latest = max(rows_dict.keys())
+        snapshot[maturity] = rows_dict[latest]
+        latest_dates.append(latest)
 
-    return {"snapshot": snapshot}
+        latest_dt = datetime.strptime(latest, "%Y-%m-%d")
+        for target_dt, out, dates in (
+            (latest_dt - timedelta(days=7), week_ago, week_dates),
+            (latest_dt - timedelta(days=30), month_ago, month_dates),
+        ):
+            hit = _value_at_or_before(rows_dict, target_dt.strftime("%Y-%m-%d"))
+            if hit:
+                out[maturity] = hit[1]
+                dates.append(hit[0])
+
+    result = {"snapshot": snapshot}
+    if week_ago:
+        result["week_ago"] = week_ago
+    if month_ago:
+        result["month_ago"] = month_ago
+    result["as_of"] = {
+        k: max(v)
+        for k, v in (
+            ("snapshot", latest_dates),
+            ("week_ago", week_dates),
+            ("month_ago", month_dates),
+        )
+        if v
+    }
+    return result
+
+
+# The BoE calculates each day's gilt yield curve from that day's market data and
+# publishes it by noon the FOLLOWING UK business day. So we pull once a day at
+# 12:30 London — a 30-min buffer past the noon deadline — Mon–Fri. Any fetch thus
+# returns the previous business day's curve, which is the freshest the BoE offers.
+# The miss path downloads + parses a multi-MB Excel zip, so there's no value in
+# hourly, overnight or weekend fetches.
+_GILT_FETCH_HOUR = 12
+_GILT_FETCH_MINUTE = 30
+
+
+def _gilt_daily_boundary():
+    """Epoch seconds of today's 12:30 London fetch boundary once we're past it on
+    a UK business day, else None (before 12:30, or a weekend). A cache entry older
+    than the returned boundary is due its once-daily refresh; None means hold the
+    entry as-is so no BoE call is made before publication / at the weekend."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Europe/London"))
+    except Exception:
+        now = datetime.utcnow()  # London ≈ UTC; adequate for the daily boundary
+    if now.weekday() >= 5:  # Sat/Sun — BoE doesn't publish
+        return None
+    boundary = now.replace(
+        hour=_GILT_FETCH_HOUR, minute=_GILT_FETCH_MINUTE, second=0, microsecond=0
+    )
+    if now < boundary:  # today's curve not published yet
+        return None
+    return boundary.timestamp()
+
+
+def _cached_gilt_yields():
+    """Serve the gilt curve from cache, refreshing at most once a day just after
+    the BoE's noon publication (see _gilt_daily_boundary). A cold worker / post-
+    deploy computes once synchronously under the single-flight lock; a warm entry
+    that predates today's 12:30 boundary refreshes in the background (never
+    blocks). Before publication and at weekends the cached entry is served
+    untouched — no BoE fetch."""
+    entry = _cache.get("gilt_yields")
+    if entry is None:
+        lock = _key_lock("gilt_yields")
+        with lock:
+            entry = _cache.get("gilt_yields")
+            if entry is not None:
+                return entry[0]
+            data = _fetch_boe_gilt_yields()
+            _cache["gilt_yields"] = (data, time.time())
+            return data
+    boundary = _gilt_daily_boundary()
+    if boundary is not None and entry[1] < boundary:
+        _maybe_refresh_async("gilt_yields", _fetch_boe_gilt_yields)
+    return entry[0]
 
 
 def _fetch_cnn_fg():
@@ -1498,9 +1594,12 @@ def uk_macro(response: Response):
 
 @router.get("/gilt-yields")
 def gilt_yields(response: Response):
-    # BoE yields update daily; the miss path fetches + parses an Excel file. Hold 1h.
-    response.headers["Cache-Control"] = "public, s-maxage=3600, stale-while-revalidate=86400"
-    return _cached("gilt_yields", _fetch_boe_gilt_yields, ttl=CACHE_TTL_HOURLY, swr=True)
+    # BoE publishes the curve by noon the next business day; we refresh once a day
+    # just after (12:30 London — see _cached_gilt_yields), never overnight or at
+    # weekends. The miss path parses a multi-MB Excel zip, so only a cold worker/
+    # redeploy pays it in-band.
+    response.headers["Cache-Control"] = "public, s-maxage=43200, stale-while-revalidate=86400"
+    return _cached_gilt_yields()
 
 
 @router.get("/fear-greed")

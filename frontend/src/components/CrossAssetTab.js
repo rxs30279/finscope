@@ -158,25 +158,40 @@ const MATURITIES = [
 
 // `fill` makes the chart grow to its parent's height (used when it sits beside
 // the box grid on desktop); otherwise it falls back to a fixed 180px height.
-function GiltSnapshotChart({ snapshot, fill = false }) {
+function GiltSnapshotChart({ snapshot, weekAgo, monthAgo, asOf, fill = false }) {
   if (!snapshot || Object.keys(snapshot).length === 0) {
     return <div style={{ color:'#333', fontFamily:'monospace', fontSize:11 }}>No gilt data available</div>;
   }
 
   const data = MATURITIES.map(({ key, label }) => {
     const maturity = parseInt(key.slice(1));
-    return { label, yield: snapshot[maturity] ?? null };
+    return {
+      label,
+      yield: snapshot[maturity] ?? null,
+      yield_w: weekAgo?.[maturity] ?? null,
+      yield_m: monthAgo?.[maturity] ?? null,
+    };
   }).filter(d => d.yield !== null);
 
+  // Inverted/Flat/Normal is driven by today's curve only.
   const isInverted = data.length >= 2 && data[0].yield > data[data.length - 1].yield;
   const curveColor = isInverted ? '#ff2e3f' : '#16d96b';
   const curveLabel = isInverted ? 'Inverted' : data[0]?.yield === data[data.length - 1]?.yield ? 'Flat' : 'Normal';
 
+  const hasWeek = weekAgo && Object.keys(weekAgo).length > 0;
+  const hasMonth = monthAgo && Object.keys(monthAgo).length > 0;
+
   return (
     <div style={fill ? { height:'100%', display:'flex', flexDirection:'column' } : undefined}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>Current Curve</div>
-        <div style={{ color: curveColor, fontSize:9, fontWeight:700 }}>{curveLabel}</div>
+        <div style={{ display:'flex', gap:8, alignItems:'baseline' }}>
+          <span style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:1 }}>Current Curve</span>
+          <span style={{ color: curveColor, fontSize:9, fontWeight:700 }}>{curveLabel}</span>
+        </div>
+        <div style={{ display:'flex', gap:10, alignItems:'center', fontSize:8, fontFamily:'monospace' }}>
+          {hasMonth && <span style={{ color:'#c199e8' }} title={asOf?.month_ago}>--- 1M</span>}
+          {hasWeek && <span style={{ color:'#7dabee' }} title={asOf?.week_ago}>--- 1W</span>}
+        </div>
       </div>
       <div style={fill ? { flex:1, minHeight:0 } : undefined}>
         <ResponsiveContainer width="100%" height={fill ? '100%' : 180}>
@@ -191,9 +206,12 @@ function GiltSnapshotChart({ snapshot, fill = false }) {
             <Tooltip
               contentStyle={{ background:'#141414', border:'1px solid #2a2a2a', borderRadius:4, fontSize:11, fontFamily:'monospace' }}
               labelStyle={{ color:'#e5e5e5' }}
-              formatter={v => [`${v.toFixed(2)}%`, 'Yield']}
+              formatter={(v, name) => [`${v.toFixed(2)}%`, name]}
             />
-            <Line type="monotone" dataKey="yield" stroke={curveColor} strokeWidth={2} dot={{ r:4, fill:curveColor }} />
+            {/* Ghosts render first so today's line paints on top. */}
+            <Line type="monotone" dataKey="yield_m" name="1m ago" stroke="#c199e8" strokeWidth={1.5} strokeDasharray="2 4" dot={false} connectNulls isAnimationActive={false} style={{ filter:'blur(1px)' }} />
+            <Line type="monotone" dataKey="yield_w" name="1w ago" stroke="#7dabee" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} style={{ filter:'blur(0.6px)' }} />
+            <Line type="monotone" dataKey="yield" name="Today" stroke={curveColor} strokeWidth={2} dot={{ r:4, fill:curveColor }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -267,14 +285,20 @@ export default function CrossAssetTab({ refreshKey }) {
         <div style={{ display:'flex', flexDirection:'column', marginTop: isMobile ? 24 : 0 }}>
           {giltData ? (
             <div style={{ background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16, flex:1, minHeight: isMobile ? 230 : 0, display:'flex', flexDirection:'column' }}>
-              <div style={{ color:'#888', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
+              <div style={{ color:'#ccc', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:16 }}>
                 UK Gilt Yield Curve
               </div>
               <div style={{ flex:1, minHeight:0 }}>
-                <GiltSnapshotChart snapshot={giltData.snapshot} fill={!isMobile} />
+                <GiltSnapshotChart
+                  snapshot={giltData.snapshot}
+                  weekAgo={giltData.week_ago}
+                  monthAgo={giltData.month_ago}
+                  asOf={giltData.as_of}
+                  fill={!isMobile}
+                />
               </div>
-              <div style={{ color:'#555', fontSize:8, textTransform:'uppercase', letterSpacing:'0.5px', marginTop:8, textAlign:'right' }}>
-                Data supplied by Bank of England
+              <div style={{ color:'#999', fontSize:8, textTransform:'uppercase', letterSpacing:'0.5px', marginTop:8, textAlign:'right' }}>
+                Bank of England · updated daily 12:30
               </div>
             </div>
           ) : (

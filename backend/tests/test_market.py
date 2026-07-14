@@ -174,6 +174,58 @@ def test_cross_asset_items_have_value_and_change(client):
         assert "pct_change" in item
 
 
+# ── gilt yield helper tests ───────────────────────────────────────────────────
+def test_value_at_or_before_exact_hit():
+    import market
+    rows = {"2026-07-06": 4.0, "2026-07-13": 4.2}
+    assert market._value_at_or_before(rows, "2026-07-13") == ("2026-07-13", 4.2)
+
+def test_value_at_or_before_snaps_back_over_weekend():
+    import market
+    # Fri 07-10 is the latest business day before a Sat 07-11 target.
+    rows = {"2026-07-10": 4.1, "2026-07-13": 4.3}
+    assert market._value_at_or_before(rows, "2026-07-11") == ("2026-07-10", 4.1)
+
+def test_value_at_or_before_target_before_first_date():
+    import market
+    rows = {"2026-07-10": 4.1}
+    assert market._value_at_or_before(rows, "2026-07-01") is None
+
+def test_value_at_or_before_empty_dict():
+    import market
+    assert market._value_at_or_before({}, "2026-07-13") is None
+
+
+def _boundary_at(dt):
+    """Evaluate _gilt_daily_boundary() with market.datetime.now() pinned to dt
+    (mirrors the _eod_cutoff tests: patch the whole datetime name in market)."""
+    import market
+    with patch.object(market, "datetime") as mdt:
+        mdt.now.return_value = dt
+        return market._gilt_daily_boundary()
+
+def test_gilt_boundary_none_before_publication():
+    from datetime import datetime as real_dt
+    # 11:30 Mon — before the 12:30 fetch boundary → hold, nothing due.
+    assert _boundary_at(real_dt(2026, 7, 13, 11, 30)) is None
+
+def test_gilt_boundary_none_on_weekend():
+    from datetime import datetime as real_dt
+    # Sat afternoon — BoE doesn't publish → never refresh.
+    assert _boundary_at(real_dt(2026, 7, 11, 14, 0)) is None
+
+def test_gilt_boundary_after_publication():
+    from datetime import datetime as real_dt
+    # 12:30 Mon exactly → today's 12:30 boundary is due.
+    assert _boundary_at(real_dt(2026, 7, 13, 12, 30)) == real_dt(2026, 7, 13, 12, 30).timestamp()
+
+def test_gilt_boundary_evening_still_todays_boundary():
+    from datetime import datetime as real_dt
+    # 22:00 Mon → still today's 12:30 boundary (a warm entry from before noon is
+    # due exactly one catch-up refresh; one from the afternoon is already fresh).
+    assert _boundary_at(real_dt(2026, 7, 13, 22, 0)) == real_dt(2026, 7, 13, 12, 30).timestamp()
+
+
 # ── signals tests ─────────────────────────────────────────────────────────────
 def test_signals_returns_list(client):
     from market import ALL_PROXY_TICKERS
