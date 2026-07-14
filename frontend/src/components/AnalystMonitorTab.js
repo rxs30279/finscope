@@ -49,7 +49,8 @@ const compositeScore = (r) =>
   (r.revision_score || 0) * 10;
 
 // ── Biggest Movers (window-delta) ──────────────────────────────────────────────
-// Lookback window for the movers panel; mirrors the backend default.
+// Lookback window for the movers panel; mirrors the backend default. Must
+// match MOVER_WINDOW_DAYS in lib/analysts.ts (the SSR fetch of this data).
 const MOVER_WINDOW_DAYS = 30;
 
 // How much analysts have revised their view over the window. Combines the change in
@@ -71,15 +72,18 @@ const moverDeltas = (r) => {
 // Ignore tiny wobbles so the lists show genuine moves only.
 const MOVER_MIN_SCORE = 3;
 
-export default function AnalystMonitorTab({ refreshKey, onSelect }) {
+export default function AnalystMonitorTab({ refreshKey, onSelect, initialLatest = null, initialMovers = null }) {
   const tickerLink = {
     color: '#e5e5e5', fontFamily: 'monospace', fontWeight: 700,
     cursor: 'pointer', textDecoration: 'none',
   };
   const isAdmin = useIsAdmin();
-  const [latest, setLatest]   = useState([]);
-  const [movers, setMovers]   = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Seed from the SSR-fetched data (lib/analysts.ts) when present so the cards
+  // and table are painted in the initial HTML with no loading flash.
+  const hasInitial = Array.isArray(initialLatest) && Array.isArray(initialMovers);
+  const [latest, setLatest]   = useState(() => (hasInitial ? initialLatest : []));
+  const [movers, setMovers]   = useState(() => (hasInitial ? initialMovers : []));
+  const [loading, setLoading] = useState(!hasInitial);
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast]     = useState(null);
   const [search, setSearch]   = useState('');
@@ -93,6 +97,10 @@ export default function AnalystMonitorTab({ refreshKey, onSelect }) {
   const isNarrowDesktop = useIsNarrowDesktop();
 
   useEffect(() => {
+    // The very first run reuses the SSR-fetched data (already in the initial
+    // HTML) instead of re-requesting; any later run, forced by refetch()
+    // advancing refreshKey, always fetches fresh.
+    if (hasInitial && refreshKey === 0) return;
     setLoading(true);
     Promise.all([
       fetch(`${API}/analysts/latest`).then(r => r.json()),

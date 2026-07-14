@@ -1,5 +1,5 @@
 "use client";
-import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { Fragment, memo, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { API, adminHeaders } from "@/lib/api";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { useIsMobile } from "@/hooks/useMediaQuery";
@@ -7,6 +7,7 @@ import { lseStatus } from "@/lib/lse";
 import Link from "next/link";
 import PageHeader from "@/components/layout/PageHeader";
 import EmailDigestCTA from "@/components/EmailDigestCTA";
+import LazySection from "@/components/LazySection";
 import ScorePill from "@/components/screener/ScorePill";
 
 // ── formatting ────────────────────────────────────────────────────────────────
@@ -202,7 +203,9 @@ function FollowupTally({ pos, neg, expanded, onToggle }) {
 // (the last `sinceCount` closes) is drawn in a gain/loss colour — green if up
 // since selection, red if down — so you can see at a glance how the stock has
 // moved since the story. On day one only, a dot marks the latest point.
-function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height = 26 }) {
+// Memoised: `points` references are stable across the 5-minute quote-poll
+// re-renders, so every row's SVG is skipped on poll ticks.
+const Sparkline = memo(function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height = 26 }) {
   if (!points || points.length < 2)
     return <span style={{ color: "#3a3a3a", fontSize: 11 }}>—</span>;
   const min = Math.min(...points);
@@ -248,7 +251,7 @@ function Sparkline({ points, sinceCount = 0, sinceUp = null, width = 84, height 
       )}
     </svg>
   );
-}
+});
 
 function RangeBar({ pos }) {
   if (pos == null) return <span style={{ color: "#444", fontSize: 11 }}>—</span>;
@@ -313,6 +316,9 @@ function NewsPanel({ symbol, name, sideBySide }) {
         borderRadius: 3,
         display: "flex",
         flexDirection: "column",
+        // Below the table the panel holds its full height from first paint so
+        // the news arriving (or the LazySection mount) never shifts layout.
+        minHeight: sideBySide ? undefined : 520,
         maxHeight: sideBySide ? "calc(100vh - 245px)" : 520,
       }}
     >
@@ -1287,11 +1293,16 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
           )}
         </div>
 
-        <NewsPanel
-          symbol={selectedNewsSymbol}
-          name={rows.find((r) => r.symbol === selectedNewsSymbol)?.name || (selectedNewsSymbol ? selectedNewsSymbol.replace(".L", "") : "")}
-          sideBySide={false}
-        />
+        {/* Deferred until near-viewport so the /news fetch and the panel's
+            hydration stay off the critical path; the placeholder matches the
+            panel's reserved 520px, so mounting causes no shift. */}
+        <LazySection minHeight={520}>
+          <NewsPanel
+            symbol={selectedNewsSymbol}
+            name={rows.find((r) => r.symbol === selectedNewsSymbol)?.name || (selectedNewsSymbol ? selectedNewsSymbol.replace(".L", "") : "")}
+            sideBySide={false}
+          />
+        </LazySection>
       </div>
     </div>
   );
