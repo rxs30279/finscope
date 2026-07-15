@@ -67,3 +67,26 @@ def test_missing_peer_median_uses_absolute_fallback():
 def test_prompt_labels_median_as_industry():
     user = _user_prompt(net_income_margin=0.0167, peer_margin_median=0.04, roce=0.24)
     assert "(industry median +4.0%)" in user
+
+
+def test_no_fundamentals_quality_is_na_not_zero():
+    # CLBS case: out-of-universe ticker with no ttm_financials row — every
+    # fundamental is None. Quality must render n/a, not 0/10, and must not
+    # trip the LOW QUALITY flag on absent data.
+    user = _user_prompt(roic=None, roic_median=None, roe=None, roe_median=None)
+    assert "Quality:      n/a" in user
+    assert "LOW QUALITY" not in user
+
+
+def test_all_failing_metrics_still_score_zero():
+    # A company with real (bad) data keeps the genuine 0/10 + flag.
+    user = _user_prompt(
+        roic=0.01, roic_median=None, roe=0.02, roe_median=None,
+        gross_margin=0.05, operating_margin=0.01, fcf_margin=-0.02,
+    )
+    assert "Quality:      0/10" in user
+    assert "LOW QUALITY" in user
+
+
+def test_quality_score_none_when_no_inputs():
+    assert rns_llm._quality_score({}) is None

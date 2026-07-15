@@ -236,8 +236,14 @@ def _fmt_num(v: Optional[float], decimals: int = 1) -> str:
 
 
 def _quality_score(r: dict) -> Optional[int]:
-    """Quality score 0-10: rewards high AND consistent returns/margins."""
+    """Quality score 0-10: rewards high AND consistent returns/margins.
+
+    Returns None when no inputs are present at all (e.g. out-of-universe
+    tickers with no ttm_financials row) — a 0 there would read as "failed
+    every check" and wrongly trip the LOW QUALITY flag.
+    """
     score = 0
+    has_data = False
     roic = r.get("roic")
     roic_med = r.get("roic_median")
     roe = r.get("roe")
@@ -251,32 +257,37 @@ def _quality_score(r: dict) -> Optional[int]:
     nm_med = r.get("net_margin_median")
 
     if roic is not None:
+        has_data = True
         if roic > 0.10:
             score += 1
         if roic_med is not None and roic >= roic_med:
             score += 1
     if roe is not None:
+        has_data = True
         if roe > 0.15:
             score += 1
         if roe_med is not None and roe >= roe_med:
             score += 1
     if gm is not None:
+        has_data = True
         if gm > 0.30:
             score += 1
         if gm_med is not None and gm >= gm_med:
             score += 1
     if om is not None:
+        has_data = True
         if om > 0.10:
             score += 1
         if om_med is not None and om >= om_med:
             score += 1
     if fcfm is not None:
+        has_data = True
         if fcfm > 0.05:
             score += 1
         if nm is not None and nm_med is not None and nm >= nm_med:
             score += 1
 
-    return score
+    return score if has_data else None
 
 
 def _risk_score(cand: dict) -> Optional[int]:
@@ -368,7 +379,10 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         "underlying business is weak and converts good news into shareholder "
         "value poorly. For a positive catalyst on such a low-quality name, temper "
         "the score and flag the fragile fundamentals in the risks rather than "
-        "taking the upgrade at face value. Return STRICT JSON only."
+        "taking the upgrade at face value. A quality score of n/a means the "
+        "company is outside our financials coverage, NOT that quality is low — "
+        "judge business quality from the announcement text itself and do not "
+        "penalise the score for the missing data. Return STRICT JSON only."
     )
 
     hist_lines = (
