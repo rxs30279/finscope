@@ -50,7 +50,7 @@ _SUMMARY_GLOBAL_LIMIT = int(os.environ.get("SUMMARY_GLOBAL_RATE_LIMIT", "60"))
 
 _DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-_DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+_DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 _llm_client = None
 
@@ -499,12 +499,16 @@ Return JSON only — no preamble, no code fence."""
 
 def _call_summariser(messages: list[dict]) -> dict:
     client = _get_llm_client()
+    # Thinking is the v4 default but this is an interactive endpoint — a user
+    # is waiting behind the Generate button — so disable it to keep latency
+    # (and the 40s client timeout) in the same regime as the old deepseek-chat.
     resp = client.chat.completions.create(
         model=_DEEPSEEK_MODEL,
         messages=messages,
         response_format={"type": "json_object"},
         temperature=0.3,
         max_tokens=700,
+        extra_body={"thinking": {"type": "disabled"}},
     )
     return json.loads(resp.choices[0].message.content)
 

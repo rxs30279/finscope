@@ -34,7 +34,14 @@ router = APIRouter(prefix="/api/rns", tags=["rns-llm"])
 
 _DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-_DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+_DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+
+# The v4 model names run in thinking (reasoning) mode unless told otherwise.
+# The ranker opts in — score quality beats latency in a cron. Every other call
+# site (news summariser, showcase vet, fwd extraction) passes _THINKING_OFF to
+# keep the old deepseek-chat behaviour and its small max_tokens budgets.
+_THINKING_ON = {"thinking": {"type": "enabled"}}
+_THINKING_OFF = {"thinking": {"type": "disabled"}}
 
 _client = None
 
@@ -552,12 +559,15 @@ Return JSON only — no preamble, no code fence."""
 
 def _call_deepseek(messages: list[dict]) -> dict:
     client = _get_client()
+    # Reasoning tokens share the completion budget, so the cap must leave room
+    # for the chain of thought as well as the ~400-token JSON answer.
     resp = client.chat.completions.create(
         model=_DEEPSEEK_MODEL,
         messages=messages,
         response_format={"type": "json_object"},
         temperature=0.2,
-        max_tokens=400,
+        max_tokens=4000,
+        extra_body=_THINKING_ON,
     )
     content = resp.choices[0].message.content
     return json.loads(content)
@@ -621,7 +631,9 @@ def _rank_one(row_id: int) -> dict:
     price = _load_price_change(cand.get("symbol"))
     messages = _build_messages(cand, history, price)
     result = _call_deepseek(messages)
-    _save_ranking(row_id, result, _DEEPSEEK_MODEL)
+    # ":thinking" suffix makes the reasoning-mode cutover visible in llm_model
+    # so score distributions can be compared across the switch.
+    _save_ranking(row_id, result, f"{_DEEPSEEK_MODEL}:thinking")
     return {"id": row_id, **result}
 
 

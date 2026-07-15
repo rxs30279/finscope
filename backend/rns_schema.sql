@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS rns_announcements (
     llm_action          TEXT,                             -- 'watch' | 'research' | 'ignore'
     llm_risks           TEXT,                             -- what would invalidate the thesis
     llm_sentiment       TEXT,                             -- 'positive' | 'negative' | 'neutral' (migration 012)
-    llm_model           TEXT,                             -- e.g. 'deepseek-chat'
+    llm_model           TEXT,                             -- e.g. 'deepseek-v4-flash:thinking'
     llm_processed_at    TIMESTAMPTZ
 );
 

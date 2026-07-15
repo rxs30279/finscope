@@ -153,7 +153,7 @@ Return JSON only — no preamble, no code fence."""
 
 def _run_extraction(cand: dict, text: str) -> tuple[Optional[dict], str]:
     """One DeepSeek call → (parsed extraction dict or None, model id)."""
-    from rns_llm import _get_client, _DEEPSEEK_MODEL
+    from rns_llm import _get_client, _DEEPSEEK_MODEL, _THINKING_OFF
 
     client = _get_client()
     resp = client.chat.completions.create(
@@ -162,6 +162,7 @@ def _run_extraction(cand: dict, text: str) -> tuple[Optional[dict], str]:
         response_format={"type": "json_object"},
         temperature=0.0,
         max_tokens=400,
+        extra_body=_THINKING_OFF,
     )
     result = json.loads(resp.choices[0].message.content)
     return (result if isinstance(result, dict) else None), _DEEPSEEK_MODEL

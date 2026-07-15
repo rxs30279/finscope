@@ -307,7 +307,7 @@ def _vet_candidate(cand: dict, before=None) -> dict:
     """Run the advisory vet. Raises on API/parse failure — the caller treats that
     as non-fatal and stores a NULL verdict. `before` limits the annual series
     for backtests (see _annual_history)."""
-    from rns_llm import _get_client, _DEEPSEEK_MODEL
+    from rns_llm import _get_client, _DEEPSEEK_MODEL, _THINKING_OFF
 
     try:
         annual = _annual_history(cand.get("symbol"), before=before)
@@ -324,6 +324,7 @@ def _vet_candidate(cand: dict, before=None) -> dict:
         response_format={"type": "json_object"},
         temperature=0.2,
         max_tokens=300,
+        extra_body=_THINKING_OFF,
     )
     result = json.loads(resp.choices[0].message.content)
     verdict = (result.get("verdict") or "").lower().strip()
