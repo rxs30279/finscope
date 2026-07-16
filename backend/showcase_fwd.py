@@ -102,6 +102,8 @@ def fetch_announcement_text(url: str, timeout: int = 20, max_chars: int = 15000)
 
 # ── Extraction (LLM: copy figures out, nothing else) ──────────────────────────
 def _extract_messages(cand: dict, text: str) -> list[dict]:
+    # All static instructions live in the system message so DeepSeek's
+    # prefix cache covers them; the user message is variable content only.
     system = (
         "You extract stated profit figures from UK RNS announcements for a "
         "valuation database. You NEVER calculate, derive, combine, annualise or "
@@ -109,42 +111,42 @@ def _extract_messages(cand: dict, text: str) -> list[dict]:
         "the text you are given. Deriving a profit from revenue and a margin, "
         "doubling a half-year figure, or filling a gap from memory of the "
         "company are all forbidden. If no qualifying figure is stated, say so. "
-        "Return STRICT JSON only."
+        "Return STRICT JSON only.\n"
+        "\n"
+        "Find the best FULL-YEAR profit-level figure stated in the text, choosing by:\n"
+        "  1. metric: prefer EBITDA, then EBIT/operating profit, then profit before tax.\n"
+        "     Adjusted/underlying versions count. Revenue, NAV, net fee income, EPS,\n"
+        "     dividends and cash figures do NOT count.\n"
+        "  2. period: prefer the current or next full financial year over a completed\n"
+        "     one. A half-year or quarterly figure only qualifies if nothing full-year\n"
+        "     is stated — report it honestly with its period_months.\n"
+        "  3. source: the company's own guidance, or market expectations/consensus\n"
+        "     quoted in the text (often a footnote), or a reported actual result.\n"
+        "\n"
+        "Return a JSON object with exactly these fields:\n"
+        "  found          boolean — false if no qualifying profit figure is stated\n"
+        '  metric         "ebitda" | "ebit" | "pbt"\n'
+        "  value_low_m    number — the figure in MILLIONS of its stated currency; for a\n"
+        '                 range ("38-42m") the LOW end; for "at least X" / "not less\n'
+        '                 than X", X itself\n'
+        "  value_high_m   number or null — the high end of a range, else null\n"
+        '  currency       "GBP" | "USD" | "EUR" | the ISO code stated\n'
+        '  period_label   short label, e.g. "FY2026" or "H1 2026"\n'
+        "  period_months  integer — how many months the figure covers (12 = full year)\n"
+        '  source         "guidance" | "consensus" | "actual"\n'
+        '  relation       "eq" (stated as-is / approximately) | "min" ("at least X") |\n'
+        '                 "above" (results expected to be AHEAD of this consensus figure)\n'
+        "  quote          the verbatim sentence(s) the figure appears in, copied exactly\n"
+        "\n"
+        "If found is false, every other field must be null.\n"
+        "Return JSON only — no preamble, no code fence."
     )
     user = f"""Announcement
   Company:  {cand.get('company_name') or '?'} ({cand.get('symbol') or '?'})
   Headline: {cand.get('headline')}
 
 Full text
-{text}
-
-Find the best FULL-YEAR profit-level figure stated in the text, choosing by:
-  1. metric: prefer EBITDA, then EBIT/operating profit, then profit before tax.
-     Adjusted/underlying versions count. Revenue, NAV, net fee income, EPS,
-     dividends and cash figures do NOT count.
-  2. period: prefer the current or next full financial year over a completed
-     one. A half-year or quarterly figure only qualifies if nothing full-year
-     is stated — report it honestly with its period_months.
-  3. source: the company's own guidance, or market expectations/consensus
-     quoted in the text (often a footnote), or a reported actual result.
-
-Return a JSON object with exactly these fields:
-  found          boolean — false if no qualifying profit figure is stated
-  metric         "ebitda" | "ebit" | "pbt"
-  value_low_m    number — the figure in MILLIONS of its stated currency; for a
-                 range ("38-42m") the LOW end; for "at least X" / "not less
-                 than X", X itself
-  value_high_m   number or null — the high end of a range, else null
-  currency       "GBP" | "USD" | "EUR" | the ISO code stated
-  period_label   short label, e.g. "FY2026" or "H1 2026"
-  period_months  integer — how many months the figure covers (12 = full year)
-  source         "guidance" | "consensus" | "actual"
-  relation       "eq" (stated as-is / approximately) | "min" ("at least X") |
-                 "above" (results expected to be AHEAD of this consensus figure)
-  quote          the verbatim sentence(s) the figure appears in, copied exactly
-
-If found is false, every other field must be null.
-Return JSON only — no preamble, no code fence."""
+{text}"""
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -153,7 +155,7 @@ Return JSON only — no preamble, no code fence."""
 
 def _run_extraction(cand: dict, text: str) -> tuple[Optional[dict], str]:
     """One DeepSeek call → (parsed extraction dict or None, model id)."""
-    from rns_llm import _get_client, _DEEPSEEK_MODEL, _THINKING_OFF
+    from rns_llm import _get_client, _log_cache_usage, _DEEPSEEK_MODEL, _THINKING_OFF
 
     client = _get_client()
     resp = client.chat.completions.create(
@@ -164,6 +166,7 @@ def _run_extraction(cand: dict, text: str) -> tuple[Optional[dict], str]:
         max_tokens=400,
         extra_body=_THINKING_OFF,
     )
+    _log_cache_usage("showcase_fwd", resp)
     result = json.loads(resp.choices[0].message.content)
     return (result if isinstance(result, dict) else None), _DEEPSEEK_MODEL
 

@@ -557,6 +557,19 @@ Return JSON only — no preamble, no code fence."""
 # ── LLM call + persistence ────────────────────────────────────────────────────
 
 
+def _log_cache_usage(tag: str, resp) -> None:
+    """Print DeepSeek prefix-cache hit/miss token counts for one response.
+
+    The fields are DeepSeek extensions to the OpenAI usage shape, so they are
+    read defensively — absent fields log as n/a rather than raising.
+    """
+    usage = getattr(resp, "usage", None)
+    hit = getattr(usage, "prompt_cache_hit_tokens", None)
+    miss = getattr(usage, "prompt_cache_miss_tokens", None)
+    print(f"[{tag}] cache hit={hit if hit is not None else 'n/a'} "
+          f"miss={miss if miss is not None else 'n/a'} tokens")
+
+
 def _call_deepseek(messages: list[dict]) -> dict:
     client = _get_client()
     # Reasoning tokens share the completion budget, so the cap must leave room
@@ -569,6 +582,7 @@ def _call_deepseek(messages: list[dict]) -> dict:
         max_tokens=4000,
         extra_body=_THINKING_ON,
     )
+    _log_cache_usage("rns_llm", resp)
     content = resp.choices[0].message.content
     return json.loads(content)
 
