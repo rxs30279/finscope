@@ -18,45 +18,58 @@ blobs from Wikipedia / the LSE heatmap / HL. This fetches the same lists live.)
 
 For each constituent the EPIC is mapped to its Yahoo symbol and reconciled:
 
-  * NEW     — in the index, not in the DB  -> INSERT (metadata from yfinance),
-              is_active=true, financials_updated=NULL so updater.py picks it up
-              first on its next run.
+  * NEW     — in the index, not in this job's universe -> INSERT (metadata from
+              yfinance), is_active=true, financials_updated=NULL so updater.py
+              picks it up first on its next run. If the symbol already exists
+              under the LSE screen, ownership is promoted to hl_index; if it
+              exists as a 'manual' row it is only relabelled — manual ownership
+              is never taken over (manual = never auto-purged, migration 017).
   * MOVED   — already in the DB but its index tier changed -> UPDATE ftse_index
               (and reactivate if it had been deactivated).
-  * DROPPED — in the DB but no longer in *any* tracked index -> hard DELETE.
-              Removed from company_metadata and from every dependent table
-              (financials, prices, analyst snapshots, news, RNS, scores) in a
-              single transaction per symbol. Permanent: a name that later
-              re-enters an index is re-added fresh and refetched from scratch.
+  * DROPPED — no longer in *any* tracked index -> DEMOTED, not deleted:
+              universe_source flips to 'lse_screen' and ftse_index is
+              immediately relabelled ('AIM' for ex-AIM-100, otherwise
+              'Main (non-index)') so index filters, the FTSE 100 breadth basket
+              and cap bucketing stop counting it the moment it leaves.
+              refresh_lse_universe.py then decides on its next run whether it
+              still qualifies for the wider universe (correcting the label if
+              needed) or is really gone (purge). Keeps history (prices, RNS,
+              financials) for stocks that merely fell out of the FTSE tiers —
+              the way WISE.L was lost in 2026.
+
+Only hl_index rows can be demoted here (migration 017); lse_screen and manual
+rows are excluded from the reconciliation sets.
 
 Usage (run from backend/):
     python refresh_index_membership.py            # dry run — report only, no writes
     python refresh_index_membership.py --apply    # apply changes
     python refresh_index_membership.py --apply --max-purge 40
-                                                  # raise the unattended purge cap
+                                                  # raise the unattended demotion cap
 
 Safe to re-run; every write is idempotent (ON CONFLICT upserts). In --apply mode,
-if more than --max-purge symbols (default 25) would be purged, the purges are
+if more than --max-purge symbols (default 25) would be demoted, the demotions are
 skipped (new/moved still applied) and the run exits non-zero — a second guard,
-after the per-index MIN_EXPECTED floors, against a partial HL fetch mass-deleting
+after the per-index MIN_EXPECTED floors, against a partial HL fetch mass-demoting
 real stocks on an unattended cron run.
 """
 
-import os
-import re
 import sys
 import time
 import logging
 from io import StringIO
 
 import pandas as pd
-import psycopg2
 import psycopg2.extras
-import yfinance as yf
 from curl_cffi import requests as cr
-from dotenv import load_dotenv
 
-load_dotenv()
+from universe_common import (
+    arg_int,
+    fetch_metadata,
+    get_conn,
+    record_run,
+    to_yf_symbol,
+    upsert_company,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,15 +80,6 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger(__name__)
-
-DB_CONFIG = {
-    "dbname": os.environ.get("DB_NAME", "postgres"),
-    "user": os.environ.get("DB_USER", "postgres"),
-    "password": os.environ.get("DB_PASSWORD", ""),
-    "host": os.environ.get("DB_HOST", ""),
-    "port": os.environ.get("DB_PORT", "5432"),
-    "sslmode": "require",
-}
 
 # index label (as stored in company_metadata.ftse_index) -> HL page slug
 INDEXES = {
@@ -95,22 +99,6 @@ MIN_EXPECTED = {
 }
 
 HL_BASE = "https://www.hl.co.uk/shares/stock-market-summary"
-
-
-# ── ticker mapping ────────────────────────────────────────────────────────────
-
-def to_yf_symbol(epic: str) -> str:
-    """Map an HL EPIC to its Yahoo Finance symbol.
-
-    Handles the LSE quirks generically (no hand-maintained override table):
-      * dual-class suffix:  BT.A -> BT-A.L
-      * trailing dot:       AV. / RR. / UU. -> AV.L / RR.L / UU.L
-      * plain codes:        III -> III.L,  3IN -> 3IN.L
-    """
-    e = str(epic).strip().upper()
-    e = re.sub(r"\.([A-Z])$", r"-\1", e)  # BT.A -> BT-A
-    e = e.rstrip(".")                      # AV. -> AV
-    return e + ".L"
 
 
 # ── HL fetch ──────────────────────────────────────────────────────────────────
@@ -183,88 +171,30 @@ def fetch_all_constituents() -> dict:
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 
-def get_conn():
-    return psycopg2.connect(**DB_CONFIG)
-
-
-def load_db_universe(conn) -> dict:
+def load_db_universe(conn) -> tuple:
+    """(hl, other) — hl: this job's rows ({symbol: (ftse_index, is_active)});
+    other: {symbol: ftse_index} for lse_screen/manual rows. Only hl rows are
+    reconciled (demoted/moved), but the NEW classification needs `other` so a
+    manual row that enters an index is relabelled rather than having its
+    ownership stolen (migration 017: manual = never auto-purged)."""
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT symbol, ftse_index, is_active FROM company_metadata")
-    return {r["symbol"]: (r["ftse_index"], r["is_active"]) for r in cur.fetchall()}
-
-
-def fetch_metadata(symbol: str) -> dict:
-    """yfinance company metadata for a brand-new constituent."""
-    info = yf.Ticker(symbol).info or {}
-    name = info.get("longName") or info.get("shortName")
-    return {
-        "name": name,
-        "sector": info.get("sector"),
-        "industry": info.get("industry"),
-        "exchange": info.get("exchange", "LSE"),
-        "currency": info.get("currency", "GBp"),
-        "financial_currency": info.get("financialCurrency"),
-        "country": info.get("country", "United Kingdom"),
-        "description": (info.get("longBusinessSummary") or "")[:2000] or None,
-        "full_time_employees": info.get("fullTimeEmployees"),
-        "website": info.get("website"),
-    }
+    cur.execute("SELECT symbol, ftse_index, is_active, universe_source "
+                "FROM company_metadata")
+    hl, other = {}, {}
+    for r in cur.fetchall():
+        if r["universe_source"] == "hl_index":
+            hl[r["symbol"]] = (r["ftse_index"], r["is_active"])
+        else:
+            other[r["symbol"]] = {"ftse_index": r["ftse_index"],
+                                  "source": r["universe_source"]}
+    return hl, other
 
 
 def insert_new(conn, symbol: str, index_label: str, fallback_name: str):
     meta = fetch_metadata(symbol)
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO company_metadata
-            (symbol, name, sector, industry, exchange, currency, financial_currency,
-             country, description, full_time_employees, website, ftse_index,
-             is_active, empty_fetch_count, financials_updated)
-        VALUES
-            (%(symbol)s, %(name)s, %(sector)s, %(industry)s, %(exchange)s,
-             %(currency)s, %(financial_currency)s, %(country)s, %(description)s,
-             %(full_time_employees)s, %(website)s, %(ftse_index)s,
-             true, 0, NULL)
-        ON CONFLICT (symbol) DO UPDATE SET
-            ftse_index        = EXCLUDED.ftse_index,
-            is_active         = true,
-            empty_fetch_count = 0
-        """,
-        {
-            "symbol": symbol,
-            "name": meta["name"] or fallback_name,
-            "sector": meta["sector"],
-            "industry": meta["industry"],
-            "exchange": meta["exchange"],
-            "currency": meta["currency"],
-            "financial_currency": meta["financial_currency"],
-            "country": meta["country"],
-            "description": meta["description"],
-            "full_time_employees": meta["full_time_employees"],
-            "website": meta["website"],
-            "ftse_index": index_label,
-        },
-    )
-    conn.commit()
-    return meta["name"] or fallback_name
-
-
-def record_run(conn, status: str, detail: dict):
-    """Stamp pipeline_runs so healthcheck.py can tell the quarterly cron ran —
-    a zero-change apply leaves no other DB trace (migration 008)."""
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO pipeline_runs (pipeline, last_run_at, status, detail)
-        VALUES ('index_refresh', NOW(), %s, %s)
-        ON CONFLICT (pipeline) DO UPDATE SET
-            last_run_at = EXCLUDED.last_run_at,
-            status      = EXCLUDED.status,
-            detail      = EXCLUDED.detail
-        """,
-        (status, psycopg2.extras.Json(detail)),
-    )
-    conn.commit()
+    meta["name"] = meta["name"] or fallback_name
+    upsert_company(conn, symbol, meta, index_label, "hl_index")
+    return meta["name"]
 
 
 def update_moved(conn, symbol: str, index_label: str):
@@ -280,39 +210,24 @@ def update_moved(conn, symbol: str, index_label: str):
     conn.commit()
 
 
-def discover_child_tables(conn):
-    """[(table, symbol_column)] for every base table (not view) keyed by symbol,
-    excluding company_metadata itself. Discovered at runtime so new tables are
-    purged automatically and the ttm_financials *view* is skipped."""
+def demote_to_lse_screen(conn, symbol: str, old_label: str):
+    """Hand a symbol that left all tracked indices to the LSE-screen job.
+
+    Non-destructive: all history is kept. ftse_index is relabelled in the same
+    statement — the four tiers are Main Market except AIM 100 — so nothing
+    downstream (index filters, the FTSE 100 breadth basket, cap bucketing)
+    keeps treating the name as a constituent during the gap until the monthly
+    LSE run. refresh_lse_universe.py owns the row from here — its next run
+    corrects the label if needed (e.g. a SmallCap exit that moved to AIM), or
+    purges/deactivates it if it no longer qualifies for the wider universe."""
+    new_label = "AIM" if old_label == "FTSE AIM 100" else "Main (non-index)"
     cur = conn.cursor()
     cur.execute(
-        """
-        SELECT c.table_name, c.column_name
-        FROM information_schema.columns c
-        JOIN information_schema.tables t
-          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-        WHERE c.table_schema = 'public'
-          AND c.column_name IN ('symbol', 'company_symbol')
-          AND t.table_type = 'BASE TABLE'
-          AND c.table_name <> 'company_metadata'
-        ORDER BY c.table_name
-        """
+        "UPDATE company_metadata SET universe_source = 'lse_screen', "
+        "ftse_index = %s WHERE symbol = %s",
+        (new_label, symbol),
     )
-    return cur.fetchall()
-
-
-def purge(conn, child_tables, symbol: str):
-    """Hard-delete a symbol from every child table, then company_metadata, in one
-    transaction. annual/quarterly FKs are satisfied by deleting children first."""
-    cur = conn.cursor()
-    try:
-        for table, col in child_tables:
-            cur.execute(f"DELETE FROM {table} WHERE {col} = %s", (symbol,))
-        cur.execute("DELETE FROM company_metadata WHERE symbol = %s", (symbol,))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    conn.commit()
 
 
 # ── reconcile ─────────────────────────────────────────────────────────────────
@@ -320,19 +235,9 @@ def purge(conn, child_tables, symbol: str):
 DEFAULT_MAX_PURGE = 25  # a normal quarterly reshuffle drops ~10-20 across the four tiers
 
 
-def _arg_int(flag: str, default: int) -> int:
-    if flag in sys.argv:
-        try:
-            return int(sys.argv[sys.argv.index(flag) + 1])
-        except (IndexError, ValueError):
-            log.error(f"{flag} requires an integer value")
-            sys.exit(2)
-    return default
-
-
 def main():
     apply = "--apply" in sys.argv
-    max_purge = _arg_int("--max-purge", DEFAULT_MAX_PURGE)
+    max_purge = arg_int("--max-purge", DEFAULT_MAX_PURGE)
     mode = "APPLY" if apply else "DRY RUN"
     log.info(f"=== Index membership refresh ({mode}) ===")
 
@@ -343,10 +248,18 @@ def main():
     log.info(f"  Total unique constituents: {len(fetched)}")
 
     conn = get_conn()
-    db = load_db_universe(conn)
+    db, other = load_db_universe(conn)
 
     fset, dset = set(fetched), set(db)
-    new = sorted(fset - dset)
+    # A 'manual' row that shows up in an index is only relabelled — its
+    # ownership must stay manual (never auto-purged), so it is not NEW.
+    manual_moves = sorted(
+        s for s in fset - dset
+        if other.get(s, {}).get("source") == "manual"
+        and other[s]["ftse_index"] != fetched[s][0]
+    )
+    new = sorted(s for s in fset - dset
+                 if other.get(s, {}).get("source") != "manual")
     dropped = sorted(dset - fset)
     moved = sorted(s for s in (fset & dset) if fetched[s][0] != db[s][0])
 
@@ -368,13 +281,16 @@ def main():
         print(f"\n  MOVED ({len(moved)}):")
         for s in moved:
             print(f"    ~ {s:10s} {db[s][0]} -> {fetched[s][0]}")
-    child_tables = discover_child_tables(conn)
+    if manual_moves:
+        print(f"\n  MANUAL RELABEL ({len(manual_moves)}) - in an index but "
+              f"manually owned; label updated, ownership untouched:")
+        for s in manual_moves:
+            print(f"    ~ {s:10s} {other[s]['ftse_index']} -> {fetched[s][0]}")
     if dropped:
-        print(f"\n  DROPPED ({len(dropped)}) - left all tracked indices, will be PURGED:")
+        print(f"\n  DROPPED ({len(dropped)}) - left all tracked indices, will be "
+              f"DEMOTED to the LSE screen (refresh_lse_universe.py relabels or purges):")
         for s in dropped:
             print(f"    - {s:10s} (was {db[s][0]})")
-        print(f"\n  Purge removes each from: company_metadata + "
-              f"{', '.join(t for t, _ in child_tables)}")
 
     if not apply:
         print("\n  Dry run - no changes written. Re-run with --apply to commit.\n")
@@ -392,31 +308,36 @@ def main():
     for s in moved:
         update_moved(conn, s, fetched[s][0])
         log.info(f"    ~ moved {s}: {db[s][0]} -> {fetched[s][0]}")
-    purged = 0
-    purges_blocked = len(dropped) > max_purge
-    if purges_blocked:
+    for s in manual_moves:
+        update_moved(conn, s, fetched[s][0])
+        log.info(f"    ~ relabelled manual {s}: {other[s]['ftse_index']} -> "
+                 f"{fetched[s][0]} (ownership stays manual)")
+    demoted = 0
+    demotions_blocked = len(dropped) > max_purge
+    if demotions_blocked:
         log.error(f"    ! {len(dropped)} dropped exceeds --max-purge {max_purge} — "
-                  f"purges SKIPPED (new/moved still applied). Review the list and "
+                  f"demotions SKIPPED (new/moved still applied). Review the list and "
                   f"re-run with --max-purge {len(dropped)} if it's genuine.")
     else:
         for s in dropped:
             try:
-                purge(conn, child_tables, s)
-                purged += 1
-                log.info(f"    - purged {s} (left all indices)")
+                demote_to_lse_screen(conn, s, db[s][0])
+                demoted += 1
+                log.info(f"    - demoted {s} to lse_screen (left all indices)")
             except Exception as e:
-                log.error(f"    ! purge failed {s}: {e}")
+                log.error(f"    ! demotion failed {s}: {e}")
 
     record_run(
         conn,
-        "purges_blocked" if purges_blocked else "ok",
-        {"new": len(new), "moved": len(moved), "purged": purged,
-         "dropped": len(dropped), "universe": len(fset)},
+        "index_refresh",
+        "demotions_blocked" if demotions_blocked else "ok",
+        {"new": len(new), "moved": len(moved), "manual_relabelled": len(manual_moves),
+         "demoted": demoted, "dropped": len(dropped), "universe": len(fset)},
     )
     conn.close()
-    print(f"\n  Done. +{len(new)} new, ~{len(moved)} moved, -{purged} purged.")
+    print(f"\n  Done. +{len(new)} new, ~{len(moved)} moved, -{demoted} demoted.")
     print("  New constituents will get financials on the next updater.py run.\n")
-    if purges_blocked:
+    if demotions_blocked:
         sys.exit(1)
 
 

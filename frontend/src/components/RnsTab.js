@@ -220,6 +220,14 @@ function ActionPill({ action }) {
   );
 }
 
+// Cap-bucket floors — MUST match _LARGE_CAP_FLOOR / _MID_CAP_FLOOR in
+// backend/email_rns_digest.py (_cap_bucket). Bucketing stays client-side here
+// because it has to run AFTER the async /rns/market-caps backfill fills the
+// caps the DB lacks; the digest does that backfill server-side before
+// bucketing, so the two copies can't share code.
+const LARGE_CAP_FLOOR = 4e9;
+const MID_CAP_FLOOR = 350e6;
+
 export default function RnsTab({ refreshKey, onSelect }) {
   // Use the stacked single-column layout on phones AND tablet-width screens
   // (e.g. a Surface Pro in portrait, ~912px). The full desktop table has too
@@ -354,15 +362,19 @@ export default function RnsTab({ refreshKey, onSelect }) {
 
   const ranked = useMemo(() => rows.filter((r) => r.llm_score != null), [rows]);
 
-  // Bucket filtered rows by FTSE index — same logic as the digest email.
-  // Anything not explicitly FTSE 100 / 250 falls into "small" (SmallCap, AIM,
-  // unlisted, or NULL ftse_index).
+  // Bucket filtered rows by FTSE index — same logic as the digest email
+  // (_cap_bucket): FTSE 100/250 map directly, SmallCap/AIM 100 are small, and
+  // non-index names (LSE screen) fall back to market cap so a £10B WISE
+  // doesn't land in "small".
   const buckets = useMemo(() => {
     const out = { large: [], mid: [], small: [] };
     for (const r of filtered) {
       const idx = r.ftse_index;
       if (idx === "FTSE 100") out.large.push(r);
       else if (idx === "FTSE 250") out.mid.push(r);
+      else if (idx === "FTSE SmallCap" || idx === "FTSE AIM 100") out.small.push(r);
+      else if ((r.market_cap || 0) >= LARGE_CAP_FLOOR) out.large.push(r);
+      else if ((r.market_cap || 0) >= MID_CAP_FLOOR) out.mid.push(r);
       else out.small.push(r);
     }
     return out;

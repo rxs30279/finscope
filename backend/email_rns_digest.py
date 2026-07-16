@@ -137,14 +137,21 @@ def _backfill_market_caps(rows: list[dict]) -> None:
 
 # ── Market-cap bucketing ──────────────────────────────────────────────────────
 
-# Three sections. Anything not explicitly Large or Mid (incl. FTSE SmallCap,
-# AIM 100, AIM All-Share, unlisted, NULL) falls into Small.
+# Three sections. FTSE 100/250 map directly; everything else falls back to
+# market cap because the universe now includes non-index names (LSE screen,
+# migration 017) where a £10B WISE would otherwise land in Small. Thresholds
+# approximate the FTSE 250 cap range. FTSE SmallCap / AIM 100 stay Small by
+# construction (both sit under ~£1.5B).
+# The floors and index carve-outs are mirrored in frontend/src/components/
+# RnsTab.js (LARGE_CAP_FLOOR / MID_CAP_FLOOR) — keep the two in sync.
 _CAP_BUCKETS = ("large", "mid", "small")
 _CAP_META = {
-    "large": {"label": "Large Cap", "sub": "FTSE 100",       "color": "#f97316"},
-    "mid":   {"label": "Mid Cap",   "sub": "FTSE 250",       "color": "#60a5fa"},
+    "large": {"label": "Large Cap", "sub": "FTSE 100 / £4bn+", "color": "#f97316"},
+    "mid":   {"label": "Mid Cap",   "sub": "FTSE 250",         "color": "#60a5fa"},
     "small": {"label": "Small Cap", "sub": "SmallCap / AIM / other", "color": "#6b7280"},
 }
+_LARGE_CAP_FLOOR = 4_000_000_000
+_MID_CAP_FLOOR = 350_000_000
 
 
 def _cap_bucket(row: dict) -> str:
@@ -152,6 +159,16 @@ def _cap_bucket(row: dict) -> str:
     if idx == "FTSE 100":
         return "large"
     if idx == "FTSE 250":
+        return "mid"
+    if idx in ("FTSE SmallCap", "FTSE AIM 100"):
+        return "small"
+    try:
+        mc = float(row.get("market_cap") or 0)
+    except (TypeError, ValueError):
+        mc = 0
+    if mc >= _LARGE_CAP_FLOOR:
+        return "large"
+    if mc >= _MID_CAP_FLOOR:
         return "mid"
     return "small"
 

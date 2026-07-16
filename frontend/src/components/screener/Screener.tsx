@@ -379,6 +379,8 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           <option value="FTSE 350">FTSE 350</option>
           <option value="FTSE SmallCap">FTSE SmallCap</option>
           <option value="FTSE AIM 100">AIM 100</option>
+          <option value="AIM">AIM (other)</option>
+          <option value="Main (non-index)">Main (non-index)</option>
         </select>
         <HybridSelect active={!!filters.min_market_cap} selectMode={selectModes.min_market_cap} onSelectChange={(mode) => handleSelectMode("min_market_cap", mode)} onCustomCommit={(v) => handleCustomCommit("min_market_cap", v, (n) => Math.round(n * 1e9))} placeholder="£B" inputWidth={70}>
           <option value="">Any Market Cap</option>

@@ -41,8 +41,20 @@ def test_cap_bucket_maps_index_to_bucket():
     assert d._cap_bucket({"ftse_index": "FTSE 100"}) == "large"
     assert d._cap_bucket({"ftse_index": "FTSE 250"}) == "mid"
     assert d._cap_bucket({"ftse_index": "FTSE AIM 100"}) == "small"
-    assert d._cap_bucket({"ftse_index": None}) == "small"      # unknown → small
+    assert d._cap_bucket({"ftse_index": None}) == "small"      # unknown, no cap → small
     assert d._cap_bucket({}) == "small"
+
+
+def test_cap_bucket_falls_back_to_market_cap_off_index():
+    # Non-index names (LSE screen) bucket by cap: a £10B WISE is Large, not Small.
+    assert d._cap_bucket({"ftse_index": "Main (non-index)", "market_cap": 9.7e9}) == "large"
+    assert d._cap_bucket({"ftse_index": "Main (non-index)", "market_cap": 6e8}) == "mid"
+    assert d._cap_bucket({"ftse_index": "AIM", "market_cap": 8e7}) == "small"
+    assert d._cap_bucket({"ftse_index": None, "market_cap": 5e9}) == "large"
+    # FTSE SmallCap / AIM 100 stay small regardless of cap (matches index tiers).
+    assert d._cap_bucket({"ftse_index": "FTSE SmallCap", "market_cap": 5e9}) == "small"
+    # junk cap values degrade to small, not crash
+    assert d._cap_bucket({"ftse_index": "AIM", "market_cap": "junk"}) == "small"
 
 
 # ── _format_mc ─────────────────────────────────────────────────────────────────

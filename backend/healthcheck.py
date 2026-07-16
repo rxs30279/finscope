@@ -15,6 +15,8 @@ What it checks
     - Analysts         MAX(snapshot_date) on analyst_snapshots
     - Index refresh    pipeline_runs marker for the quarterly index-membership
                        cron (stale > ~1 quarter, or last run degraded)
+    - LSE universe     pipeline_runs marker for the monthly LSE-screen universe
+                       refresh (stale > ~5 weeks, or last run degraded)
     - Dividends        pipeline_runs marker for the weekly dividend-history
                        refresh (stale > ~1.5 weeks, or last run degraded)
     - Shorts           pipeline_runs marker for the daily FCA short-position
@@ -206,6 +208,22 @@ def run_db_checks(query_one=None) -> None:
         status = _tier(d, warn_at=93, fail_at=97)
         if row["status"] != "ok":
             status = FAIL  # last run blocked its purges (or otherwise degraded)
+        return status, f"last apply {d:.0f}d ago, status '{row['status']}', {row['detail']}"
+
+    @check("universe.lse_refresh")
+    def _lse_universe_refresh():
+        row = query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'lse_universe_refresh'"
+        )
+        if not row or row["last_run_at"] is None:
+            return FAIL, "no lse_universe_refresh marker in pipeline_runs"
+        d = _age_hours(row["last_run_at"]) / 24.0
+        # Monthly Dokploy cron — successive runs are 28-31 days apart, so give
+        # a few days' slack before flagging a missed month.
+        status = _tier(d, warn_at=35, fail_at=45)
+        if row["status"] != "ok":
+            status = FAIL  # last run blocked its purges/deactivations (or errored)
         return status, f"last apply {d:.0f}d ago, status '{row['status']}', {row['detail']}"
 
     @check("dividends.refresh")
