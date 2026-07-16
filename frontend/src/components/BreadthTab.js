@@ -7,6 +7,20 @@ import { useIsMobile, useIsNarrowMobile, useIsUnderMd } from "@/hooks/useMediaQu
 import InfoDot from "@/components/InfoDot";
 
 
+// "Updated …" label from the payload's as_of (UTC ISO) — same wording as the
+// Sidebar stamp. Relative so it reads at a glance; a minute tick re-renders it.
+function fmtAgo(iso) {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const sec = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (sec < 45) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const h = Math.floor(min / 60);
+  return `${h}h ${min % 60}m ago`;
+}
+
 // Breadth gauge styled to match the CNN-style Fear & Greed dial: two thin donut
 // zones (red ≤50, green ≥50) with a gap between them, a gradient backdrop, a
 // slim triangle needle and a hub holding the percentage. Same footprint as
@@ -210,6 +224,13 @@ export default function BreadthTab({ refreshKey }) {
   const [data, setData]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdLine, setShowAdLine] = useState(false); // A/D line chart hidden by default
+  // Minute tick so the relative "Updated …" stamp stays current between the
+  // provider-driven refetches (the component doesn't re-render otherwise).
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
   const isMobile = useIsMobile();
   const isNarrowMobile = useIsNarrowMobile();
   const isUnderMd = useIsUnderMd();
@@ -260,6 +281,11 @@ export default function BreadthTab({ refreshKey }) {
       <div style={{ display:'flex', alignItems:'baseline', gap:10, flexWrap:'wrap', marginBottom:20 }}>
         <h2 style={{ fontFamily:'monospace', fontSize:14, fontWeight:700, color:'#f97316', textTransform:'uppercase', letterSpacing:2, margin:0 }}>Market Breadth</h2>
         <span style={{ fontFamily:'monospace', fontSize:10, color:'#64748b' }}>Across the FTSE 100 constituents</span>
+        {data?.as_of && fmtAgo(data.as_of) && (
+          <span style={{ fontFamily:'monospace', fontSize:10, color:'#475569' }} title={new Date(data.as_of).toLocaleString()}>
+            · Updated {fmtAgo(data.as_of)}
+          </span>
+        )}
       </div>
       <div style={{ display:'grid', gridTemplateColumns: !isUnderMd ? '1fr 1fr 1fr' : isNarrowMobile ? '1fr' : '1fr 1fr', gap:16, marginBottom:16 }}>
 

@@ -1459,6 +1459,10 @@ def _compute_breadth(prices=None):
             today_unch += 1
 
     return {
+        # When this breadth frame was actually computed. Cached with the rest of
+        # the payload, so under SWR / the 15-min edge cache a stale read carries
+        # the older stamp — it reflects the data's true age, not request time.
+        "as_of": datetime.now(timezone.utc).isoformat(),
         "pct_above_50ma": pct_above,
         "above_50ma": above_50,
         "below_50ma": ma_total - above_50,
