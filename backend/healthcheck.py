@@ -290,10 +290,11 @@ def run_db_checks(query_one=None) -> None:
             return FAIL, "company_metadata.financials_updated all NULL"
         newest = _age_days(row["newest"])
         oldest = _age_days(row["oldest"]) if row["oldest"] else None
-        # The rotation updates 25 stocks/run, so a healthy full cycle takes
-        # ~ceil(universe / 25) days — derive the threshold from the live count
-        # rather than hardcoding (the universe grows over time).
-        cycle = -(-row["total"] // 25)  # ceil
+        # The rotation updates 35 stocks/run (updater.STOCKS_PER_RUN — keep in
+        # sync; not imported because updater's import side effects are heavy),
+        # so a healthy full cycle takes ~ceil(universe / 35) days — derive the
+        # threshold from the live count (the universe grows over time).
+        cycle = -(-row["total"] // 35)  # ceil
         # newest → did the daily rotation run at all; oldest → is the cycle stalled.
         s1 = _tier(newest, warn_at=2, fail_at=3)
         s2 = _tier(oldest, warn_at=cycle + 4, fail_at=int(cycle * 1.6)) if oldest is not None else PASS

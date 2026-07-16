@@ -1,10 +1,10 @@
 name: refresh-financials
 
-# Rotates 25 stocks per run through the full FTSE list (~350 stocks),
-# pulling annual + quarterly financials from yfinance and computing
-# margins, growth, ROIC/ROE/ROCE, CAGRs, valuation ratios. Picks the
-# 25 oldest by company_metadata.financials_updated, so the cycle is
-# self-balancing — full coverage every ~14 days.
+# Rotates 35 stocks per run through the full universe (~750 names since
+# the LSE screen), pulling annual + quarterly financials from yfinance and
+# computing margins, growth, ROIC/ROE/ROCE, CAGRs, valuation ratios. Picks
+# the 35 oldest by company_metadata.financials_updated, so the cycle is
+# self-balancing — full coverage every ~22 days.
 
 on:
   schedule:

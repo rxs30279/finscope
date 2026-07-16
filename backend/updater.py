@@ -1,14 +1,14 @@
 """
 FinScope v2 — yfinance Daily Updater
 ======================================
-Fetches financials for 25 stocks/day from Yahoo Finance.
+Fetches financials for 35 stocks/day from Yahoo Finance.
 Calculates ROIC, CAGRs, medians, growth rates, valuation ratios.
 Upserts results into PostgreSQL.
 
 Run daily:
     python updater.py
 
-All 350 stocks rotate every ~14 days.
+The full universe (~750 names since the LSE screen) rotates every ~22 days.
 """
 
 import time
@@ -36,7 +36,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-STOCKS_PER_RUN = 25
+# Mirrored in healthcheck.py's financials.rotation cycle maths — keep in sync.
+STOCKS_PER_RUN = 35
 DB_CONFIG = {
     "dbname": os.environ.get("DB_NAME", "postgres"),
     "user": os.environ.get("DB_USER", "postgres"),
