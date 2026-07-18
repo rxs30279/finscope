@@ -592,6 +592,14 @@
   opacity: 1;
   color: var(--accent);
 }
+/* Post titles are long — cap the column and ellipsize so it can't blow out
+   the flex row. */
+.am-landing .am-foot-col-posts a {
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .am-landing .am-foot-legal {
   max-width: 1320px;
   margin: 0 auto;

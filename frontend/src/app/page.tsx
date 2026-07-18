@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
+import { getResearchPosts } from "@/lib/research";
 import LandingEffects from "@/components/landing/LandingEffects";
 import InstallButton from "@/components/landing/InstallButton";
 import LandingSignup from "@/components/landing/LandingSignup";
@@ -101,7 +102,12 @@ const jsonLd = {
   ],
 };
 
-export default function Home() {
+export default async function Home() {
+  // Latest posts get first-class links from the homepage — the most-crawled
+  // URL — so search engines discover new articles without waiting on a
+  // /research index re-crawl. Degrades to the generic card if the API is down.
+  const posts = (await getResearchPosts())?.slice(0, 3) ?? [];
+  const latest = posts[0];
   return (
     <div className="am-landing">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
@@ -156,9 +162,14 @@ export default function Home() {
           <span><span className="am-tick" aria-hidden="true">●</span> AI-scored RNS news</span>
           <span><span className="am-tick" aria-hidden="true">●</span> Free — no spreadsheets required</span>
         </div>
-        <Link href="/research" className="am-research-cta am-reveal">
+        <Link
+          href={latest ? `/research/${latest.slug}` : "/research"}
+          className="am-research-cta am-reveal"
+        >
           <span className="am-research-label">Latest research</span>
-          <span className="am-research-title">Analysis &amp; market notes on UK equities</span>
+          <span className="am-research-title">
+            {latest ? latest.title : "Analysis & market notes on UK equities"}
+          </span>
           <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
             <path d="M5 12h14M13 6l6 6-6 6" />
           </svg>
@@ -208,6 +219,17 @@ export default function Home() {
               <Link href="/heatmap">Heatmap</Link>
               <Link href="/subscribe">Email Digest</Link>
             </div>
+            {posts.length > 0 && (
+              <div className="am-foot-col am-foot-col-posts">
+                <h4>Latest Research</h4>
+                {posts.map((p) => (
+                  <Link key={p.slug} href={`/research/${p.slug}`} title={p.title}>
+                    {p.title}
+                  </Link>
+                ))}
+                <Link href="/research">All research →</Link>
+              </div>
+            )}
             <div className="am-foot-col">
               <h4>About</h4>
               <Link href="/feedback">Feedback</Link>
