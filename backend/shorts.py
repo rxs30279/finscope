@@ -51,7 +51,8 @@ from db import query, get_pool as _get_pool
 # the FCA itself keys on, with no extra network calls.
 
 _NAME_SUFFIXES = re.compile(
-    r"\b(PLC|GROUP|HOLDINGS?|LIMITED|LTD|& CO|AND CO)\b", re.IGNORECASE
+    r"\b(PLC|GROUP|HOLDINGS?|LIMITED|LTD|PUBLIC|COMPANY|THE|& CO|AND CO)\b",
+    re.IGNORECASE,
 )
 
 
@@ -157,12 +158,14 @@ def _to_date(val):
     return None if pd.isna(ts) else ts.date()
 
 
+_DDMMYYYY_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}/\d{2,4}\s*$")
+
+
 def _read_ansp_table(url, fallback_disclosure_date=None):
     """Download + parse one ANSP file (CSV preferred, XLSX fallback) into rows.
 
     Returns a list of dicts with keys: issuer_name, isin, ansp_pct, position_date,
-    disclosure_date. Matches columns loosely on substrings; the first real
-    publication (Mon 13 July 2026) uses:
+    disclosure_date. The first real publication (Mon 13 July 2026) uses:
       current:  ISIN / Name of Company / Aggregated net short position (%) /
                 Position date (of latest position date notified)
       historic: same + Date the aggregated net short position became historical
@@ -183,21 +186,91 @@ def _read_ansp_table(url, fallback_disclosure_date=None):
         df = pd.read_csv(buf)
     else:
         df = pd.read_excel(buf, engine="openpyxl")
+    return _parse_ansp_df(df, fallback_disclosure_date)
+
+
+def _parse_ansp_df(df, fallback_disclosure_date=None):
+    """Map an ANSP dataframe to rows (split from _read_ansp_table for testing).
+
+    Columns are matched loosely on header substrings, then sanity-checked
+    against actual cell contents: on 17 Jul 2026 the FCA's historic CSV shipped
+    with its value columns misaligned against its own headers (the pct column
+    held position dates, the became-historical column held the pct), which a
+    header-only mapping trusts blindly. If the pct column doesn't actually
+    contain numbers, the value columns are re-derived from content: the numeric
+    column is the pct, and of the two date columns the row-wise later one is
+    the became-historical date (a position's last position date precedes it
+    becoming historical).
+    """
+    import pandas as pd
 
     cols = {c: c.strip().lower() for c in df.columns}
     df = df.rename(columns=cols)
 
-    def _find(*substrs):
+    def _find(*substrs, exclude=None):
         for c in df.columns:
-            if all(s in c for s in substrs):
+            if all(s in c for s in substrs) and not (exclude and exclude in c):
                 return c
         return None
 
+    # exclude="date": the historic file's "date the aggregated net short
+    # position became historical" header contains both "net short" and
+    # "aggregate", so without it the pct lookup can land on a date column.
     col_issuer = _find("name of issuer") or _find("name of company") or _find("issuer") or _find("company")
     col_isin = _find("isin")
-    col_pct = _find("net short") or _find("aggregate")
+    col_pct = _find("net short", exclude="date") or _find("aggregate", exclude="date")
     col_posdate = _find("position date")
     col_discdate = _find("disclosure") or _find("publication") or _find("historical")
+
+    def _cell_kind(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        if hasattr(v, "year"):  # datetime/date/Timestamp cells from XLSX
+            return "date"
+        s = str(v).strip()
+        if not s or s.lower() == "nan":
+            return None
+        if _DDMMYYYY_RE.match(s):
+            return "date"
+        try:
+            float(s.rstrip("%"))
+            return "num"
+        except ValueError:
+            return None
+
+    def _col_kind(c):
+        kinds = [k for k in (_cell_kind(v) for v in df[c].head(50)) if k]
+        return max(("num", "date"), key=kinds.count) if kinds else None
+
+    if col_pct is not None and len(df) > 0 and _col_kind(col_pct) != "num":
+        value_cols = [c for c in (col_pct, col_posdate, col_discdate) if c]
+        num_cols = [c for c in value_cols if _col_kind(c) == "num"]
+        date_cols = [c for c in value_cols if _col_kind(c) == "date"]
+        if len(num_cols) != 1:
+            # Better to fail the run loudly (healthcheck catches it) than to
+            # guess and write garbage into the daily series.
+            raise RuntimeError(
+                f"ANSP file misaligned and unrecoverable: expected one numeric "
+                f"column among {value_cols}, found {num_cols}"
+            )
+        logger.warning(
+            "ANSP header/data misalignment detected; remapping value columns by content"
+        )
+        col_pct = num_cols[0]
+        if len(date_cols) == 2:
+            pairs = [
+                (_to_date(a), _to_date(b))
+                for a, b in zip(df[date_cols[0]].head(50), df[date_cols[1]].head(50))
+            ]
+            earlier_first = sum(1 for a, b in pairs if a and b and a <= b)
+            later_first = sum(1 for a, b in pairs if a and b and a > b)
+            col_posdate, col_discdate = (
+                (date_cols[0], date_cols[1])
+                if earlier_first >= later_first
+                else (date_cols[1], date_cols[0])
+            )
+        elif len(date_cols) == 1:
+            col_posdate, col_discdate = date_cols[0], None
 
     rows = []
     for _, row in df.iterrows():
@@ -208,6 +281,13 @@ def _read_ansp_table(url, fallback_disclosure_date=None):
         pct = row.get(col_pct) if col_pct else None
         if pct is not None and pd.isna(pct):
             pct = None
+        if pct is not None:
+            try:
+                pct = float(str(pct).strip().rstrip("%"))
+            except ValueError:
+                # a stray bad cell shouldn't kill the whole daily run
+                logger.warning("ANSP row skipped: unparseable pct %r for %s", pct, isin)
+                continue
         pos_date = _to_date(row.get(col_posdate)) if col_posdate else None
         disc_date = _to_date(row.get(col_discdate)) if col_discdate else None
         if disc_date is None:
@@ -217,12 +297,23 @@ def _read_ansp_table(url, fallback_disclosure_date=None):
             {
                 "isin": isin,
                 "issuer_name": issuer,
-                "ansp_pct": float(pct) if pct is not None else None,
+                "ansp_pct": pct,
                 "position_date": pos_date,
                 "disclosure_date": disc_date,
             }
         )
     return rows
+
+
+def _last_working_day(d):
+    """Most recent weekday on/before d. The FCA only publishes Mon-Fri, so a
+    weekend scrape is really reading Friday's file and must be labelled with
+    Friday's date (disclosure_date = "working day the ANSP relates to", see
+    migration 015). Bank holidays aren't modelled -- the cron runs Mon-Fri, so
+    this only matters for manual weekend runs."""
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
 
 
 def refresh_shorts():
@@ -237,9 +328,10 @@ def refresh_shorts():
 
     all_rows = []
     # Current file carries no publication date -- key today's snapshot on the
-    # scrape date so the daily series accumulates one row per issuer per day.
+    # last working day (= publication date of the file being read) so the daily
+    # series accumulates one row per issuer per working day.
     # Historic rows key on their own "became historical" column.
-    for url, fallback in ((current_url, date.today()), (historic_url, None)):
+    for url, fallback in ((current_url, _last_working_day(date.today())), (historic_url, None)):
         if not url:
             continue
         all_rows.extend(_read_ansp_table(url, fallback_disclosure_date=fallback))
@@ -413,6 +505,114 @@ def _empty_shape(symbol):
         "history": [],
         "holders_archive": [],
     }
+
+
+def _build_leaderboard(rows, as_of):
+    """Group the ANSP window rows (ordered isin, disclosure_date ASC) into
+    leaderboard entries. Pure — split out of /api/shorts/top for testing.
+
+    Only issuers with a row on the latest disclosure date are current; an
+    issuer whose aggregate fell below the FCA's 0.2% publication threshold
+    stops appearing in the current file and drops off the leaderboard.
+    """
+    by_isin = {}
+    for r in rows:
+        by_isin.setdefault(r["isin"], []).append(r)
+
+    month_ago = as_of - timedelta(days=30)
+    out = []
+    for isin, series in by_isin.items():
+        last = series[-1]
+        if last["disclosure_date"] != as_of:
+            continue
+        current = float(last["ansp_pct"])
+        prior = [s for s in series if s["disclosure_date"] <= month_ago]
+        change_1m = round(current - float(prior[-1]["ansp_pct"]), 4) if prior else None
+        first = series[0]
+        out.append(
+            {
+                "isin": isin,
+                "name": last["issuer_name"],
+                "symbol": last["company_symbol"],
+                "pct": current,
+                "change_1m": change_1m,
+                # Fallback delta while the series is younger than a month —
+                # change over whatever window this issuer has, from window_start.
+                "change_window": round(current - float(first["ansp_pct"]), 4),
+                "window_start": str(first["disclosure_date"]),
+                "history": [
+                    {"date": str(s["disclosure_date"]), "pct": float(s["ansp_pct"])}
+                    for s in series
+                ],
+            }
+        )
+    out.sort(key=lambda r: (-r["pct"], r["name"]))
+    return out
+
+
+def _attach_scores(rows):
+    """Attach the four screener composites (momentum/quality/value/risk) and
+    the FTSE index label to leaderboard rows that resolve to a universe symbol
+    — the showcase's MQVR enrichment recipe (showcase._MQVR_SQL): momentum +
+    risk come precomputed from screener_scores, quality + value are computed
+    inline on the scrubbed ttm columns. Unresolved issuers get all nulls.
+    Imports are lazy to avoid a module-load cycle (main.py imports this
+    module's router)."""
+    for r in rows:
+        r.update(
+            momentum_score=None, quality_score=None, value_score=None,
+            risk_score=None, ftse_index=None,
+        )
+    symbols = [r["symbol"] for r in rows if r["symbol"]]
+    if not symbols:
+        return
+    from main import _scrub_screener_metrics, _attach_pegy, _quality_score, _value_score
+    from showcase import _MQVR_SQL
+
+    mrows = query(_MQVR_SQL, (symbols,))
+    _scrub_screener_metrics(mrows)
+    _attach_pegy(mrows)
+    scores = {
+        m["symbol"]: {
+            "momentum_score": m.get("momentum_score"),
+            "quality_score": _quality_score(m),
+            "value_score": _value_score(m),
+            "risk_score": m.get("risk_score"),
+            "ftse_index": m.get("ftse_index"),
+        }
+        for m in mrows
+    }
+    for r in rows:
+        if r["symbol"] in scores:
+            r.update(scores[r["symbol"]])
+
+
+@router.get("/api/shorts/top")
+def shorts_top(response: Response = None):
+    """Most-shorted leaderboard: every issuer in the latest ANSP snapshot,
+    ranked by aggregate net short %, each with a ~3-month history for trend
+    sparklines. Feeds the public /most-shorted page."""
+    if response is not None:
+        response.headers["Cache-Control"] = (
+            "public, s-maxage=21600, stale-while-revalidate=86400"
+        )
+
+    latest = query("SELECT MAX(disclosure_date) AS d FROM short_positions_agg")
+    as_of = latest[0]["d"] if latest else None
+    if as_of is None:
+        return {"as_of": None, "rows": []}
+
+    # 92-day cap bounds the per-row sparkline payload as the daily series
+    # accumulates; the full history stays available per-company via /api/shorts.
+    window_rows = query(
+        "SELECT isin, disclosure_date, issuer_name, ansp_pct, company_symbol"
+        " FROM short_positions_agg WHERE disclosure_date >= %s"
+        " ORDER BY isin, disclosure_date ASC",
+        (as_of - timedelta(days=92),),
+    )
+    rows = _build_leaderboard(window_rows, as_of)
+    _attach_scores(rows)
+    return {"as_of": str(as_of), "rows": rows}
 
 
 @router.get("/api/shorts")

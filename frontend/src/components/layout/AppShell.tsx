@@ -24,6 +24,7 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   { href: "/trending", label: "Trending" },
+  { href: "/most-shorted", label: "Most Shorted" },
   { href: "/analysts", label: "Analysts" },
   { href: "/watchlist", label: "Watchlist" },
   { href: "/markets", label: "Markets" },

@@ -524,7 +524,7 @@ def record_followups() -> dict:
 # MQVR source — copied from the /api/screener SELECT (main.py) so quality/value
 # scoring sees the exact same columns (incl. the stored *_median companions).
 _MQVR_SQL = """
-    SELECT m.symbol, m.sector, m.industry,
+    SELECT m.symbol, m.sector, m.industry, m.ftse_index,
            t.market_cap, t.revenue, t.net_debt, t.ebitda,
            CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END as price_to_earnings,
            t.price_to_book, t.price_to_sales, t.roe, t.roic,
@@ -534,7 +534,7 @@ _MQVR_SQL = """
            t.gross_margin_median, t.operating_margin_median,
            t.net_margin_median, t.roe_median, t.roic_median,
            a.total_analysts, a.eps_growth_next_yr, a.eps_est_current_yr,
-           s.momentum_score
+           s.momentum_score, s.risk_score
     FROM company_metadata m
     LEFT JOIN ttm_financials t ON t.company_symbol = m.symbol
     LEFT JOIN (
