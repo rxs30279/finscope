@@ -122,6 +122,12 @@ function FearGreedGauge({ score, color }) {
           <stop offset="0.6" stopColor="#2c2c34" />
           <stop offset="1" stopColor="#1a1a1e" />
         </radialGradient>
+        {/* Everything above the dial baseline — the needle's base corners swing
+            below it (they're perpendicular to the needle at the hub centre) and
+            the flat-bottomed hub doesn't cover down there. */}
+        <clipPath id="fg-upper">
+          <rect x="0" y="0" width="360" height={cy} />
+        </clipPath>
       </defs>
 
       {/* Gradient backdrop behind the dial — top half only, ending flush at the
@@ -175,6 +181,7 @@ function FearGreedGauge({ score, color }) {
         stroke="#0b0b0b"
         strokeWidth="0.5"
         strokeLinejoin="round"
+        clipPath="url(#fg-upper)"
       />
 
       {/* Hub (no outline) + score — a flat-bottomed semicircle so the darker

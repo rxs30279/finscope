@@ -106,6 +106,11 @@ function BreadthGauge({ value }) {
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
+          {/* Everything above the dial baseline — the needle's base corners swing
+              below it and the flat-bottomed hub doesn't cover down there. */}
+          <clipPath id="bg-upper">
+            <rect x="0" y="0" width="200" height={cy} />
+          </clipPath>
         </defs>
 
         {/* Gradient backdrop — top half only, flush at the baseline */}
@@ -138,7 +143,7 @@ function BreadthGauge({ value }) {
         })}
 
         {/* Needle */}
-        <polygon points={`${tipX},${tipY} ${bx1},${by1} ${bx2},${by2}`} fill="#e5e5e5" stroke="#0b0b0b" strokeWidth="0.5" strokeLinejoin="round" />
+        <polygon points={`${tipX},${tipY} ${bx1},${by1} ${bx2},${by2}`} fill="#e5e5e5" stroke="#0b0b0b" strokeWidth="0.5" strokeLinejoin="round" clipPath="url(#bg-upper)" />
 
         {/* Hub + percentage — a flat-bottomed semicircle so nothing shows below
             the dial baseline (a full circle's darker lower half was visible) */}
@@ -192,7 +197,8 @@ function DivergingBar({ leftLabel, leftValue, leftColor, rightLabel, rightValue,
   );
 }
 
-// Small sliding on/off switch with a label.
+// Sliding on/off switch with a label, wrapped in a bordered pill so it reads
+// as a control rather than fading into the card.
 function Toggle({ on, onChange, label }) {
   return (
     <button
@@ -200,9 +206,17 @@ function Toggle({ on, onChange, label }) {
       role="switch"
       aria-checked={on}
       onClick={() => onChange(!on)}
-      style={{ display:'flex', alignItems:'center', gap:8, background:'none', border:'none', cursor:'pointer', padding:0, fontFamily:'monospace', fontSize:10, color:'#94a3b8' }}
+      style={{
+        display:'flex', alignItems:'center', gap:8, cursor:'pointer',
+        padding:'5px 12px 5px 6px', borderRadius:999,
+        background: on ? 'rgba(67,56,202,0.18)' : '#1c1c22',
+        border:`1px solid ${on ? '#4338ca' : '#44444c'}`,
+        fontFamily:'monospace', fontSize:11, fontWeight:700, letterSpacing:'0.3px',
+        color: on ? '#c7d2fe' : '#cbd5e1',
+        transition:'background .2s, border-color .2s, color .2s',
+      }}
     >
-      <span style={{ position:'relative', width:32, height:18, borderRadius:9, boxSizing:'border-box', background: on ? '#3730a3' : '#2a2a2a', border:`1px solid ${on ? '#4338ca' : '#3a3a3a'}`, transition:'background .2s, border-color .2s', flexShrink:0 }}>
+      <span style={{ position:'relative', width:32, height:18, borderRadius:9, boxSizing:'border-box', background: on ? '#4338ca' : '#2e2e36', border:`1px solid ${on ? '#6366f1' : '#4a4a52'}`, transition:'background .2s, border-color .2s', flexShrink:0 }}>
         <span style={{ position:'absolute', top:1, left: on ? 15 : 1, width:14, height:14, borderRadius:'50%', background:'#e5e5e5', transition:'left .2s' }} />
       </span>
       {label}
