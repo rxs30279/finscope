@@ -108,8 +108,10 @@ function BreadthGauge({ value }) {
           </filter>
           {/* Everything above the dial baseline — the needle's base corners swing
               below it and the flat-bottomed hub doesn't cover down there. */}
+          {/* Ends 1 unit above the baseline — clipping exactly at cy leaves an
+              antialiased sliver of needle below the hub on high-DPR screens. */}
           <clipPath id="bg-upper">
-            <rect x="0" y="0" width="200" height={cy} />
+            <rect x="0" y="0" width="200" height={cy - 1} />
           </clipPath>
         </defs>
 

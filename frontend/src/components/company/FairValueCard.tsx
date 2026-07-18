@@ -156,8 +156,10 @@ function FairValueGauge({ up }: { up: number }) {
         {/* The needle's base is a few px wide, so off-vertical angles poke one
             corner past the hub's flat baseline — clip everything to the top
             half so that sliver never shows below the dial. */}
+        {/* height ends 1 unit above the baseline — clipping exactly at cy can
+            leave an antialiased sliver of needle below the hub when scaled. */}
         <clipPath id="fv-clip-top">
-          <rect x="0" y="0" width="360" height={cy} />
+          <rect x="0" y="0" width="360" height={cy - 1} />
         </clipPath>
       </defs>
 

@@ -125,8 +125,11 @@ function FearGreedGauge({ score, color }) {
         {/* Everything above the dial baseline — the needle's base corners swing
             below it (they're perpendicular to the needle at the hub centre) and
             the flat-bottomed hub doesn't cover down there. */}
+        {/* Ends 1 unit above the baseline: clipping exactly at cy leaves an
+            antialiased sliver of needle visible below the hub when the SVG is
+            scaled to fractional device pixels. */}
         <clipPath id="fg-upper">
-          <rect x="0" y="0" width="360" height={cy} />
+          <rect x="0" y="0" width="360" height={cy - 1} />
         </clipPath>
       </defs>
 
