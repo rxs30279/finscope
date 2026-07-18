@@ -279,7 +279,11 @@ def _attach_momentum(results):
     """Add momentum_score (1-10) to each screener result row.
 
     Uses 12-1 month momentum: return from 252 trading days ago to 63 trading
-    days ago (excludes recent 3 months to avoid short-term reversal).
+    days ago (excludes recent 3 months to avoid short-term reversal), divided
+    by the realized daily volatility over the same 252-day window. Without the
+    vol-scaling, high-volatility names crowd both extreme deciles on chance
+    alone (the AIM cohort runs ~1.5x the vol of the index tiers with no extra
+    median return, so raw-return ranking put ~2x its fair share in decile 10).
     Scores are percentile-ranked within the result universe.
     """
     if not results:
@@ -295,22 +299,37 @@ def _attach_momentum(results):
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
             FROM price_history
             WHERE symbol = ANY(%s)
+        ),
+        rets AS (
+            SELECT symbol, rn, close,
+                   close / NULLIF(LAG(close) OVER (PARTITION BY symbol ORDER BY rn DESC), 0) - 1
+                       AS daily_ret
+            FROM numbered
+            WHERE rn <= 252
         )
         SELECT symbol,
                MAX(CASE WHEN rn = 63  THEN close END) AS close_63,
-               MAX(CASE WHEN rn = 252 THEN close END) AS close_252
-        FROM numbered
-        WHERE rn IN (63, 252)
+               MAX(CASE WHEN rn = 252 THEN close END) AS close_252,
+               STDDEV_SAMP(daily_ret) AS vol
+        FROM rets
         GROUP BY symbol
     """,
         (symbols,),
     )
 
+    # Vol-scaled momentum. A flat/suspended series (vol 0) carries no trend
+    # information, so it gets None rather than a mid-pack score.
     returns = {}
     for r in rows:
-        c63, c252 = r["close_63"], r["close_252"]
-        if c63 is not None and c252 is not None and float(c252) > 0:
-            returns[r["symbol"]] = float(c63) / float(c252) - 1
+        c63, c252, vol = r["close_63"], r["close_252"], r["vol"]
+        if (
+            c63 is not None
+            and c252 is not None
+            and float(c252) > 0
+            and vol is not None
+            and float(vol) > 0
+        ):
+            returns[r["symbol"]] = (float(c63) / float(c252) - 1) / float(vol)
 
     # Rank within universe → 1-10 score
     scores = {}

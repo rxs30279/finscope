@@ -153,13 +153,44 @@ def test_attach_momentum_scores_range():
     import prices
     results = [{'symbol': f'S{i}.L'} for i in range(10)]
     mock_rows = [
-        {'symbol': f'S{i}.L', 'close_63': 110 + i, 'close_252': 100.0}
+        {'symbol': f'S{i}.L', 'close_63': 110 + i, 'close_252': 100.0, 'vol': 0.02}
         for i in range(10)
     ]
     with patch('prices.query', return_value=mock_rows):
         prices._attach_momentum(results)
     scores = [r['momentum_score'] for r in results if r['momentum_score'] is not None]
+    assert len(scores) == 10
     assert all(1 <= s <= 10 for s in scores)
+
+
+def test_attach_momentum_vol_scaled_ordering():
+    """A calm name with a modest return outranks a volatile name with a bigger
+    raw return when the calm name earned more per unit of volatility."""
+    import prices
+    results = [{'symbol': 'CALM.L'}, {'symbol': 'WILD.L'}]
+    mock_rows = [
+        # +20% at 1% daily vol → 20 per unit of vol
+        {'symbol': 'CALM.L', 'close_63': 120.0, 'close_252': 100.0, 'vol': 0.01},
+        # +30% at 4% daily vol → 7.5 per unit of vol
+        {'symbol': 'WILD.L', 'close_63': 130.0, 'close_252': 100.0, 'vol': 0.04},
+    ]
+    with patch('prices.query', return_value=mock_rows):
+        prices._attach_momentum(results)
+    assert results[0]['momentum_score'] > results[1]['momentum_score']
+
+
+def test_attach_momentum_null_for_zero_or_missing_vol():
+    """Flat/suspended series (vol 0) and rows without a vol get no score."""
+    import prices
+    results = [{'symbol': 'FLAT.L'}, {'symbol': 'NOVOL.L'}]
+    mock_rows = [
+        {'symbol': 'FLAT.L', 'close_63': 100.0, 'close_252': 100.0, 'vol': 0.0},
+        {'symbol': 'NOVOL.L', 'close_63': 110.0, 'close_252': 100.0, 'vol': None},
+    ]
+    with patch('prices.query', return_value=mock_rows):
+        prices._attach_momentum(results)
+    assert results[0]['momentum_score'] is None
+    assert results[1]['momentum_score'] is None
 
 
 def test_attach_momentum_null_for_insufficient_history():
