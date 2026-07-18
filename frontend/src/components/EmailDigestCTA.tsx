@@ -1,24 +1,55 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePostHog } from "posthog-js/react";
 
 /**
- * Eye-catching digest advert for non-marketing pages (High Impact RNS,
- * company pages). No inline capture — it routes intent to /subscribe, where
- * the full form (spots counter, sample email, trust row) lives. Clicks are
- * tagged with `source` so the funnel can tell placements apart.
+ * Eye-catching CTA banner for non-marketing pages (High Impact RNS, company
+ * pages). Alternates between the digest advert and a donations ask every
+ * couple of minutes — most traffic is mobile, where the sidebar Donate button
+ * is never seen. The rotation is phased off a session-wide clock
+ * (sessionStorage), so navigating between companies doesn't reset it and
+ * every banner on the site shows the same variant at any given moment.
+ *
+ * No inline capture — it routes intent to /subscribe or /donate, where the
+ * full pitch lives. Clicks are tagged with `source` so the funnel can tell
+ * placements apart.
  */
+
+const ROTATE_MS = 2 * 60 * 1000;
+const FIRST_SEEN_KEY = "am_cta_first_seen";
+
 export default function EmailDigestCTA({ source }: { source: string }) {
   const ph = usePostHog();
+  const [variant, setVariant] = useState<"digest" | "donate">("digest");
+
+  useEffect(() => {
+    let firstSeen = Number(sessionStorage.getItem(FIRST_SEEN_KEY));
+    if (!firstSeen) {
+      firstSeen = Date.now();
+      sessionStorage.setItem(FIRST_SEEN_KEY, String(firstSeen));
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const elapsed = Date.now() - firstSeen;
+      setVariant(Math.floor(elapsed / ROTATE_MS) % 2 === 0 ? "digest" : "donate");
+      timer = setTimeout(tick, ROTATE_MS - (elapsed % ROTATE_MS));
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, []);
+
+  const donate = variant === "donate";
 
   return (
     <Link
-      href="/subscribe"
-      onClick={() => ph?.capture("digest_cta_clicked", { source })}
+      href={donate ? "/donate" : "/subscribe"}
+      onClick={() => ph?.capture(donate ? "donate_cta_clicked" : "digest_cta_clicked", { source })}
       style={{ textDecoration: "none", display: "block", marginBottom: 24 }}
     >
       <div
+        key={variant}
         className="digest-cta"
         style={{
           position: "relative",
@@ -34,6 +65,7 @@ export default function EmailDigestCTA({ source }: { source: string }) {
           gap: 18,
           flexWrap: "wrap",
           cursor: "pointer",
+          animation: "digestSwap 0.6s ease",
         }}
       >
         {/* Animated sheen sweeping across the card */}
@@ -75,13 +107,23 @@ export default function EmailDigestCTA({ source }: { source: string }) {
                 animation: "digestPulse 2s ease-in-out infinite",
               }}
             />
-            Free morning briefing · 07:30 weekdays
+            {donate ? "Reader-supported · No ads · No paywall" : "Free morning briefing · 07:30 weekdays"}
           </div>
           <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: 20, color: "#f1f5f9", lineHeight: 1.25 }}>
-            The RNS that moves prices, <span style={{ color: "#f97316" }}>in your inbox before the open.</span>
+            {donate ? (
+              <>
+                Alpha Move is free to use — <span style={{ color: "#f97316" }}>readers keep it running.</span>
+              </>
+            ) : (
+              <>
+                The RNS that moves prices, <span style={{ color: "#f97316" }}>in your inbox before the open.</span>
+              </>
+            )}
           </div>
           <div style={{ color: "#94a3b8", fontSize: 12.5, marginTop: 5, lineHeight: 1.5 }}>
-            AI-ranked movers and high-impact RNS across the FTSE 100, 250, SmallCap and AIM — one short email, every market day.
+            {donate
+              ? "If the screener or the digest has saved you time or sharpened a decision, chip in the price of a coffee. One-off or monthly, entirely optional."
+              : "AI-ranked movers and high-impact RNS across the FTSE 100, 250, SmallCap and AIM — one short email, every market day."}
           </div>
         </div>
 
@@ -104,7 +146,7 @@ export default function EmailDigestCTA({ source }: { source: string }) {
             boxShadow: "0 0 18px rgba(249,115,22,0.35)",
           }}
         >
-          Get the briefing
+          {donate ? "♥ Support the site" : "Get the briefing"}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M5 12h14M13 6l6 6-6 6" />
           </svg>
@@ -119,6 +161,10 @@ export default function EmailDigestCTA({ source }: { source: string }) {
           @keyframes digestPulse {
             0%, 100% { opacity: 1; transform: scale(1); }
             50%      { opacity: 0.55; transform: scale(0.8); }
+          }
+          @keyframes digestSwap {
+            from { opacity: 0; }
+            to   { opacity: 1; }
           }
           .digest-cta { transition: box-shadow 0.25s ease, border-color 0.25s ease; }
           .digest-cta:hover {

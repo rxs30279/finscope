@@ -5,6 +5,7 @@ import Link from "next/link";
 import { API } from "@/lib/api";
 import { colors } from "@/lib/theme";
 import ArticleView from "../_article";
+import DonateOutro from "@/components/DonateOutro";
 import { fmtCommentDate, fmtPostDate, type ResearchComment, type ResearchPost } from "@/lib/research";
 
 export default function ResearchPostClient({ initialPost }: { initialPost: ResearchPost }) {
@@ -40,6 +41,8 @@ export default function ResearchPostClient({ initialPost }: { initialPost: Resea
         tags={post.tags}
         body={post.body}
       />
+
+      <DonateOutro source="research_post" />
 
       <CommentsSection slug={post.slug} comments={comments} />
     </div>
