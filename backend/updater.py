@@ -787,17 +787,24 @@ if __name__ == "__main__":
     total_periods = 0
     updated_count = 0
     skipped_count = 0
+    failed_syms = []
     for stock in stocks:
         sym = stock["symbol"]
         last = stock["financials_updated"] or "never"
         log.info(f"--- {sym} | last updated: {last} ---")
         n = process_stock(sym)
+        # Stamp even when the fetch yielded nothing: an unstamped name keeps
+        # its old financials_updated, stays at the front of the rotation, and
+        # would be re-picked (and re-fail) every run — permanently eating one
+        # of the daily slots. Stamping sends it to the back of the queue for a
+        # retry next cycle instead.
+        mark_updated(sym)
         if n > 0:
-            mark_updated(sym)
             total_periods += n
             updated_count += 1
         else:
             skipped_count += 1
+            failed_syms.append(sym)
         time.sleep(1)
 
     elapsed = int(time.time() - t0)
@@ -807,4 +814,5 @@ if __name__ == "__main__":
         f"{finished_at}  started={started_at}  elapsed={elapsed}s  "
         f"total={len(stocks)}  updated={updated_count}  skipped={skipped_count}  "
         f"periods={total_periods}"
+        + (f"  failed={','.join(failed_syms)}" if failed_syms else "")
     )
