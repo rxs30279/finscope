@@ -267,7 +267,10 @@ export default function MostShortedPageClient({
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ margin: "4px 0 6px", fontSize: isMobile ? 18 : 22, color: colors.white, fontFamily: "monospace" }}>
           Most Shorted UK Stocks
-          <InfoDot text="Ranked by FCA-disclosed Aggregate Net Short Position (ANSP) — the sum of all short positions ≥0.2% of a company's issued share capital, published each working day with a ~2 working-day lag." />
+          {/* superscript-style: raised to the title's cap height, small gap */}
+          <span style={{ display: "inline-block", marginLeft: 7, verticalAlign: "super" }}>
+            <InfoDot text="Ranked by FCA-disclosed Aggregate Net Short Position (ANSP) — the sum of all short positions ≥0.2% of a company's issued share capital, published each working day with a ~2 working-day lag." />
+          </span>
         </h1>
         <div style={{ fontSize: 12, color: colors.textMuted, lineHeight: 1.6 }}>
           Every UK company with disclosed short interest, ranked by the FCA&apos;s daily
