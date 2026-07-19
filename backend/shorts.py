@@ -60,32 +60,63 @@ def _normalise_name(name):
     if not name:
         return ""
     n = name.upper()
-    n = _NAME_SUFFIXES.sub("", n)
-    n = re.sub(r"[^A-Z0-9 ]", "", n)
+    # "P L C" / "P.L.C." legal-name variants -> PLC, before punctuation handling
+    # (the suffix regex only knows the solid word).
+    n = re.sub(r"\bP\.?\s*L\.?\s*C\.?(?=\W|$)", " PLC ", n)
+    # "&" and "AND" are interchangeable across the FCA and our universe names
+    # ("MARKS AND SPENCER" vs "Marks & Spencer").
+    n = n.replace("&", " AND ")
+    # Punctuation becomes a space, not nothing -- "(THE)" / "CO.'S" must split
+    # into words the suffix regex can see.
+    n = re.sub(r"[^A-Z0-9 ]", " ", n)
+    n = _NAME_SUFFIXES.sub(" ", n)
     n = re.sub(r"\s+", " ", n).strip()
     return n
 
 
-def _build_universe_index():
-    """company_metadata rows for matching, plus a normalised-name lookup."""
-    universe = query("SELECT symbol, name, isin FROM company_metadata WHERE is_active")
+def _index_universe(universe):
+    """Build the name-match indexes from company_metadata rows (pure, for
+    tests). by_tight is the space-stripped fallback -- word-spacing differs
+    between the FCA and us ("AUTO TRADER" vs "Autotrader") -- with ambiguous
+    keys mapped to None so a collision can never mislink."""
     by_isin = {r["isin"]: r["symbol"] for r in universe if r["isin"]}
-    by_name = {_normalise_name(r["name"]): r["symbol"] for r in universe if r["name"]}
-    return by_isin, by_name
+    by_name = {}
+    by_tight = {}
+    for r in universe:
+        norm = _normalise_name(r["name"]) if r["name"] else ""
+        if not norm:
+            continue
+        by_name.setdefault(norm, r["symbol"])
+        tight = norm.replace(" ", "")
+        if by_tight.get(tight, r["symbol"]) != r["symbol"]:
+            by_tight[tight] = None
+        else:
+            by_tight[tight] = r["symbol"]
+    return by_isin, by_name, by_tight
 
 
-def _resolve_symbol(isin, issuer_name, by_isin, by_name, cur=None):
+def _build_universe_index():
+    """company_metadata rows for matching, plus normalised-name lookups."""
+    return _index_universe(
+        query("SELECT symbol, name, isin FROM company_metadata WHERE is_active")
+    )
+
+
+def _resolve_symbol(isin, issuer_name, by_isin, by_name, by_tight, cur=None):
     """Resolve an FCA (isin, issuer_name) pair to a company_symbol.
 
-    Match order: (1) isin already on file; (2) normalised-name match, in which
-    case -- if a cursor is given -- the isin is learned back onto
-    company_metadata (only fills NULLs) so later rows/runs hit the fast path.
+    Match order: (1) isin already on file; (2) normalised-name match, falling
+    back to the space-stripped index; on a name match -- if a cursor is given --
+    the isin is learned back onto company_metadata (only fills NULLs) so later
+    rows/runs hit the fast path.
     """
     if isin and isin in by_isin:
         return by_isin[isin]
     norm = _normalise_name(issuer_name)
-    if norm and norm in by_name:
-        symbol = by_name[norm]
+    if not norm:
+        return None
+    symbol = by_name.get(norm) or by_tight.get(norm.replace(" ", ""))
+    if symbol:
         if isin and cur is not None:
             cur.execute(
                 "UPDATE company_metadata SET isin = %s WHERE symbol = %s AND isin IS NULL",
@@ -324,7 +355,7 @@ def refresh_shorts():
     if not current_url and not historic_url:
         raise RuntimeError("could not discover ANSP file URLs (page scrape + env overrides both empty)")
 
-    by_isin, by_name = _build_universe_index()
+    by_isin, by_name, by_tight = _build_universe_index()
 
     all_rows = []
     # Current file carries no publication date -- key today's snapshot on the
@@ -345,7 +376,7 @@ def refresh_shorts():
         for r in all_rows:
             if r["ansp_pct"] is None or not r["disclosure_date"]:
                 continue
-            symbol = _resolve_symbol(r["isin"], r["issuer_name"], by_isin, by_name, cur)
+            symbol = _resolve_symbol(r["isin"], r["issuer_name"], by_isin, by_name, by_tight, cur)
             if symbol is None:
                 n_unresolved += 1
             cur.execute(
@@ -400,7 +431,7 @@ def backfill_holder_archive(path_or_url=None):
     else:
         book = pd.read_excel(source, sheet_name=None, engine="openpyxl")
 
-    by_isin, by_name = _build_universe_index()
+    by_isin, by_name, by_tight = _build_universe_index()
 
     n_written = 0
     n_unresolved = 0
@@ -440,7 +471,7 @@ def backfill_holder_archive(path_or_url=None):
                 if pct is None or not pos_date:
                     continue
 
-                symbol = _resolve_symbol(isin, issuer, by_isin, by_name, cur)
+                symbol = _resolve_symbol(isin, issuer, by_isin, by_name, by_tight, cur)
                 if symbol is None:
                     n_unresolved += 1
 
@@ -466,6 +497,47 @@ def backfill_holder_archive(path_or_url=None):
         "rows_written": n_written,
         "unresolved_isins": n_unresolved,
         "source": source,
+        "duration_seconds": round(time.time() - t0, 1),
+    }
+
+
+def relink_unresolved():
+    """Re-resolve rows whose company_symbol is NULL against today's universe.
+
+    Needed after normaliser improvements and after universe expansions: the
+    daily run only upserts rows for the dates in the current/historic files,
+    so past-dated rows keep their NULL forever unless re-resolved here.
+    Learns ISINs back onto company_metadata like the daily run does.
+    """
+    t0 = time.time()
+    by_isin, by_name, by_tight = _build_universe_index()
+
+    counts = {}
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        for table in ("short_positions_agg", "short_position_holders"):
+            counts[table] = 0
+            pairs = query(
+                f"SELECT DISTINCT isin, issuer_name FROM {table} WHERE company_symbol IS NULL"
+            )
+            for p in pairs:
+                symbol = _resolve_symbol(p["isin"], p["issuer_name"], by_isin, by_name, by_tight, cur)
+                if symbol:
+                    cur.execute(
+                        f"UPDATE {table} SET company_symbol = %s"
+                        f" WHERE isin = %s AND company_symbol IS NULL",
+                        (symbol, p["isin"]),
+                    )
+                    counts[table] += cur.rowcount
+        conn.commit()
+    finally:
+        pool.putconn(conn)
+
+    return {
+        "agg_rows_linked": counts["short_positions_agg"],
+        "holder_rows_linked": counts["short_position_holders"],
         "duration_seconds": round(time.time() - t0, 1),
     }
 

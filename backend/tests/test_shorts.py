@@ -9,9 +9,11 @@ import shorts
 from shorts import (
     _attach_scores,
     _build_leaderboard,
+    _index_universe,
     _last_working_day,
     _normalise_name,
     _parse_ansp_df,
+    _resolve_symbol,
 )
 
 
@@ -102,6 +104,62 @@ def test_normalise_strips_fca_long_form_suffixes():
     assert _normalise_name("BRITISH LAND COMPANY PUBLIC LIMITED COMPANY(THE)") == _normalise_name(
         "British Land Company PLC"
     )
+
+
+def test_normalise_spaced_and_dotted_plc_variants():
+    # Real misses found 2026-07-18: legal names write PLC as "P L C"/"P.L.C.".
+    assert _normalise_name("BELLWAY P L C") == _normalise_name("Bellway plc")
+    assert _normalise_name("ROTORK P.L.C.") == _normalise_name("Rotork plc")
+    assert _normalise_name("GREAT PORTLAND ESTATES P L C") == _normalise_name(
+        "Great Portland Estates plc"
+    )
+
+
+def test_normalise_ampersand_and_word_and_are_interchangeable():
+    assert _normalise_name("MARKS AND SPENCER GROUP P.L.C.") == _normalise_name(
+        "Marks & Spencer Group plc"
+    )
+    assert _normalise_name("YOUNG & CO'S BREWERY PLC") == _normalise_name(
+        "Young & Co.'s Brewery, P.L.C."
+    )
+
+
+# ── _index_universe / _resolve_symbol ──────────────────────────────────────────
+
+_UNIVERSE = [
+    {"symbol": "AUTO.L", "name": "Autotrader Group plc", "isin": None},
+    {"symbol": "CCR.L", "name": "C&C Group plc", "isin": None},
+    {"symbol": "BA.L", "name": "BAE Systems plc", "isin": "GB0002634946"},
+]
+
+
+def test_resolve_by_isin_fast_path():
+    idx = _index_universe(_UNIVERSE)
+    assert _resolve_symbol("GB0002634946", "SOMETHING ELSE ENTIRELY", *idx) == "BA.L"
+
+
+def test_resolve_spacing_differences_via_tight_index():
+    # FCA "AUTO TRADER" vs our "Autotrader"; FCA "C & C" vs our "C&C".
+    idx = _index_universe(_UNIVERSE)
+    assert _resolve_symbol("GB00BVYVFW23", "AUTO TRADER GROUP PLC", *idx) == "AUTO.L"
+    assert _resolve_symbol("IE00B010DT83", "C & C GROUP PUBLIC LIMITED COMPANY", *idx) == "CCR.L"
+
+
+def test_resolve_ambiguous_tight_key_never_mislinks():
+    idx = _index_universe(
+        [
+            {"symbol": "AB.L", "name": "Alpha Beta plc", "isin": None},
+            {"symbol": "ABX.L", "name": "Alph Abeta plc", "isin": None},
+        ]
+    )
+    # Both collapse to ALPHABETA once spaces go -- must resolve to neither.
+    assert _resolve_symbol("GB1", "ALPHA BETA PLC", *idx) == "AB.L"  # exact norm still wins
+    assert _resolve_symbol("GB2", "ALPHABETA PLC", *idx) is None
+
+
+def test_resolve_unknown_name_returns_none():
+    idx = _index_universe(_UNIVERSE)
+    assert _resolve_symbol("CH0126881561", "SWISS RE AG", *idx) is None
 
 
 # ── _last_working_day ──────────────────────────────────────────────────────────

@@ -16,6 +16,8 @@ entry point so it can be run on the server:
 Usage:
     python run_shorts.py                                  # daily ANSP refresh
     python run_shorts.py --backfill-holders <url-or-path>  # one-time archive snapshot
+    python run_shorts.py --relink                          # re-resolve NULL company_symbol rows
+                                                           # (after normaliser fixes / universe expansions)
 """
 
 import os
@@ -30,7 +32,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
-from shorts import refresh_shorts, backfill_holder_archive, record_run
+from shorts import refresh_shorts, backfill_holder_archive, record_run, relink_unresolved
 
 
 def _parse_args(argv):
@@ -43,6 +45,17 @@ def _parse_args(argv):
 
 def main() -> int:
     backfill_holders_arg = _parse_args(sys.argv[1:])
+
+    if "--relink" in sys.argv[1:]:
+        print(f"[shorts] relink starting at {datetime.now(timezone.utc).isoformat()}")
+        try:
+            result = relink_unresolved()
+            print(f"[shorts] relink done -- {result}")
+        except Exception as e:
+            print(f"[shorts] relink FAILED -- {type(e).__name__}: {e}")
+            traceback.print_exc()
+            return 1
+        return 0
 
     if backfill_holders_arg:
         print(f"[shorts] holder archive backfill starting at {datetime.now(timezone.utc).isoformat()}")
