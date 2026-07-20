@@ -5,6 +5,7 @@ import { useIsAdmin } from "@/hooks/useAdmin";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { lseStatus } from "@/lib/lse";
 import Link from "next/link";
+import { companyHref } from "@/lib/company";
 import PageHeader from "@/components/layout/PageHeader";
 import EmailDigestCTA from "@/components/EmailDigestCTA";
 import LazySection from "@/components/LazySection";
@@ -496,7 +497,7 @@ function MobileCard({
             </span>
           </button>
           <div style={{ width: 88, flexShrink: 0, marginLeft: 8 }}>
-            <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
+            <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "#e5e5e5", fontWeight: 700, textDecoration: "none" }}>{r.symbol.replace(".L", "")}</Link>
             <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
               <IndexBadge index={r.ftse_index} full />
               {vet && (
@@ -1089,10 +1090,12 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                                 </span>
                               </button>
                               <div style={{ minWidth: 0 }}>
-                                <span style={{ color: "#e5e5e5", fontWeight: 700 }}>{r.symbol.replace(".L", "")}</span>
-                                <div style={{ color: "#64748b", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                  {r.name}
-                                </div>
+                                <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "#e5e5e5", fontWeight: 700, textDecoration: "none", display: "block" }}>
+                                  <span>{r.symbol.replace(".L", "")}</span>
+                                  <div style={{ color: "#64748b", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {r.name}
+                                  </div>
+                                </Link>
                                 <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
                                   <IndexBadge index={r.ftse_index} full />
                                   {vet && (

@@ -22,3 +22,14 @@ export function slugToSymbol(slug: string): string {
   const s = decodeURIComponent(slug).toUpperCase();
   return s.includes(".") ? s : `${s}.L`;
 }
+
+// Sector -> URL slug for the /companies/sector/<slug> hub pages. MUST stay in sync
+// with _sector_slug() in backend/main.py (which builds the sitemap URLs): lowercase,
+// spaces -> "-", drop everything that isn't a-z/0-9/"-".
+export function sectorSlug(sector: string): string {
+  return sector.toLowerCase().replace(/ /g, "-").replace(/[^a-z0-9-]/g, "");
+}
+
+export function sectorHref(sector: string): string {
+  return `/companies/sector/${sectorSlug(sector)}`;
+}

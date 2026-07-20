@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
 import { getResearchPosts } from "@/lib/research";
+import { companyHref } from "@/lib/company";
 import LandingEffects from "@/components/landing/LandingEffects";
 import InstallButton from "@/components/landing/InstallButton";
 import LandingSignup from "@/components/landing/LandingSignup";
@@ -17,6 +18,23 @@ export const metadata: Metadata = {
     "AI-scored RNS news and gauge the market with breadth and sector rotation.",
   alternates: { canonical: "/" },
 };
+
+// Featured mega-caps for the landing page's crawlable company links. Hardcoded —
+// mega-caps churn rarely; swap manually if a constituent delists.
+const FEATURED_COMPANIES: { symbol: string; name: string }[] = [
+  { symbol: "SHEL.L", name: "Shell" },
+  { symbol: "AZN.L", name: "AstraZeneca" },
+  { symbol: "HSBA.L", name: "HSBC" },
+  { symbol: "ULVR.L", name: "Unilever" },
+  { symbol: "BP.L", name: "BP" },
+  { symbol: "GSK.L", name: "GSK" },
+  { symbol: "RIO.L", name: "Rio Tinto" },
+  { symbol: "LSEG.L", name: "London Stock Exchange" },
+  { symbol: "REL.L", name: "RELX" },
+  { symbol: "DGE.L", name: "Diageo" },
+  { symbol: "BARC.L", name: "Barclays" },
+  { symbol: "NG.L", name: "National Grid" },
+];
 
 const CAPS: { href: string; title: string; body: string; icon: React.ReactNode }[] = [
   {
@@ -191,6 +209,22 @@ export default async function Home() {
 
       <LandingSignup />
 
+      {/* Featured large caps — real crawlable links from the site's highest-authority
+          page into the company pages, to seed discovery + pass PageRank. Hardcoded
+          mega-caps (churn rarely; swap manually if one delists, like the sector
+          proxy baskets in market.py). */}
+      <section className="am-featured">
+        <div className="am-featured-inner">
+          <h2>Popular UK shares</h2>
+          <div className="am-featured-links">
+            {FEATURED_COMPANIES.map((c) => (
+              <Link key={c.symbol} href={companyHref(c.symbol)}>{c.name}</Link>
+            ))}
+            <Link href="/companies" className="am-featured-all">All companies A–Z →</Link>
+          </div>
+        </div>
+      </section>
+
       <footer>
         <div className="am-foot-inner">
           <div className="am-foot-brand">
@@ -208,6 +242,7 @@ export default async function Home() {
             <div className="am-foot-col">
               <h4>Research</h4>
               <Link href="/screener">Stock Screener</Link>
+              <Link href="/companies">All Companies A–Z</Link>
               <Link href="/trending">Trending Movers</Link>
               <Link href="/analysts">Analyst Consensus</Link>
               <Link href="/rns">RNS News</Link>

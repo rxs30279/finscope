@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import CompanyClient from "../_client";
-import CompanySeoContent from "@/components/company/CompanySeoContent";
-import { getCompanyData } from "@/lib/companyData";
+import CompanyHeader from "@/components/company/CompanyHeader";
+import CompanyBreadcrumb from "@/components/company/CompanyBreadcrumb";
+import CompanyEnrichment from "@/components/company/CompanyEnrichment";
+import CompanySnap from "@/components/company/CompanySnap";
+import EmailDigestCTA from "@/components/EmailDigestCTA";
+import { getCompanyData, getCompanyExtras } from "@/lib/companyData";
 import { slugToSymbol, tickerSlug } from "@/lib/company";
 import { fmt } from "@/lib/format";
 
@@ -56,12 +60,19 @@ export default async function CompanyPage({ params, searchParams }: PageProps) {
   const { symbol: slug } = await params;
   const { tab } = await searchParams;
   const symbol = slugToSymbol(slug);
-  const { meta, snap } = await getCompanyData(symbol);
+  const [{ meta, snap }, extras] = await Promise.all([
+    getCompanyData(symbol),
+    getCompanyExtras(symbol),
+  ]);
 
   return (
     <>
-      <CompanySeoContent symbol={symbol} meta={meta} snap={snap} />
+      <CompanySnap />
+      <CompanyBreadcrumb symbol={symbol} meta={meta} />
+      <EmailDigestCTA source="company_page" />
+      <CompanyHeader symbol={symbol} meta={meta} snap={snap} />
       <CompanyClient symbol={symbol} initialTab={tab} />
+      <CompanyEnrichment symbol={symbol} meta={meta} extras={extras} />
     </>
   );
 }

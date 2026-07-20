@@ -68,11 +68,18 @@ from ci_status import latest_runs as _ci_latest_runs
 
 SITEMAP_BASE = os.environ.get("SITE_URL", "https://app.alphamoveai.co.uk").rstrip("/")
 
+
+def _sector_slug(sector: str) -> str:
+    """URL slug for a sector hub page. MUST stay in sync with sectorSlug() in
+    frontend/src/lib/company.ts: lowercase, spaces → '-', drop non-alphanumerics."""
+    return re.sub(r"[^a-z0-9-]", "", sector.lower().replace(" ", "-"))
+
 # Static frontend routes mirrored from the Next app (kept in sync manually — there
 # are only a handful). Per-company URLs are appended from the DB at request time.
 _SITEMAP_STATIC = [
     ("/", "daily", "1.0"),
     ("/screener", "daily", "0.9"),
+    ("/companies", "daily", "0.8"),
     ("/markets", "daily", "0.8"),
     ("/trending", "daily", "0.8"),
     ("/analysts", "daily", "0.7"),
@@ -120,6 +127,27 @@ def sitemap_xml():
             f"<url><loc>{loc}</loc><changefreq>daily</changefreq>"
             f"<priority>0.6</priority></url>"
         )
+    # Sector hub pages (/companies/sector/<slug>) — one per distinct active sector.
+    try:
+        sector_rows = query(
+            "SELECT DISTINCT sector FROM company_metadata "
+            "WHERE is_active AND sector IS NOT NULL AND sector <> '' ORDER BY sector"
+        )
+        seen_slugs = set()
+        for sr in sector_rows:
+            slug = _sector_slug(sr["sector"])
+            # Two sectors differing only in case/punctuation would collide on one
+            # slug; emit each hub URL once.
+            if not slug or slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            loc = escape(f"{SITEMAP_BASE}/companies/sector/{quote(slug)}")
+            parts.append(
+                f"<url><loc>{loc}</loc><changefreq>daily</changefreq>"
+                f"<priority>0.6</priority></url>"
+            )
+    except Exception:
+        pass
     # Published Research posts — a lastmod helps search engines re-crawl edits.
     try:
         for post in _research_slugs():
@@ -274,6 +302,116 @@ def valuation(symbol: str = Query(...), response: Response = None):
     else:
         result["peers"] = []
     return result
+
+
+@app.get("/api/company-extras")
+def company_extras(symbol: str = Query(...), response: Response = None):
+    # One combined, ALWAYS-200 payload for the server-rendered enrichment block on
+    # the company page (latest RNS, analyst consensus, peer valuation, sector mates).
+    # Deliberately not three separate calls to /api/rns/by-symbol, /api/analysts and
+    # /api/valuation: those 404 when empty, and Next's data cache does not store
+    # non-2xx responses, so every SSR of an uncovered small-cap would hit the DB
+    # uncached — exactly the long-tail pages crawlers sweep. Returning empty/null
+    # here keeps those cheap and cacheable. Existing endpoints are untouched.
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=900, stale-while-revalidate=3600"
+
+    rns = query(
+        """
+        SELECT id, published_at, wire, headline, url, tier, category, score
+        FROM rns_announcements
+        WHERE symbol = %s
+        ORDER BY published_at DESC
+        LIMIT 5
+        """,
+        (symbol,),
+    )
+
+    analyst_rows = query(
+        """
+        SELECT snapshot_date, consensus, buy_pct, total_analysts,
+               strong_buy, buy, hold, sell, strong_sell,
+               price_target_mean, price_target_high, price_target_low,
+               price_target_median, current_price, upside_pct,
+               revision_score, eps_growth_current_yr, eps_growth_next_yr
+        FROM analyst_snapshots
+        WHERE symbol = %s
+        ORDER BY snapshot_date DESC
+        LIMIT 1
+        """,
+        (symbol,),
+    )
+    analyst = analyst_rows[0] if analyst_rows else None
+
+    # Explicit column list (not *): this payload is public and cached, so future
+    # internal columns on valuation_estimates shouldn't leak into it by default.
+    val_rows = query(
+        """
+        SELECT fair_value, current_price, upside_pct, multiple_used,
+               peer_basis, caution, peer_symbols
+        FROM valuation_estimates WHERE symbol = %s
+        """,
+        (symbol,),
+    )
+    valuation = None
+    if val_rows and val_rows[0].get("fair_value") is not None \
+            and val_rows[0].get("peer_basis") != "insufficient":
+        valuation = val_rows[0]
+        peer_syms = valuation.get("peer_symbols") or []
+        if peer_syms:
+            name_rows = query(
+                "SELECT symbol, name FROM company_metadata WHERE symbol = ANY(%s)",
+                (peer_syms,),
+            )
+            names = {r["symbol"]: r["name"] for r in name_rows}
+            valuation["peers"] = [
+                {"symbol": s, "name": names.get(s, s)} for s in peer_syms
+            ]
+        else:
+            valuation["peers"] = []
+
+    # Same-sector large caps — guarantees every page (incl. banks/trusts that get no
+    # fair-value peers) links out to other company pages for crawl discovery.
+    sector_peers = query(
+        """
+        SELECT m.symbol, m.name
+        FROM company_metadata m
+        JOIN ttm_financials t ON t.company_symbol = m.symbol
+        WHERE m.is_active
+          AND m.symbol != %s
+          AND m.sector = (SELECT sector FROM company_metadata WHERE symbol = %s)
+        ORDER BY t.market_cap DESC NULLS LAST
+        LIMIT 8
+        """,
+        (symbol, symbol),
+    )
+
+    return {
+        "rns": rns,
+        "analyst": analyst,
+        "valuation": valuation,
+        "sector_peers": sector_peers,
+    }
+
+
+@app.get("/api/companies")
+def companies(response: Response = None):
+    # Powers the /companies A–Z directory and the /companies/sector/[slug] hub pages
+    # from a single cheap query (the sector hubs filter this list client-side of the
+    # fetch). market_cap comes along so the directory and hubs can order/size rows
+    # without a second call. Universe changes only on the quarterly index refresh —
+    # hold a day at the edge. Deliberately NOT /api/screener (heavy joins/scores).
+    if response is not None:
+        response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
+    return query(
+        """
+        SELECT m.symbol, m.name, m.sector, m.ftse_index, m.currency, t.market_cap
+        FROM company_metadata m
+        LEFT JOIN ttm_financials t ON t.company_symbol = m.symbol
+        WHERE m.is_active
+        ORDER BY m.name
+        """
+    )
 
 
 def _piotroski_score(row):

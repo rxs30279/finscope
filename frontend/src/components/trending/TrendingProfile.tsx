@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { API } from "@/lib/api";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
+import { companyHref } from "@/lib/company";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import dynamic from "next/dynamic";
 import MetricCard from "@/components/company/MetricCard";
@@ -50,7 +52,7 @@ export default function TrendingProfile({ symbol, onOpenFull }: Props) {
           {!isMobile && badges}
         </div>
         <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <button onClick={() => onOpenFull(symbol)} style={S.backBtn}>Open full view →</button>
+          <Link prefetch={false} href={companyHref(symbol)} style={{ ...S.backBtn, textDecoration: "none", display: "inline-block" }}>Open full view →</Link>
         </div>
       </div>
 

@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useRef, useLayoutEffect, useCallback } from "react";
+import Link from "next/link";
 import { API } from "@/lib/api";
+import { companyHref } from "@/lib/company";
 import PageHeader from "@/components/layout/PageHeader";
 
 // ── Colour scale ──────────────────────────────────────────────────────────────
@@ -458,9 +460,10 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
               const big = t.w > 64 && t.h > 44;
               const ticker = t.symbol.replace(".L", "");
               return (
-                <div
+                <Link
                   key={t.symbol}
-                  onClick={() => onSelect && onSelect(t.symbol)}
+                  prefetch={false}
+                  href={companyHref(t.symbol)}
                   title={`${t.name} · ${fmtCap(t.market_cap)} · ${fmtPct(t.pct_change)}`}
                   style={{
                     position: "absolute",
@@ -480,6 +483,7 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
                     color: "#fff",
                     fontFamily: "monospace",
                     lineHeight: 1.1,
+                    textDecoration: "none",
                   }}
                 >
                   {showText && (
@@ -506,7 +510,7 @@ export default function HeatmapTab({ refreshKey, onSelect }) {
                       )}
                     </>
                   )}
-                </div>
+                </Link>
               );
             })}
           </>

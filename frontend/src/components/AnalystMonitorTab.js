@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useMemo } from 'react';
+import Link from "next/link";
 import { API, adminHeaders } from "@/lib/api";
+import { companyHref } from "@/lib/company";
 import { useIsMobile, useIsNarrowDesktop } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { HoverTip } from "@/components/InfoDot";
@@ -276,19 +278,21 @@ export default function AnalystMonitorTab({ refreshKey, onSelect, initialLatest 
               <div key={r.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '6px 0', borderBottom: '1px solid #1a1a1a' }}>
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div>
-                    <span
-                      onClick={() => onSelect?.(r.symbol, 'analysts')}
-                      style={{ ...tickerLink, fontSize: 12 }}
+                    <Link
+                      prefetch={false}
+                      href={companyHref(r.symbol, "analysts")}
+                      style={{ ...tickerLink, fontSize: 12, textDecoration: 'none' }}
                     >
                       {r.symbol}
-                    </span>
+                    </Link>
                     {r.name && (
-                      <span
-                        onClick={() => onSelect?.(r.symbol, 'analysts')}
-                        style={{ color: '#cbd5e1', fontFamily: 'monospace', fontSize: 11, marginLeft: 8, cursor: 'pointer' }}
+                      <Link
+                        prefetch={false}
+                        href={companyHref(r.symbol, "analysts")}
+                        style={{ color: '#cbd5e1', fontFamily: 'monospace', fontSize: 11, marginLeft: 8, cursor: 'pointer', textDecoration: 'none' }}
                       >
                         {r.name}
-                      </span>
+                      </Link>
                     )}
                     {' '}
                     <ConsensusBadge value={r.consensus} />
@@ -426,15 +430,14 @@ export default function AnalystMonitorTab({ refreshKey, onSelect, initialLatest 
                 {filtered.map(r => (
                   <tr key={r.symbol} style={{ borderBottom: '1px solid #141414' }}>
                     <td style={S.td}>
-                      <span onClick={() => onSelect?.(r.symbol, 'analysts')} style={{ ...tickerLink, fontSize: 12 }}>
+                      <Link prefetch={false} href={companyHref(r.symbol, "analysts")} style={{ ...tickerLink, fontSize: 12, textDecoration: 'none' }}>
                         {r.symbol}
-                      </span>
+                      </Link>
                     </td>
-                    <td
-                      onClick={() => onSelect?.(r.symbol, 'analysts')}
-                      style={{ ...S.td, color: '#cbd5e1', cursor: 'pointer' }}
-                    >
-                      {r.name || '—'}
+                    <td style={{ ...S.td, color: '#cbd5e1' }}>
+                      <Link prefetch={false} href={companyHref(r.symbol, "analysts")} style={{ color: 'inherit', textDecoration: 'none', cursor: 'pointer' }}>
+                        {r.name || '—'}
+                      </Link>
                     </td>
                     {!isNarrowDesktop && <td style={{ ...S.td, color: '#94a3b8' }}>{r.sector || '—'}</td>}
                     {!isNarrowDesktop && <td style={{ ...S.td, color: '#64748b' }}>{r.ftse_index?.replace('FTSE ', '') || '—'}</td>}
@@ -499,11 +502,11 @@ export default function AnalystMonitorTab({ refreshKey, onSelect, initialLatest 
                   <div key={r.symbol} style={{ padding: '7px 0', borderBottom: '1px solid #1a1a1a' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
                       <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        <span onClick={() => onSelect?.(r.symbol, 'analysts')} style={{ ...tickerLink, fontSize: 12 }}>{r.symbol}</span>
+                        <Link prefetch={false} href={companyHref(r.symbol, "analysts")} style={{ ...tickerLink, fontSize: 12, textDecoration: 'none' }}>{r.symbol}</Link>
                         {r.name && (
-                          <span onClick={() => onSelect?.(r.symbol, 'analysts')} style={{ color: '#94a3b8', fontFamily: 'monospace', fontSize: 10, marginLeft: 6, cursor: 'pointer' }}>
+                          <Link prefetch={false} href={companyHref(r.symbol, "analysts")} style={{ color: '#94a3b8', fontFamily: 'monospace', fontSize: 10, marginLeft: 6, cursor: 'pointer', textDecoration: 'none' }}>
                             {r.name}
-                          </span>
+                          </Link>
                         )}
                       </span>
                       {flipped && (

@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { useIsMobile, useIsTablet, useMediaQuery } from "@/hooks/useMediaQuery";
 import { API } from "@/lib/api";
+import { companyHref } from "@/lib/company";
 import PageHeader from "@/components/layout/PageHeader";
 
 const CATEGORY_LABELS = {
@@ -463,10 +465,12 @@ export default function RnsTab({ refreshKey, onSelect }) {
             <SentimentBadge row={r} />
             {r.ticker &&
               (r.symbol ? (
-                <span
-                  onClick={() => onSelect?.(r.symbol)}
+                <Link
+                  prefetch={false}
+                  href={companyHref(r.symbol)}
+                  onClick={(e) => e.stopPropagation()}
                   title={`View ${r.symbol}`}
-                  style={{ color: "#e5e5e5", fontWeight: 700, cursor: "pointer" }}
+                  style={{ color: "#e5e5e5", fontWeight: 700, cursor: "pointer", textDecoration: "none" }}
                 >
                   {r.ticker}
                   <span
@@ -479,7 +483,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
                   >
                     ↗
                   </span>
-                </span>
+                </Link>
               ) : (
                 <a
                   href={yahooQuoteUrl(r.ticker)}
@@ -611,8 +615,10 @@ export default function RnsTab({ refreshKey, onSelect }) {
       <td style={{ ...S.td, fontWeight: 700, whiteSpace: "nowrap" }}>
         {r.ticker ? (
           r.symbol ? (
-            <span
-              onClick={() => onSelect?.(r.symbol)}
+            <Link
+              prefetch={false}
+              href={companyHref(r.symbol)}
+              onClick={(e) => e.stopPropagation()}
               title={`View ${r.symbol}`}
               style={{
                 color: "#e5e5e5",
@@ -631,7 +637,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
               >
                 ↗
               </span>
-            </span>
+            </Link>
           ) : (
             <a
               href={yahooQuoteUrl(r.ticker)}

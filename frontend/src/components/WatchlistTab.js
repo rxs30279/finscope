@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect, useMemo, useRef } from "react";
+import Link from "next/link";
 import { API } from "@/lib/api";
+import { companyHref } from "@/lib/company";
 import { loadTargets, saveTargets, DEFAULT_LIST_ID } from "@/lib/storage";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
@@ -1107,7 +1109,12 @@ export default function WatchlistTab({
                           >
                             ★
                           </button>
-                          <div style={{ minWidth: 0 }}>
+                          <Link
+                            prefetch={false}
+                            href={companyHref(r.symbol)}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ minWidth: 0, textDecoration: "none", color: "inherit" }}
+                          >
                             <div
                               style={{
                                 color: "#e5e5e5",
@@ -1128,7 +1135,7 @@ export default function WatchlistTab({
                             >
                               {r.name}
                             </div>
-                          </div>
+                          </Link>
                         </div>
                       </td>
 

@@ -12,15 +12,11 @@ import { S } from "@/lib/theme";
 import MetricCard from "./MetricCard";
 import InfoDot from "@/components/InfoDot";
 import FairValueCard from "./FairValueCard";
-import ScoreStrip from "./ScoreStrip";
 import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
 import DividendsTab from "./DividendsTab";
 import ShortInterestMetric from "./ShortInterestSection";
-import StarButton from "@/components/screener/StarButton";
-import { useWatchlist } from "@/app/providers";
-import EmailDigestCTA from "@/components/EmailDigestCTA";
 
 // The waterfall's category labels ("Cost of Revenue", "Other Expenses", …) are
 // too wide to sit horizontally on mobile without overlapping. Rather than rotate
@@ -40,61 +36,6 @@ const WrapTick = ({ x, y, payload }: any) => {
   );
 };
 
-// logo.dev's ticker index maps a few LSE tickers to the wrong brand — e.g. RR.L
-// (Rolls-Royce Holdings plc, aerospace/defence) resolves to the "Rolls-Royce
-// Motor Cars Limited" wordmark, a separate BMW-owned company. For those we pull
-// by the correct company domain, which logo.dev serves accurately.
-const LOGO_DOMAIN_OVERRIDES: Record<string, string> = {
-  "RR.L": "rollsroyce.com", // interlocked RR monogram, not Motor Cars Ltd
-};
-
-// Company logo badge. Pulls the logo from logo.dev keyed by ticker (LSE tickers
-// keep the ".L" suffix, which is exactly the format logo.dev expects), unless
-// the ticker is in LOGO_DOMAIN_OVERRIDES, in which case we key by domain. We
-// pass fallback=404 so a miss fires the img onError and we drop back to the
-// original purple ticker-initials badge. Needs NEXT_PUBLIC_LOGODEV_TOKEN (a
-// publishable pk_ key); with no token set we skip the fetch and show initials.
-function LogoBadge({ symbol }: { symbol: string }) {
-  const [failed, setFailed] = useState(false);
-  const label = symbol.replace(".L", "").slice(0, 4);
-  const token = process.env.NEXT_PUBLIC_LOGODEV_TOKEN;
-  // logo.dev bakes each brand's own background into the PNG (its theme param
-  // doesn't strip it). We let the logo fill the chip edge-to-edge with no padding
-  // so its background reaches the rounded corners; the chip itself is transparent
-  // so any letterboxing blends into the page rather than showing a white ring.
-  // Misses (fallback=404) drop to the purple initials.
-  const override = LOGO_DOMAIN_OVERRIDES[symbol];
-  const logoPath = override
-    ? encodeURIComponent(override)
-    : `ticker/${encodeURIComponent(symbol)}`;
-  const logoUrl = token
-    ? `https://img.logo.dev/${logoPath}?token=${token}&size=120&format=png&retina=true&fallback=404`
-    : null;
-  const showLogo = !!logoUrl && !failed;
-
-  const base = {
-    width: 64, height: 64, borderRadius: 12, flexShrink: 0,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    overflow: "hidden", textDecoration: "none",
-  } as const;
-  const wrapStyle = showLogo
-    ? { ...base, background: "transparent" }
-    : { ...base, background: "#6366f1", color: "#fff", fontFamily: "DM Serif Display,serif", fontSize: 13, fontWeight: 700 };
-
-  const inner = showLogo ? (
-    <img
-      src={logoUrl as string}
-      alt={label}
-      onError={() => setFailed(true)}
-      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-    />
-  ) : (
-    label
-  );
-
-  return <div style={wrapStyle as any}>{inner}</div>;
-}
-
 interface Props {
   symbol: string;
   initialTab?: string;
@@ -107,11 +48,8 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
   const [quarterly, setQuarterly] = useState<any[]>([]);
   const [valuation, setValuation] = useState<any>(null);
   const [tab, setTab] = useState(initialTab || "chart");
-  const [descExpanded, setDescExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const isMobile = useIsMobile();
-  const { defaultMembers, toggleWatchlist } = useWatchlist();
-  const starred = defaultMembers.has(symbol);
 
   useEffect(() => { setTab(initialTab || "chart"); }, [symbol, initialTab]);
 
@@ -135,8 +73,10 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
       .catch(() => setLoading(false));
   }, [symbol]);
 
-  if (loading) return <div style={S.loading}>Loading {symbol}…</div>;
-  if (!snap) return <div style={S.loading}>No data for {symbol}</div>;
+  // minHeight cuts layout shift: the server-rendered header + enrichment are
+  // static around this block, so we hold vertical space while the tabs load.
+  if (loading) return <div style={{ ...S.loading, minHeight: 400 }}>Loading {symbol}…</div>;
+  if (!snap) return <div style={{ ...S.loading, minHeight: 400 }}>No data for {symbol}</div>;
 
   const fcur = meta?.financial_currency || "GBP";
   const sym = currSym(fcur);
@@ -216,106 +156,8 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
 
   const tabs = ["chart", "overview", "financials", "valuation", "health", "growth", "dividends", "analysts", "news"];
 
-  const descriptors = (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      {[symbol, meta?.exchange, meta?.sector, meta?.country, meta?.ftse_index].filter(Boolean).map((t: string) => (
-        <span key={t} style={S.badge}>{t}</span>
-      ))}
-    </div>
-  );
-
-  const descIsLong = (meta?.description?.length || 0) > 300;
-  const description = meta?.description ? (
-    <p style={{ color: "#94a3b8", fontSize: 13, maxWidth: 680, lineHeight: 1.7, margin: 0 }}>
-      {descExpanded || !descIsLong ? meta.description : `${meta.description.slice(0, 300)}…`}
-      {descIsLong && (
-        <span
-          onClick={() => setDescExpanded((v) => !v)}
-          style={{ color: "#a78bfa", cursor: "pointer", marginLeft: 6, whiteSpace: "nowrap" }}
-        >
-          {descExpanded ? "less" : "more"}
-        </span>
-      )}
-    </p>
-  ) : null;
-
-  // Split the name so the last word and the ★ can be wrapped in a nowrap unit —
-  // that keeps the star glued to the final word instead of dropping to its own line.
-  const displayName = meta?.name || symbol;
-  const nameWords = displayName.split(" ");
-  const nameLastWord = nameWords.pop() as string;
-  const nameHead = nameWords.join(" ");
-  const nameStar = (
-    <span style={{ whiteSpace: "nowrap" }}>
-      {nameLastWord}
-      <span style={{ position: "relative", top: -5, marginLeft: 6, display: "inline-flex", verticalAlign: "middle" }}>
-        <StarButton active={starred} onClick={() => toggleWatchlist(symbol)} size={22} />
-      </span>
-    </span>
-  );
-
   return (
     <div>
-      <EmailDigestCTA source="company_page" />
-
-      {/* Header */}
-      {isMobile ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 }}>
-          <div style={{ position: "relative", display: "flex", justifyContent: "flex-start", alignItems: "flex-start", minHeight: 144 }}>
-            {/* Logo with the market cap stacked beneath it, pinned left and out of flow */}
-            <div style={{ position: "absolute", left: 0, top: 0 }}>
-              <LogoBadge symbol={symbol} />
-              <div style={{ marginTop: 18 }}>
-                <div style={{ fontSize: 22, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
-                <div style={{ fontSize: 11, color: "#64748b" }}>
-                  Market Cap{snap.enterprise_value ? ` · EV ${fmt(snap.enterprise_value, "currency", qcur)}` : ""}
-                </div>
-              </div>
-            </div>
-            {/* Match the logo's vertical span (64h) so the name sits on its midline.
-                Just a small right gutter so the name wraps naturally across the full available width
-                (no artificial narrowing); the ★ trails the name inline, glued to the last word. */}
-            <div style={{ minHeight: 64, marginLeft: 84, marginRight: 8, display: "flex", alignItems: "center" }}>
-              <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 22, color: "#f1f5f9" }}>
-                {nameHead && nameHead + " "}
-                {nameStar}
-              </h2>
-            </div>
-          </div>
-          {/* Full-width row of its own: the market cap above lives in an
-              absolutely-positioned block that can't grow the header, so the
-              strip sits just after it and lands directly under the EV line. */}
-          <ScoreStrip snap={snap} />
-          {description}
-        </div>
-      ) : (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 28 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 10 }}>
-              <LogoBadge symbol={symbol} />
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <h2 style={{ margin: 0, fontFamily: "DM Serif Display,serif", fontSize: 26, color: "#f1f5f9" }}>{meta?.name || symbol}</h2>
-                  <span style={{ position: "relative", top: -5, display: "inline-flex" }}>
-                    <StarButton active={starred} onClick={() => toggleWatchlist(symbol)} size={20} />
-                  </span>
-                </div>
-                <div style={{ marginTop: 5 }}>{descriptors}</div>
-              </div>
-            </div>
-            {description}
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 30, fontFamily: "DM Serif Display,serif", color: "#f1f5f9" }}>{fmt(snap.market_cap, "currency", qcur)}</div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
-            {snap.enterprise_value && <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>EV: {fmt(snap.enterprise_value, "currency", qcur)}</div>}
-            <div style={{ marginTop: 10 }}>
-              <ScoreStrip snap={snap} align="right" />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Tabs */}
       <div style={{ display: "flex", flexWrap: isMobile ? "wrap" : "nowrap", rowGap: isMobile ? 2 : 0, columnGap: 2, borderBottom: isMobile ? "none" : "1px solid #334155", marginBottom: 24 }}>
         {tabs.map((t) => (

@@ -127,6 +127,74 @@ aside::-webkit-scrollbar {
   }
 }
 
+/* Company page: once the reader scrolls down a little, the page settles with the
+   company name at the top (just below the 52px sticky nav), skipping the
+   breadcrumb + CTA banner above it. The snap target is the company header alone
+   (scroll-snap-align + scroll-margin-top there); `proximity` means it only engages
+   near the header and never traps scrolling through the content below.
+
+   The rule is gated on `.company-snap`, which CompanySnap.tsx adds to <html> only
+   after the reader's first scroll gesture. Without that gate the browser snaps to
+   the header AT LOAD (it's only ~120px down, well inside the proximity range),
+   hiding the ad before the reader has scrolled at all. Arming on first scroll keeps
+   the ad visible on load and still snaps once they scroll toward the name. */
+html.company-snap {
+  scroll-snap-type: y proximity;
+}
+
+/* Company-page server-rendered header (CompanyHeader.tsx). The component renders
+   two server-side variants — .company-header--wide (desktop, two columns) and
+   .company-header-mobile (the original production stacked layout) — and CSS shows
+   exactly one per viewport at the useIsMobile() breakpoint below. Both are in the
+   HTML, so crawlers always see a visible <h1>. CSS-only because the header is a
+   server component and can't call useIsMobile(). */
+.company-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.company-header-mobile {
+  display: none; /* shown only at the mobile breakpoint below */
+  flex-direction: column;
+  gap: 10px;
+}
+.company-header__main {
+  /* flex-basis 0 (not auto): with basis auto the main column sizes to its
+     content (~820px prose), leaving no room on the row and wrapping the
+     market-cap aside underneath instead of pinning it top right. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+.company-header__aside {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* A-Z directory columns (/companies) */
+.companies-columns {
+  columns: 3;
+  column-gap: 32px;
+}
+
+/* Mirrors useIsMobile(): ≤943px, plus short landscape phones. Swaps the desktop
+   header for the original stacked mobile layout. */
+@media (max-width: 943px), (max-height: 500px) and (orientation: landscape) {
+  .company-header--wide {
+    display: none;
+  }
+  .company-header-mobile {
+    display: flex;
+  }
+}
+
+@media (max-width: 943px) {
+  .companies-columns {
+    columns: 1;
+  }
+}
+
 /* Keep the page from scrolling sideways on the mobile/tablet layout, which
    now extends up to 943px (the width where the inline desktop nav would
    otherwise overlap). Mirrors the useIsMobile() breakpoint. */

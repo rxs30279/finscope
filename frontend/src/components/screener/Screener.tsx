@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import Link from "next/link";
 import { API } from "@/lib/api";
+import { companyHref } from "@/lib/company";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
 import { loadScreenerState, saveScreenerState, loadScreenerColumns } from "@/lib/storage";
@@ -481,14 +483,18 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                     <td style={{ ...S.td, fontFamily: "monospace", fontWeight: 700, color: watchlistSet.has(r.symbol) ? "#f59e0b" : "#818cf8" }}>
                       <span style={{ display: "inline-flex", alignItems: "center" }}>
                         <StarButton active={watchlistSet.has(r.symbol)} onClick={(e) => { e.stopPropagation(); onToggleWatchlist && onToggleWatchlist(r.symbol); }} />
-                        {r.symbol.replace(".L", "")}
+                        <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "inherit", textDecoration: "none" }}>
+                          {r.symbol.replace(".L", "")}
+                        </Link>
                       </span>
                     </td>
                     {/* maxWidth lives on an inner div, not the td: in the auto-layout
                         fundamentals table a td's max-width is ignored, so a long name
                         would stretch the whole column. The div is respected and truncates. */}
                     <td style={{ ...S.td, color: "#f1f5f9" }} title={r.name}>
-                      <div style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
+                      <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "inherit", textDecoration: "none" }}>
+                        <div style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
+                      </Link>
                     </td>
                     <td style={{ ...S.td, color: "#64748b" }} title={r.sector}>
                       <div style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>{SECTOR_ABBR[r.sector] || r.sector}</div>

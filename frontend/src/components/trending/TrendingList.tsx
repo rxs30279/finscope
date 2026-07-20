@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { fmt } from "@/lib/format";
 import { S } from "@/lib/theme";
+import { companyHref } from "@/lib/company";
 import StreakBadge from "./StreakBadge";
 
 // Prices are stored in pence (LSE convention); show as pounds like the watchlist.
@@ -40,10 +42,19 @@ export default function TrendingList({ title, accent, up, items, selected, onSel
           items.map((it) => {
             const active = it.symbol === selected;
             return (
-              <button
+              <Link
                 key={it.symbol}
-                onClick={() => onSelect(it.symbol)}
-                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: active ? "#1f1200" : "none", border: "none", borderBottom: "1px solid #1a1a1a", borderLeft: `2px solid ${active ? accent : "transparent"}`, padding: "10px 12px", cursor: "pointer" }}
+                prefetch={false}
+                href={companyHref(it.symbol)}
+                // Plain left-click keeps the in-page selection behaviour (desktop
+                // opens the side profile); modified clicks / crawlers get the real href.
+                onClick={(e) => {
+                  if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                    e.preventDefault();
+                    onSelect(it.symbol);
+                  }
+                }}
+                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: active ? "#1f1200" : "none", border: "none", borderBottom: "1px solid #1a1a1a", borderLeft: `2px solid ${active ? accent : "transparent"}`, padding: "10px 12px", cursor: "pointer", textDecoration: "none" }}
               >
                 <StreakBadge days={it.streak} up={up} />
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -54,7 +65,7 @@ export default function TrendingList({ title, accent, up, items, selected, onSel
                   <div style={{ color: "#f1f5f9", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{fmtPence(it.price)}</div>
                   <div style={{ color: "#94a3b8", fontSize: 11, fontFamily: "monospace", marginTop: 1 }}>{fmt(it.market_cap, "currency", it.currency)}</div>
                 </div>
-              </button>
+              </Link>
             );
           })
         )}
