@@ -710,6 +710,26 @@ _PRODUCT_LAUNCH_RE = re.compile(
     r"|\bmarket entry\b"
 )
 
+# US-style "earnings" headlines that every enumerated results category misses:
+# Ryanair Holdings ("Q1 FY27 Ryanair Holdings plc Earnings", 2026-07-21) reports
+# with an earnings-release headline that carries no "results"/"trading" word, so
+# quarterly (needs "q1-results") and _FY_RESULTS_RE (needs "results") both fall
+# through and the release drops to Tier C — never scored, never surfaced. Treat
+# "earnings" as a results word when it's paired with a reporting-period marker
+# (Q1–Q4 / FY / half-year / interim / annual / quarterly) or a release/report
+# word. The "notice" guard on the fallback block keeps "Notice of Q1 Earnings"
+# out; deliberately NOT matching bare "earnings call"/"presentation" so pure
+# scheduling isn't promoted. Tier/category are picked from the period marker.
+_EARNINGS_RE = re.compile(
+    r"\bearnings\b.*\b(?:release|report|results|statement)\b"
+    r"|\b(?:release|report|results|statement)\b.*\bearnings\b"
+    r"|\bq[1-4]\b.*\bearnings\b"
+    r"|\bfy\d{0,4}\b.*\bearnings\b"
+    r"|\b(?:full[- ]?year|half[- ]?year|six[- ]?months?|first[- ]?quarter"
+    r"|second[- ]?quarter|third[- ]?quarter|fourth[- ]?quarter|interim"
+    r"|preliminary|quarterly|annual)\b.*\bearnings\b"
+)
+
 
 def _classify(headline: str, slug: str) -> dict:
     """Classify one announcement into tier/category/keyword hits/score.
@@ -748,6 +768,16 @@ def _classify(headline: str, slug: str) -> dict:
             and _ANNUAL_REPORT_RE.search(hay)
         ):
             category, tier = "final_results", "A"
+        elif _EARNINGS_RE.search(hay):
+            # Route by reporting period: half-year → interim, quarter → quarterly,
+            # otherwise full-year. All Tier A (a real earnings release ranks with
+            # results). Interim is tested first because "half year" contains "year".
+            if re.search(r"\b(?:half[- ]?year|six[- ]?months?|interim)\b", hay):
+                category, tier = "interim_results", "A"
+            elif re.search(r"\bq[1-4]\b|\bquarter(?:ly)?\b", hay):
+                category, tier = "quarterly", "A"
+            else:
+                category, tier = "final_results", "A"
         elif _CONTRACT_RE.search(hay):
             category, tier = "contract_win", "B"
         elif _PRODUCT_LAUNCH_RE.search(hay):

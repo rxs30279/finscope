@@ -262,6 +262,48 @@ def test_classify_satisfy_does_not_trigger_fy_results():
     assert r["category"] != "final_results"
 
 
+# ── _classify — US-style "earnings" headlines (Ryanair, 2026-07-21) ───────────
+
+def test_classify_q1_earnings_release_is_quarterly_tier_a():
+    # Ryanair Holdings: "Q1 FY27 Ryanair Holdings plc Earnings" carries no
+    # "results"/"trading" word, so it fell to Tier C and was never scored.
+    r = _classify("Q1 FY27 Ryanair Holdings plc Earnings",
+                  "q1-fy27-ryanair-holdings-plc-earnings")
+    assert r["tier"] == "A"
+    assert r["category"] == "quarterly"
+
+def test_classify_bare_q1_earnings_is_quarterly_tier_a():
+    r = _classify("Q1 FY27 Earnings", "q1-fy27-earnings")
+    assert r["tier"] == "A"
+    assert r["category"] == "quarterly"
+
+def test_classify_full_year_earnings_is_final_results():
+    r = _classify("Full Year Earnings", "full-year-earnings")
+    assert r["tier"] == "A"
+    assert r["category"] == "final_results"
+
+def test_classify_half_year_earnings_is_interim():
+    r = _classify("Half Year Earnings", "half-year-earnings")
+    assert r["tier"] == "A"
+    assert r["category"] == "interim_results"
+
+def test_classify_earnings_release_is_tier_a():
+    r = _classify("Earnings Release", "earnings-release")
+    assert r["tier"] == "A"
+
+def test_classify_notice_of_q1_earnings_stays_tier_c():
+    # The notice guard must keep scheduling out of the earnings fallback.
+    r = _classify("Notice of Q1 Earnings", "notice-of-q1-earnings")
+    assert r["tier"] == "C"
+
+def test_classify_earnings_growth_prose_not_promoted():
+    # Bare "earnings" with no period marker or release word must not fire.
+    r = _classify("Directorate Change and earnings comment",
+                  "directorate-change-and-earnings-comment")
+    assert r["category"] != "quarterly"
+    assert r["category"] != "final_results"
+
+
 # ── _classify — unknown slug falls back ───────────────────────────────────────
 
 def test_classify_unknown_slug_defaults_to_tier_c():
