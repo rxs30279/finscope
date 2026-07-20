@@ -659,6 +659,32 @@ def _attach_scores(rows):
             r.update(scores[r["symbol"]])
 
 
+def _attach_price_history(rows, as_of):
+    """Attach a ~3-month daily close series (for the price sparkline) to each
+    leaderboard row that resolves to a universe symbol. Out-of-universe issuers
+    (no symbol) keep an empty list. One batched query over price_history,
+    grouped in Python — mirrors _attach_scores' shape."""
+    for r in rows:
+        r["price_history"] = []
+    symbols = [r["symbol"] for r in rows if r["symbol"]]
+    if not symbols:
+        return
+    prows = query(
+        "SELECT symbol, date, close FROM price_history"
+        " WHERE symbol = ANY(%s) AND date >= %s AND close IS NOT NULL"
+        " ORDER BY symbol, date ASC",
+        (symbols, as_of - timedelta(days=92)),
+    )
+    by_symbol = {}
+    for p in prows:
+        by_symbol.setdefault(p["symbol"], []).append(
+            {"date": str(p["date"]), "close": float(p["close"])}
+        )
+    for r in rows:
+        if r["symbol"] in by_symbol:
+            r["price_history"] = by_symbol[r["symbol"]]
+
+
 @router.get("/api/shorts/top")
 def shorts_top(response: Response = None):
     """Most-shorted leaderboard: every issuer in the latest ANSP snapshot,
@@ -684,6 +710,7 @@ def shorts_top(response: Response = None):
     )
     rows = _build_leaderboard(window_rows, as_of)
     _attach_scores(rows)
+    _attach_price_history(rows, as_of)
     return {"as_of": str(as_of), "rows": rows}
 
 

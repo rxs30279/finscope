@@ -10,6 +10,9 @@ export type ShortLeaderRow = {
   change_window: number;
   window_start: string;
   history: { date: string; pct: number }[];
+  // ~3-month daily close series (pence) for the price sparkline; empty for
+  // out-of-universe issuers with no resolved symbol.
+  price_history: { date: string; close: number }[];
   // The four screener composites + index label (all null for out-of-universe issuers).
   momentum_score: number | null;
   quality_score: number | null;

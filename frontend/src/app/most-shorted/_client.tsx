@@ -60,7 +60,7 @@ function scalePoints(history: { pct: number }[], w: number, h: number, pad: numb
 }
 
 function Sparkline({ row }: { row: ShortLeaderRow }) {
-  const w = 90;
+  const w = 60;
   const h = 26;
   const { pts } = scalePoints(row.history, w, h, 3);
   const color = deltaColor(effDelta(row));
@@ -72,6 +72,35 @@ function Sparkline({ row }: { row: ShortLeaderRow }) {
       ) : (
         <polyline points={line} fill="none" stroke={color} strokeWidth={1.5} />
       )}
+    </svg>
+  );
+}
+
+// 3-month price sparkline (daily closes). Green if the price is up over the
+// window, red if down — independent of the short-interest colouring. Renders a
+// dash when there aren't enough closes (out-of-universe issuers, or symbols with
+// no recorded prices yet).
+function PriceSparkline({ history }: { history?: { close: number }[] }) {
+  const w = 60;
+  const h = 26;
+  const pad = 3;
+  if (!history || history.length < 2) {
+    return <span style={{ color: colors.textFaint, fontSize: 11 }}>—</span>;
+  }
+  const vals = history.map((p) => p.close);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const n = history.length;
+  const pts = history.map((p, i) => ({
+    x: (i / (n - 1)) * w,
+    y: pad + (1 - (p.close - min) / span) * (h - pad * 2),
+  }));
+  const color = vals[n - 1] >= vals[0] ? colors.green : colors.red;
+  const line = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  return (
+    <svg width={w} height={h} style={{ display: "block" }} aria-hidden="true">
+      <polyline points={line} fill="none" stroke={color} strokeWidth={1.5} />
     </svg>
   );
 }
@@ -210,13 +239,10 @@ export default function MostShortedPageClient({
 
   const rows = useMemo(() => data?.rows ?? [], [data]);
 
-  // Column header adapts as the series matures: the 1-month delta takes over
-  // from the since-inception delta once ~30 days of disclosures exist.
-  const hasMonth = rows.some((r) => r.change_1m != null);
-  const windowStart = rows.length
-    ? rows.reduce((m, r) => (r.window_start < m ? r.window_start : m), rows[0].window_start)
-    : null;
-  const deltaLabel = hasMonth ? "1M change" : `Change since ${fmtDate(windowStart)}`;
+  // The delta column + mover cards + trend colour all share effDelta(r): the
+  // per-row 1-month change once the series is 30 days old, else the change over
+  // whatever window that issuer has. Header is fixed since that's the target.
+  const deltaLabel = "1M change";
 
   const movers = useMemo(() => {
     const moved = rows.filter((r) => effDelta(r) !== 0);
@@ -311,11 +337,14 @@ export default function MostShortedPageClient({
                 <th style={S.th}>Ticker</th>
                 <th style={S.th}>Company</th>
                 <th style={S.th}>Market</th>
+                <th style={{ ...S.th, width: 68 }} title="Share price over the last ~3 months (daily closes)">
+                  Price&nbsp;3M
+                </th>
                 <th style={{ ...S.th, textAlign: "right" }}>Short&nbsp;%</th>
                 <th style={{ ...S.th, textAlign: "right" }}>{deltaLabel}</th>
-                <th style={{ ...S.th, width: 100 }}>Trend</th>
+                <th style={{ ...S.th, width: 68 }}>Trend</th>
                 {SCORE_COLS.map((c) => (
-                  <th key={c.key} title={c.title} style={{ ...S.th, textAlign: "center", width: 44 }}>
+                  <th key={c.key} title={c.title} style={{ ...S.th, textAlign: "center", width: 40, padding: "8px 6px" }}>
                     {c.label}
                   </th>
                 ))}
@@ -365,24 +394,27 @@ export default function MostShortedPageClient({
                     <td style={{ ...S.td, color: colors.textFaint }} title={r.ftse_index || undefined}>
                       {r.ftse_index ? r.ftse_index.replace("FTSE ", "") : "—"}
                     </td>
+                    <td style={S.td}>
+                      <PriceSparkline history={r.price_history} />
+                    </td>
                     <td style={{ ...S.tdNum, fontWeight: 700, color: r.pct >= 5 ? colors.red : colors.text }}>
                       {r.pct.toFixed(2)}%
                     </td>
-                    <td style={{ ...S.tdNum, color: deltaColor(hasMonth ? r.change_1m : r.change_window) }}>
-                      {fmtDelta(hasMonth ? r.change_1m : r.change_window)}
+                    <td style={{ ...S.tdNum, color: deltaColor(effDelta(r)) }}>
+                      {fmtDelta(effDelta(r))}
                     </td>
                     <td style={S.td}>
                       <Sparkline row={r} />
                     </td>
                     {SCORE_COLS.map((c) => (
-                      <td key={c.key} title={c.title} style={{ ...S.td, textAlign: "center" }}>
+                      <td key={c.key} title={c.title} style={{ ...S.td, textAlign: "center", padding: "9px 6px" }}>
                         <ScorePill value={r[c.key]} invert={c.invert} />
                       </td>
                     ))}
                   </tr>
                   {expanded === r.isin && (
                     <tr>
-                      <td colSpan={11} style={{ ...S.td, background: "#101010" }}>
+                      <td colSpan={12} style={{ ...S.td, background: "#101010" }}>
                         <TrendChart row={r} isMobile={isMobile} />
                       </td>
                     </tr>
@@ -391,7 +423,7 @@ export default function MostShortedPageClient({
               ))}
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={11} style={{ ...S.td, color: colors.textDim, textAlign: "center", padding: 24 }}>
+                  <td colSpan={12} style={{ ...S.td, color: colors.textDim, textAlign: "center", padding: 24 }}>
                     No issuers match “{filter}”
                   </td>
                 </tr>
