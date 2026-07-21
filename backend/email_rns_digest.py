@@ -19,6 +19,9 @@ Environment:
   PUBLIC_BASE_URL       — public app URL used in unsub links (e.g. https://...)
   DIGEST_TO             — fallback single recipient (used only when no segment)
   DIGEST_FROM           — sender   (default: digest@alphamoveai.co.uk)
+  DIGEST_SEND_GAP_SECONDS        — min seconds between sends to the SAME mailbox
+                                   provider (default 2; 0 disables pacing)
+  DIGEST_SEND_GAP_BUDGET_SECONDS — cap on total time spent pacing (default 45)
   DB_*                  — same vars as the rest of the backend
 """
 import sys, os
@@ -27,6 +30,7 @@ sys.path.insert(0, _SCRIPT_DIR)
 
 import json
 import html
+import time
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -37,6 +41,11 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 from rns import _query, _fetch_market_caps_batch
+# Shared with the delivery-event webhook so the domain→provider mapping has one
+# definition. Both sides must agree: pacing groups by it, and the /status panel
+# reports deferral rates by it — a drift would make the fix and the measurement
+# disagree about who "Microsoft" is.
+from email_events import provider_of
 
 
 _UK_TZ      = ZoneInfo("Europe/London")
@@ -607,6 +616,88 @@ def _sub_footer(unsub_url: str, manage_url: str) -> str:
     )
 
 
+# ── Send pacing ───────────────────────────────────────────────────────────────
+#
+# Mailbox providers throttle per (sending IP × recipient domain), and we send
+# from Resend's *shared* SES pool. On 21 Jul 2026 all 54 recipients went out in
+# a 21s burst and 6 of the 9 Microsoft addresses came back delivery_delayed
+# (4xx soft-deferral) while all 45 non-Microsoft recipients delivered on time.
+#
+# Two mechanisms, in order of importance:
+#   1. Interleaving — reorder so consecutive sends hit different providers.
+#      Costs nothing and does most of the work: with 9 Microsoft in 54, it puts
+#      ~5 other sends between each pair, which at ~0.4s per send is about as
+#      wide as the gap below, so the sleep barely fires on today's list.
+#   2. A minimum same-provider gap, as a floor for when interleaving can't help
+#      (a list that is mostly one provider).
+#
+# The gap deliberately applies to Microsoft only. Pacing every provider sounds
+# more principled but is unaffordable: 45 of the 54 recipients are Google, and
+# holding them 2s apart would cost ~72s on its own — over the budget below, and
+# spent on a provider that delivered 45/45 on the day Microsoft deferred 6 of 9.
+# Outlook.com being the aggressive one is a standing industry fact, not a
+# one-off. Add providers here if the /status deferral panel starts implicating
+# them; that panel and this set both key off email_events.provider_of.
+_PACED_PROVIDERS   = {"microsoft"}
+_SEND_GAP_S        = float(os.environ.get("DIGEST_SEND_GAP_SECONDS", "2"))
+# The budget exists because the digest is driven by an HTTP request from
+# cron-job.org, which times out well under two minutes. Blowing that wouldn't
+# lose the send (the handler runs to completion after the client disconnects)
+# but it would lose the stored-response audit trail that made the 2026-06/07
+# silent-fallback bug findable — see the segment-mode notes above.
+_SEND_GAP_BUDGET_S = float(os.environ.get("DIGEST_SEND_GAP_BUDGET_SECONDS", "45"))
+
+
+def _interleave_by_provider(emails: list[str]) -> list[str]:
+    """Reorder so same-provider recipients are spread across the whole run.
+
+    Each address is placed at its fractional position within its own provider
+    group, then all groups are merged by that fraction — so a group of 9 lands
+    every ~1/9th of the way through regardless of how big the other groups are.
+    (Naive round-robin would instead cluster the small group at the front.)
+
+    Order within a provider is preserved, and the result is a permutation of the
+    input: no address is dropped or duplicated.
+    """
+    buckets: dict[str, list[str]] = {}
+    for email in emails:
+        domain = email.rsplit("@", 1)[-1] if "@" in email else None
+        buckets.setdefault(provider_of(domain), []).append(email)
+
+    ranked: list[tuple[float, str, str]] = []
+    for provider, bucket in buckets.items():
+        n = len(bucket)
+        for i, email in enumerate(bucket):
+            # +0.5 centres each slot in its share of the run, so two groups of
+            # equal size interleave instead of colliding on identical keys.
+            ranked.append(((i + 0.5) / n, provider, email))
+    # Provider name is a tiebreak purely so the order is deterministic in tests.
+    ranked.sort(key=lambda t: (t[0], t[1]))
+    return [email for _, _, email in ranked]
+
+
+def _pace(provider: str, last_send_at: dict[str, float], slept: float) -> float:
+    """Sleep just long enough to keep `provider` sends _SEND_GAP_S apart.
+
+    Only throttling providers (_PACED_PROVIDERS) are paced; everyone else
+    returns immediately. Returns the new cumulative sleep total, and no-ops once
+    the budget is spent, so a pathological list degrades to "send fast" rather
+    than "miss the cron timeout" — deliverability is best-effort, the send
+    itself is not.
+    """
+    if provider not in _PACED_PROVIDERS or _SEND_GAP_S <= 0 or slept >= _SEND_GAP_BUDGET_S:
+        return slept
+    previous = last_send_at.get(provider)
+    if previous is None:
+        return slept
+    wait = _SEND_GAP_S - (time.monotonic() - previous)
+    if wait <= 0:
+        return slept
+    wait = min(wait, _SEND_GAP_BUDGET_S - slept)
+    time.sleep(wait)
+    return slept + wait
+
+
 def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
               to_email: str, base_url: str, total_all: int = 0) -> bool:
     """Render + send one digest email with per-recipient unsub plumbing.
@@ -709,14 +800,23 @@ def _send_digest(dry_run: bool = False) -> dict:
 
         if contacts:
             sent = failed = 0
-            for c in contacts:
-                email = (c.get("email") or "").strip()
-                if not email:
-                    continue
+            emails = [e for c in contacts if (e := (c.get("email") or "").strip())]
+            # Spread same-provider recipients across the run, then hold a floor
+            # between them — see the pacing notes above _send_one.
+            ordered = _interleave_by_provider(emails)
+            last_send_at: dict[str, float] = {}
+            slept = 0.0
+            for email in ordered:
+                provider = provider_of(email.rsplit("@", 1)[-1] if "@" in email else None)
+                slept = _pace(provider, last_send_at, slept)
+                last_send_at[provider] = time.monotonic()
                 if _send_one(api_key, from_addr, subject, rows, email, base_url, total_all):
                     sent += 1
                 else:
                     failed += 1
+            if slept:
+                print(f"[digest] paced sends: slept {slept:.1f}s total "
+                      f"(gap {_SEND_GAP_S}s, budget {_SEND_GAP_BUDGET_S}s)")
             print(f"[digest] segment send complete: {sent} sent, {failed} failed (of {len(contacts)})")
             return {"exit_code": 0 if failed == 0 else 2, "mode": "segment",
                     "recipients": len(contacts), "sent": sent, "failed": failed}
