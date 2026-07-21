@@ -219,9 +219,9 @@ def test_recent_summary_reports_rate_not_just_count(monkeypatch):
     """
     monkeypatch.setattr(email_events, "query", lambda *a, **k: [
         {"recipient_domain": "hotmail.co.uk", "messages": 9,
-         "problem_messages": 6, "latest_problem": None},
+         "problem_messages": 6, "latest_problem": None, "latest_event": None},
         {"recipient_domain": "gmail.com", "messages": 45,
-         "problem_messages": 0, "latest_problem": None},
+         "problem_messages": 0, "latest_problem": None, "latest_event": None},
     ])
     out = email_events.recent_summary()
     assert out["messages"] == 54
@@ -234,9 +234,9 @@ def test_recent_summary_merges_domains_into_one_provider(monkeypatch):
     """hotmail.co.uk and outlook.com are separate rows but one provider."""
     monkeypatch.setattr(email_events, "query", lambda *a, **k: [
         {"recipient_domain": "hotmail.co.uk", "messages": 6,
-         "problem_messages": 5, "latest_problem": None},
+         "problem_messages": 5, "latest_problem": None, "latest_event": None},
         {"recipient_domain": "outlook.com", "messages": 3,
-         "problem_messages": 1, "latest_problem": None},
+         "problem_messages": 1, "latest_problem": None, "latest_event": None},
     ])
     ms = email_events.recent_summary()["by_provider"]["microsoft"]
     assert (ms["messages"], ms["problems"]) == (9, 6)

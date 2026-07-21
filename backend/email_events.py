@@ -267,7 +267,8 @@ def recent_summary(days: int = 7) -> dict:
                COUNT(DISTINCT email_id)
                  FILTER (WHERE event_type = ANY(%(problems)s)) AS problem_messages,
                MAX(occurred_at)
-                 FILTER (WHERE event_type = ANY(%(problems)s)) AS latest_problem
+                 FILTER (WHERE event_type = ANY(%(problems)s)) AS latest_problem,
+               MAX(occurred_at) AS latest_event
         FROM email_events
         WHERE occurred_at >= NOW() - (%(days)s || ' days')::INTERVAL
         GROUP BY recipient_domain
@@ -276,6 +277,7 @@ def recent_summary(days: int = 7) -> dict:
     )
 
     by_provider: dict[str, dict] = {}
+    latest_event = None
     for r in rows:
         bucket = by_provider.setdefault(
             provider_of(r["recipient_domain"]),
@@ -289,6 +291,9 @@ def recent_summary(days: int = 7) -> dict:
         latest = r["latest_problem"]
         if latest and (bucket["latest_problem"] is None or latest > bucket["latest_problem"]):
             bucket["latest_problem"] = latest
+        seen = r["latest_event"]
+        if seen and (latest_event is None or seen > latest_event):
+            latest_event = seen
 
     for bucket in by_provider.values():
         total = bucket["messages"]
@@ -300,5 +305,8 @@ def recent_summary(days: int = 7) -> dict:
         "days": days,
         "messages": sum(b["messages"] for b in by_provider.values()),
         "problems": sum(b["problems"] for b in by_provider.values()),
+        # Lets the UI separate "no problems" from "no events at all": a webhook
+        # that silently stops delivering looks perfectly healthy by rate alone.
+        "latest_event": latest_event.isoformat() if latest_event else None,
         "by_provider": by_provider,
     }

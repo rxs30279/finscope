@@ -28,11 +28,27 @@ interface DigestMarker {
   sent: number | null;
   failed: number | null;
 }
+interface ProviderStats {
+  messages: number;
+  problems: number;
+  problem_rate: number;
+  latest_problem: string | null;
+}
+interface EmailEvents {
+  days?: number;
+  messages?: number;
+  problems?: number;
+  latest_event?: string | null;
+  by_provider?: Record<string, ProviderStats>;
+  available?: false; // present only when the panel failed to load
+  error?: string;
+}
 interface StatusResponse {
   generated_at: string;
   health: { summary: "pass" | "warn" | "fail"; checks: HealthCheck[] };
   ci: { available: boolean; workflows?: CiWorkflow[]; error?: string };
   digest: DigestMarker | null;
+  email_events: EmailEvents | null;
 }
 
 const REFRESH_MS = 60_000; // auto-refresh cadence
@@ -91,6 +107,24 @@ function digestIsStale(iso: string | null): boolean {
   if (slot.getTime() > Date.now()) slot.setDate(slot.getDate() - 1);
   while (slot.getDay() === 0 || slot.getDay() === 6) slot.setDate(slot.getDate() - 1);
   return sent < slot.getTime();
+}
+
+// A provider needs at least this many messages before its deferral rate is
+// allowed to set the card's tone. Same reasoning as the analyst buy_pct
+// shrinkage (k=5): "1 of 1 deferred" is 100% and means nothing.
+const MIN_MESSAGES_FOR_TONE = 5;
+// Above this share of deferred/bounced messages a provider is throttling us,
+// not just having an off day. Today's incident was 0.67; a healthy provider
+// sits at 0.
+const PROBLEM_RATE_BAD = 0.2;
+const PROBLEM_RATE_WARN = 0.05;
+
+function providerTone(p: ProviderStats): string {
+  if (p.problems === 0) return colors.green;
+  if (p.messages < MIN_MESSAGES_FOR_TONE) return colors.textDim;
+  if (p.problem_rate >= PROBLEM_RATE_BAD) return colors.red;
+  if (p.problem_rate >= PROBLEM_RATE_WARN) return colors.amber;
+  return colors.green;
 }
 
 // Map a CI run to a {label, color}. success→green, failure→red, running→amber,
@@ -266,6 +300,9 @@ export default function StatusClient() {
       {/* ── Email digest notification ─────────────────────────────────────── */}
       <DigestCard digest={digest} loaded={!!data} />
 
+      {/* ── Deliverability (Resend webhook events) ────────────────────────── */}
+      <DeliverabilityCard events={data?.email_events} loaded={!!data} />
+
       {/* ── System health ─────────────────────────────────────────────────── */}
       <div style={card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
@@ -378,6 +415,93 @@ function DigestCard({ digest, loaded }: { digest: DigestMarker | null | undefine
       <h2 style={sectionTitle}>Email digest</h2>
       <div style={{ color: colors.text, fontFamily: "monospace", fontSize: 14, fontWeight: 700 }}>{headline}</div>
       {sub && <div style={{ color: colors.textMuted, fontFamily: "monospace", fontSize: 12, marginTop: 6 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ── Deliverability card ────────────────────────────────────────────────────────
+// Per-provider deferral/bounce rates from the Resend webhook (email_events).
+// Rates are per *message*, not per event — see email_events.recent_summary.
+function DeliverabilityCard({
+  events,
+  loaded,
+}: {
+  events: EmailEvents | null | undefined;
+  loaded: boolean;
+}) {
+  const providers = Object.entries(events?.by_provider || {}).sort(
+    // Worst rate first so a throttling provider is the first thing read;
+    // volume breaks ties so the big providers outrank one-off domains.
+    (a, b) => b[1].problem_rate - a[1].problem_rate || b[1].messages - a[1].messages,
+  );
+
+  const messages = events?.messages ?? 0;
+  const problems = events?.problems ?? 0;
+  const days = events?.days ?? 7;
+
+  let tone: string = colors.textDim;
+  let headline = loaded ? "No delivery events recorded yet." : "Loading…";
+  let sub: string | null = null;
+
+  if (events?.available === false) {
+    headline = "Delivery events unavailable.";
+    sub = events.error || "Is migration 018 applied?";
+  } else if (loaded && messages === 0) {
+    // Deliberately grey, never green: zero problems because zero data looks
+    // identical to perfect health if you only read the rate.
+    sub = "Webhook may not be configured — check the Resend dashboard endpoint.";
+  } else if (loaded && events) {
+    // The webhook sees events on every send, so "no events since the last
+    // expected digest" means it has stopped delivering, not that all is well.
+    const silent = digestIsStale(events.latest_event ?? null);
+    const worst = providers.find(
+      ([, p]) => p.messages >= MIN_MESSAGES_FOR_TONE && p.problem_rate >= PROBLEM_RATE_WARN,
+    );
+    if (silent) {
+      tone = colors.amber;
+      headline = `! No delivery events since ${ago(events.latest_event ?? null)}`;
+      sub = "Expected events from the last digest — the webhook may have stopped.";
+    } else if (worst) {
+      const [name, p] = worst;
+      tone = providerTone(p);
+      headline = `! ${name} deferring · ${p.problems} of ${p.messages} messages (${Math.round(p.problem_rate * 100)}%)`;
+      sub = `${problems} of ${messages} messages affected across all providers · last ${days}d`;
+    } else if (problems > 0) {
+      // Problems exist but no provider has the volume to call it. Must not
+      // render a green tick reading "3 of 3 messages deferred".
+      tone = colors.textDim;
+      headline = `${problems} of ${messages} messages deferred · last ${days}d`;
+      sub = `Under ${MIN_MESSAGES_FOR_TONE} messages per provider — too few to judge yet.`;
+    } else {
+      tone = colors.green;
+      headline = `✓ No delivery problems · ${messages} messages, last ${days}d`;
+      sub = `Newest event ${ago(events.latest_event ?? null)}`;
+    }
+  }
+
+  return (
+    <div style={{ ...card, borderColor: tone, borderLeft: `3px solid ${tone}` }}>
+      <h2 style={sectionTitle}>Deliverability</h2>
+      <div style={{ color: colors.text, fontFamily: "monospace", fontSize: 14, fontWeight: 700 }}>{headline}</div>
+      {sub && <div style={{ color: colors.textMuted, fontFamily: "monospace", fontSize: 12, marginTop: 6 }}>{sub}</div>}
+
+      {providers.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          {providers.map(([name, p]) => (
+            <div key={name} style={rowStyle}>
+              <span style={chip(providerTone(p))}>{Math.round(p.problem_rate * 100)}%</span>
+              <span style={{ color: colors.text, minWidth: 110, flexShrink: 0 }}>{name}</span>
+              <span style={{ color: colors.textMuted, minWidth: 150, flexShrink: 0 }}>
+                {p.problems} of {p.messages} messages
+              </span>
+              <span style={{ color: colors.textDim, flex: 1 }}>
+                {p.latest_problem ? `last issue ${ago(p.latest_problem)}` : ""}
+                {p.problems > 0 && p.messages < MIN_MESSAGES_FOR_TONE ? " · too few to judge" : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
