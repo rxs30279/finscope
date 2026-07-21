@@ -300,7 +300,7 @@ export default function StatusClient() {
       {/* ── Email digest notification ─────────────────────────────────────── */}
       <DigestCard digest={digest} loaded={!!data} />
 
-      {/* ── Deliverability (Resend webhook events) ────────────────────────── */}
+      {/* ── Deliverability (delivery events) ──────────────────────────────── */}
       <DeliverabilityCard events={data?.email_events} loaded={!!data} />
 
       {/* ── System health ─────────────────────────────────────────────────── */}
@@ -420,7 +420,8 @@ function DigestCard({ digest, loaded }: { digest: DigestMarker | null | undefine
 }
 
 // ── Deliverability card ────────────────────────────────────────────────────────
-// Per-provider deferral/bounce rates from the Resend webhook (email_events).
+// Per-provider deferral/bounce rates from the delivery-event log (email_events),
+// fed by the Resend webhook and/or the SES SQS drain depending on the sender.
 // Rates are per *message*, not per event — see email_events.recent_summary.
 function DeliverabilityCard({
   events,
@@ -449,9 +450,9 @@ function DeliverabilityCard({
   } else if (loaded && messages === 0) {
     // Deliberately grey, never green: zero problems because zero data looks
     // identical to perfect health if you only read the rate.
-    sub = "Webhook may not be configured — check the Resend dashboard endpoint.";
+    sub = "No event source recorded yet — check the Resend webhook, or the ses_events drain cron.";
   } else if (loaded && events) {
-    // The webhook sees events on every send, so "no events since the last
+    // The event source sees events on every send, so "no events since the last
     // expected digest" means it has stopped delivering, not that all is well.
     const silent = digestIsStale(events.latest_event ?? null);
     const worst = providers.find(
@@ -460,7 +461,7 @@ function DeliverabilityCard({
     if (silent) {
       tone = colors.amber;
       headline = `! No delivery events since ${ago(events.latest_event ?? null)}`;
-      sub = "Expected events from the last digest — the webhook may have stopped.";
+      sub = "Expected events from the last digest — the event feed may have stopped.";
     } else if (worst) {
       const [name, p] = worst;
       tone = providerTone(p);

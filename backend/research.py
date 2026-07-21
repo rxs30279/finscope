@@ -89,11 +89,12 @@ def _notify_new_comment(post_title: str, post_slug: str, author: str,
     """Email the owner that a comment is waiting in the moderation queue.
 
     Runs as a BackgroundTask after the response is sent, and swallows every
-    failure — a Resend outage must never affect (or reveal anything to) the
-    commenter. Reuses feedback.py's Resend relay + recipient resolution.
+    failure — an email-provider outage must never affect (or reveal anything
+    to) the commenter. Reuses feedback.py's recipient resolution.
     """
     try:
-        from feedback import _send_via_resend, _feedback_to  # same env / sender
+        from emailer import send_email
+        from feedback import _feedback_to  # same recipient as the contact form
         base = (os.environ.get("PUBLIC_BASE_URL") or "https://app.alphamoveai.co.uk").rstrip("/")
         admin_url = f"{base}/research/admin"
         text = (
@@ -115,13 +116,14 @@ def _notify_new_comment(post_title: str, post_slug: str, author: str,
             f'<p><a href="{html.escape(admin_url)}">Open the moderation queue</a></p>'
             '</div>'
         )
-        _send_via_resend({
-            "from": os.environ.get("DIGEST_FROM", "Alpha Move AI <digest@alphamoveai.co.uk>"),
-            "to": [_feedback_to()],
-            "subject": f"New research comment — {post_title}",
-            "text": text,
-            "html": html_body,
-        })
+        send_email(
+            to=_feedback_to(),
+            subject=f"New research comment — {post_title}",
+            text=text,
+            html=html_body,
+            from_addr=os.environ.get("DIGEST_FROM",
+                                     "Alpha Move AI <digest@alphamoveai.co.uk>"),
+        )
     except Exception:
         pass  # never let notification failures surface anywhere
 

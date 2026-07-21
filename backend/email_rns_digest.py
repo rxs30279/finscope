@@ -7,17 +7,22 @@ read-only — does not trigger ingest, summary fetching, or DeepSeek ranking.
 The pipeline that populates llm_* columns runs on its own GitHub Actions
 schedule (refresh-rns.yml).
 
-Recipients come from a Resend Segment (`RESEND_SEGMENT_ID`). If unset,
-falls back to the single `DIGEST_TO` address — useful for local dev and
-as a safety net during rollout. Each email carries RFC 8058 one-click
+Recipients come from the `subscribers` table (migration 019). Only if that
+list is empty or unreadable does it fall back to the single `DIGEST_TO`
+address — useful for local dev, and a safety net, but a *degraded* outcome
+that healthcheck.py deliberately flags: a silent fallback to DIGEST_TO went
+unnoticed from 03 Jun to 10 Jul 2026. Each email carries RFC 8058 one-click
 List-Unsubscribe headers + a visible footer link.
 
+Note there is no env var gating list mode. There used to be
+(`RESEND_SEGMENT_ID`), and it was a trap: removing the vendor's env var would
+have quietly turned the whole digest into a one-recipient send.
+
 Environment:
-  RESEND_API_KEY        — required, https://resend.com/api-keys
-  RESEND_SEGMENT_ID     — optional; if set, send to all active contacts
-  UNSUBSCRIBE_SECRET    — required when segment mode is on (HMAC secret)
+  RESEND_API_KEY        — required when EMAIL_PROVIDER=resend
+  UNSUBSCRIBE_SECRET    — required (HMAC secret for one-click unsubscribe)
   PUBLIC_BASE_URL       — public app URL used in unsub links (e.g. https://...)
-  DIGEST_TO             — fallback single recipient (used only when no segment)
+  DIGEST_TO             — fallback single recipient (used only if the list is empty)
   DIGEST_FROM           — sender   (default: digest@alphamoveai.co.uk)
   DIGEST_SEND_GAP_SECONDS        — min seconds between sends to the SAME mailbox
                                    provider (default 2; 0 disables pacing)
@@ -28,11 +33,8 @@ import sys, os
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
 
-import json
 import html
 import time
-import urllib.request
-import urllib.error
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -558,50 +560,6 @@ def _render_html(rows: list[dict], total_all: int = 0, sub_footer_html: str = ""
 </body></html>"""
 
 
-# ── Resend ────────────────────────────────────────────────────────────────────
-
-def _send_via_resend(
-    subject: str,
-    html_body: str,
-    to_addr: str,
-    from_addr: str,
-    api_key: str,
-    extra_headers: dict | None = None,
-) -> dict:
-    body: dict = {
-        "from":    from_addr,
-        "to":      [to_addr],
-        "subject": subject,
-        "html":    html_body,
-    }
-    if extra_headers:
-        # Resend's /emails endpoint accepts a top-level `headers` object
-        # of custom RFC 5322 headers (List-Unsubscribe, etc).
-        body["headers"] = extra_headers
-
-    payload = json.dumps(body).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type":  "application/json",
-            # Resend is fronted by Cloudflare; the default urllib UA
-            # ("Python-urllib/3.x") trips bot protection (CF error 1010).
-            "User-Agent":    "FINScope-RNS-Digest/1.0",
-            "Accept":        "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Resend HTTP {e.code}: {body}") from e
-
-
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def _sub_footer(unsub_url: str, manage_url: str) -> str:
@@ -698,12 +656,13 @@ def _pace(provider: str, last_send_at: dict[str, float], slept: float) -> float:
     return slept + wait
 
 
-def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
+def _send_one(from_addr: str, subject: str, rows: list[dict],
               to_email: str, base_url: str, total_all: int = 0) -> bool:
     """Render + send one digest email with per-recipient unsub plumbing.
     Returns True on success, False on failure (errors logged, not raised)."""
     try:
         from subscribers import build_unsubscribe_url  # local import to avoid cycles
+        from emailer import send_email
         unsub_url  = build_unsubscribe_url(to_email)
         manage_url = f"{base_url.rstrip('/')}/subscribe" if base_url else "/subscribe"
         footer = _sub_footer(unsub_url, manage_url)
@@ -712,21 +671,21 @@ def _send_one(api_key: str, from_addr: str, subject: str, rows: list[dict],
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         }
         html_body = _render_html(rows, total_all, sub_footer_html=footer)
-        result = _send_via_resend(subject, html_body, to_email, from_addr, api_key, extra_headers=headers)
-        print(f"[digest] sent to {to_email} — id={result.get('id')}")
+        message_id = send_email(to=to_email, subject=subject, html=html_body,
+                                from_addr=from_addr, headers=headers)
+        print(f"[digest] sent to {to_email} — id={message_id}")
         return True
     except Exception as e:
         print(f"[digest] FAILED for {to_email}: {e}")
         return False
 
 
-def _dry_run_report(rows: list[dict], total_all: int, subject: str,
-                    segment_id: str | None, api_key: str | None) -> dict:
+def _dry_run_report(rows: list[dict], total_all: int, subject: str) -> dict:
     """Render the digest and report what a real send *would* do, without ever
-    calling Resend. Backs `--dry-run` and /api/digest?dry_run=true so the full
-    fetch → render path can be exercised as a smoke check without emailing
-    anyone. Returns a stats dict (see main()); exit_code 0 on a valid render,
-    1 if the render or validation fails."""
+    contacting the email provider. Backs `--dry-run` and /api/digest?dry_run=true
+    so the full fetch → render path can be exercised as a smoke check without
+    emailing anyone. Returns a stats dict (see main()); exit_code 0 on a valid
+    render, 1 if the render or validation fails."""
     try:
         html_body = _render_html(rows, total_all)
     except Exception as e:
@@ -737,17 +696,19 @@ def _dry_run_report(rows: list[dict], total_all: int, subject: str,
               f"(subject={subject!r}, html_len={len(html_body)})")
         return {"exit_code": 1, "mode": "dry_run", "recipients": 0}
 
-    # How many recipients a real send would hit right now.
+    # How many recipients a real send would hit right now. Counted
+    # unconditionally: the old version gated this on the Resend env vars, so a
+    # dry run reported "1 recipient" whenever they were absent — the same
+    # misleading answer a genuinely broken list mode would give.
     recipients = 0
-    if segment_id and api_key:
-        try:
-            from subscribers import list_active_contacts
-            recipients = sum(
-                1 for c in list_active_contacts() if (c.get("email") or "").strip()
-            )
-        except Exception as e:
-            print(f"[digest] DRY RUN: could not count segment contacts: {e}")
-    elif (os.environ.get("DIGEST_TO") or "").strip():
+    try:
+        from subscribers import list_active_contacts
+        recipients = sum(
+            1 for c in list_active_contacts() if (c.get("email") or "").strip()
+        )
+    except Exception as e:
+        print(f"[digest] DRY RUN: could not count subscribers: {e}")
+    if not recipients and (os.environ.get("DIGEST_TO") or "").strip():
         recipients = 1
 
     print(f'[digest] DRY RUN: would send "{subject}" '
@@ -763,16 +724,25 @@ def _send_digest(dry_run: bool = False) -> dict:
     history records which path ran and to how many recipients:
       exit_code   — 0 ok, 1 config/render failure, 2 partial segment send
       mode        — "segment" | "fallback" | "none" | "dry_run"
+                    ("segment" predates the move off Resend Segments and now
+                    just means "sent to the subscriber list". Kept verbatim
+                    because _send_status, healthcheck.py's digest.sent check
+                    and the /status card all match on the string.)
       recipients  — addresses a send targeted (or would target, for dry_run)
       sent/failed — per-recipient outcomes (segment mode only)
     """
-    api_key = os.environ.get("RESEND_API_KEY")
-    if not api_key and not dry_run:
-        print("[digest] RESEND_API_KEY missing — aborting")
-        return {"exit_code": 1, "mode": "none", "recipients": 0}
+    # Provider-aware, so this keeps working after EMAIL_PROVIDER flips to ses
+    # (where there is no Resend key to check). Checked once up front rather
+    # than per recipient: a missing credential would otherwise fail 54 times
+    # and report a "partial send" instead of a config error.
+    if not dry_run:
+        from emailer import preflight
+        problem = preflight()
+        if problem:
+            print(f"[digest] {problem} — aborting")
+            return {"exit_code": 1, "mode": "none", "recipients": 0}
 
     from_addr = os.environ.get("DIGEST_FROM", _DEFAULT_FROM)
-    segment_id = os.environ.get("RESEND_SEGMENT_ID")
     base_url   = os.environ.get("PUBLIC_BASE_URL", "")
 
     rows = _fetch_rows(_WINDOW_H)
@@ -787,41 +757,40 @@ def _send_digest(dry_run: bool = False) -> dict:
 
     # ── Dry run: render + validate, never send ────────────────────────────────
     if dry_run:
-        return _dry_run_report(rows, total_all, subject, segment_id, api_key)
+        return _dry_run_report(rows, total_all, subject)
 
-    # ── Segment mode ──────────────────────────────────────────────────────────
-    if segment_id:
-        try:
-            from subscribers import list_active_contacts
-            contacts = list_active_contacts()
-        except Exception as e:
-            print(f"[digest] FAILED to list contacts: {e} — falling back to DIGEST_TO")
-            contacts = []
+    # ── List mode ─────────────────────────────────────────────────────────────
+    try:
+        from subscribers import list_active_contacts
+        contacts = list_active_contacts()
+    except Exception as e:
+        print(f"[digest] FAILED to list contacts: {e} — falling back to DIGEST_TO")
+        contacts = []
 
-        if contacts:
-            sent = failed = 0
-            emails = [e for c in contacts if (e := (c.get("email") or "").strip())]
-            # Spread same-provider recipients across the run, then hold a floor
-            # between them — see the pacing notes above _send_one.
-            ordered = _interleave_by_provider(emails)
-            last_send_at: dict[str, float] = {}
-            slept = 0.0
-            for email in ordered:
-                provider = provider_of(email.rsplit("@", 1)[-1] if "@" in email else None)
-                slept = _pace(provider, last_send_at, slept)
-                last_send_at[provider] = time.monotonic()
-                if _send_one(api_key, from_addr, subject, rows, email, base_url, total_all):
-                    sent += 1
-                else:
-                    failed += 1
-            if slept:
-                print(f"[digest] paced sends: slept {slept:.1f}s total "
-                      f"(gap {_SEND_GAP_S}s, budget {_SEND_GAP_BUDGET_S}s)")
-            print(f"[digest] segment send complete: {sent} sent, {failed} failed (of {len(contacts)})")
-            return {"exit_code": 0 if failed == 0 else 2, "mode": "segment",
-                    "recipients": len(contacts), "sent": sent, "failed": failed}
+    if contacts:
+        sent = failed = 0
+        emails = [e for c in contacts if (e := (c.get("email") or "").strip())]
+        # Spread same-provider recipients across the run, then hold a floor
+        # between them — see the pacing notes above _send_one.
+        ordered = _interleave_by_provider(emails)
+        last_send_at: dict[str, float] = {}
+        slept = 0.0
+        for email in ordered:
+            provider = provider_of(email.rsplit("@", 1)[-1] if "@" in email else None)
+            slept = _pace(provider, last_send_at, slept)
+            last_send_at[provider] = time.monotonic()
+            if _send_one(from_addr, subject, rows, email, base_url, total_all):
+                sent += 1
+            else:
+                failed += 1
+        if slept:
+            print(f"[digest] paced sends: slept {slept:.1f}s total "
+                  f"(gap {_SEND_GAP_S}s, budget {_SEND_GAP_BUDGET_S}s)")
+        print(f"[digest] segment send complete: {sent} sent, {failed} failed (of {len(contacts)})")
+        return {"exit_code": 0 if failed == 0 else 2, "mode": "segment",
+                "recipients": len(contacts), "sent": sent, "failed": failed}
 
-        print("[digest] segment configured but empty — falling back to DIGEST_TO")
+    print("[digest] subscriber list empty — falling back to DIGEST_TO")
 
     # ── Single-recipient fallback (original behaviour) ────────────────────────
     to_addr = (os.environ.get("DIGEST_TO") or "").strip()
@@ -844,9 +813,11 @@ def _send_digest(dry_run: bool = False) -> dict:
     except Exception as e:
         print(f"[digest] could not build unsub footer for fallback: {e}")
 
+    from emailer import send_email
     html_body = _render_html(rows, total_all, sub_footer_html=footer)
-    result = _send_via_resend(subject, html_body, to_addr, from_addr, api_key, extra_headers=headers)
-    print(f"[digest] sent to {to_addr} — id={result.get('id')}")
+    message_id = send_email(to=to_addr, subject=subject, html=html_body,
+                            from_addr=from_addr, headers=headers)
+    print(f"[digest] sent to {to_addr} — id={message_id}")
     return {"exit_code": 0, "mode": "fallback", "recipients": 1, "sent": 1, "failed": 0}
 
 

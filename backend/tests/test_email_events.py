@@ -154,7 +154,8 @@ def test_flattens_event(client, inserted):
     assert row["email_id"] == "c6de1612-3b09-43b3-ad42-480adce83335"
     assert row["recipient"] == "benjaminjackmoore@hotmail.co.uk"  # lowercased
     assert row["recipient_domain"] == "hotmail.co.uk"
-    assert row["svix_id"] == "msg_1"
+    assert row["event_id"] == "msg_1"
+    assert row["provider"] == "resend"
     # Event time and message-accepted time are distinct — the ~2h45m gap between
     # them is the deferral lag this table exists to make measurable.
     assert row["occurred_at"].hour == 9

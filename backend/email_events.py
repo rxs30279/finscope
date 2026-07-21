@@ -127,7 +127,11 @@ def _parse_ts(value) -> datetime | None:
 
 def _row(payload: dict, svix_id: str) -> dict | None:
     """Flatten a Resend event into the email_events shape, or None if it isn't
-    a recognisable email event (Svix ping/test deliveries land here too)."""
+    a recognisable email event (Svix ping/test deliveries land here too).
+
+    The Svix delivery id lands in the generic `event_id` column — SES's
+    equivalent (the SNS MessageId) shares it, see migration 020.
+    """
     event_type = payload.get("type")
     data = payload.get("data")
     if not event_type or not isinstance(data, dict):
@@ -149,7 +153,8 @@ def _row(payload: dict, svix_id: str) -> dict | None:
     detail = {k: data[k] for k in _DETAIL_KEYS if k in data}
 
     return {
-        "svix_id": svix_id,
+        "event_id": svix_id,
+        "provider": "resend",
         "email_id": str(email_id),
         "event_type": str(event_type),
         "recipient": recipient,
@@ -172,12 +177,12 @@ def _insert(row: dict) -> None:
         cur.execute(
             """
             INSERT INTO email_events (
-                svix_id, email_id, event_type, recipient, recipient_domain,
-                subject, occurred_at, email_created_at, detail
-            ) VALUES (%(svix_id)s, %(email_id)s, %(event_type)s, %(recipient)s,
-                      %(recipient_domain)s, %(subject)s, %(occurred_at)s,
-                      %(email_created_at)s, %(detail)s)
-            ON CONFLICT (svix_id) DO NOTHING
+                event_id, provider, email_id, event_type, recipient,
+                recipient_domain, subject, occurred_at, email_created_at, detail
+            ) VALUES (%(event_id)s, %(provider)s, %(email_id)s, %(event_type)s,
+                      %(recipient)s, %(recipient_domain)s, %(subject)s,
+                      %(occurred_at)s, %(email_created_at)s, %(detail)s)
+            ON CONFLICT (event_id) DO NOTHING
             """,
             {**row, "detail": psycopg2.extras.Json(row["detail"]) if row["detail"] else None},
         )
