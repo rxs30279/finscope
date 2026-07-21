@@ -27,6 +27,7 @@ from showcase import router as showcase_router
 from research import router as research_router, published_slugs as _research_slugs
 from dividends import router as dividends_router
 from shorts import router as shorts_router
+from email_events import router as email_events_router, recent_summary as _email_event_summary
 from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
 from admin_auth import require_admin_token
@@ -55,6 +56,7 @@ app.include_router(showcase_router)
 app.include_router(research_router)
 app.include_router(dividends_router)
 app.include_router(shorts_router)
+app.include_router(email_events_router)
 
 # DB pool + helpers live in db.py (one process-wide pool, shared by every
 # router — see item #6 of the 2026-07-12 review). Re-exported here so existing
@@ -2385,6 +2387,18 @@ def _digest_marker():
     }
 
 
+def _email_events():
+    """Resend delivery-problem rollup (email_events.recent_summary).
+
+    Swallows its own errors so a missing migration 018 leaves this panel null
+    instead of 500-ing the whole status page — same independent-degradation rule
+    the CI and health panels follow."""
+    try:
+        return _email_event_summary()
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
 @app.get("/api/status", dependencies=[Depends(require_admin_token)])
 def status(fresh_ci: bool = Query(default=False)):
     """Admin-only system status: live health (reuses healthcheck.py against the
@@ -2404,6 +2418,7 @@ def status(fresh_ci: bool = Query(default=False)):
         "health": {"summary": _summarize_health(checks), "checks": checks},
         "ci": _ci_latest_runs(force=fresh_ci),
         "digest": _digest_marker(),
+        "email_events": _email_events(),
     }
 
 
