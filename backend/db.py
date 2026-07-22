@@ -13,6 +13,8 @@ Public API:
                          dropped connection (SSL/idle timeout)
     connection()       — context manager yielding a pooled raw connection for
                          writes / custom cursors (caller manages commit)
+    advisory_lock(key) — context manager for a cross-process mutex, used by the
+                         cron entry points to stop overlapping runs
 """
 import os
 from contextlib import contextmanager
@@ -40,6 +42,20 @@ DB_CONFIG = {
 # Override via env if a load profile ever needs it.
 _POOL_MIN = int(os.environ.get("DB_POOL_MIN", "1"))
 _POOL_MAX = int(os.environ.get("DB_POOL_MAX", "20"))
+
+# Port used *only* by advisory_lock(). Everything else goes through Supabase's
+# transaction-mode pooler (6543), where a session-level advisory lock is worse
+# than useless, in two compounding ways. Consecutive statements can be routed to
+# different backends, so pg_try_advisory_lock returns true to every caller and
+# excludes nobody. And the lock it takes outlives the client: the pooler keeps
+# that backend alive, so the lock leaks and is held forever by an idle session
+# no disconnect will clear. Both were observed against prod on 6543 — two
+# concurrent holders each got the lock, and one leaked onto backend pid 2993712
+# until it was terminated by hand.
+#
+# NEVER take an advisory lock over the pooled connection. The session-mode
+# pooler pins one backend per connection, which is the property a lock needs.
+_LOCK_PORT = os.environ.get("DB_SESSION_PORT", "5432")
 
 _pool = None
 
@@ -87,3 +103,39 @@ def connection():
         yield conn
     finally:
         pool.putconn(conn)
+
+
+@contextmanager
+def advisory_lock(key: int):
+    """Cross-process mutex: yields True if this process took the lock, False if
+    another process already holds it. Never blocks — the caller decides whether
+    losing the race is fatal or just a no-op exit.
+
+    Opens its own connection on `_LOCK_PORT` rather than borrowing from the pool,
+    for two reasons. The pool speaks to the transaction-mode pooler, where these
+    locks do not work at all (see _LOCK_PORT). And an advisory lock is bound to
+    the session, so a pooled connection handed back mid-run would either release
+    the lock early or carry it into an unrelated caller.
+
+    Closing the connection on exit releases the lock. Because that release is
+    server-side, it also covers a crashed or killed process — no stale lock can
+    outlive the run that took it, so there is no timeout or reaper to maintain.
+
+    Fails *open*: if the lock connection cannot be established, the caller is
+    told it holds the lock. Duplicated work is a cost; a pipeline that refuses
+    to run because it could not reach the session pooler is an outage.
+    """
+    try:
+        conn = psycopg2.connect(**dict(DB_CONFIG, port=_LOCK_PORT))
+    except Exception as e:
+        print(f"[db] advisory lock unavailable ({type(e).__name__}: {e}) — proceeding unlocked")
+        yield True
+        return
+    try:
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+        (acquired,) = cur.fetchone()
+        yield bool(acquired)
+    finally:
+        conn.close()

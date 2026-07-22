@@ -8,6 +8,10 @@ this process exits, so the work can never be spun down mid-run.
 
 Exits non-zero on failure so the Render cron run is marked failed (visible in
 the dashboard and alertable), rather than failing silently.
+
+Only one run may be in flight at a time (see RNS_PIPELINE_LOCK_KEY): the
+schedules deliberately overlap, so a run that arrives while another is working
+exits 0 immediately rather than duplicating it.
 """
 
 import os
@@ -22,12 +26,29 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
+from db import advisory_lock
 from rns import _run_ingest, _backfill_summaries, _prune_old
 from rns_llm import _rank_pending
-from refresh_rns import _compute_max_pages
+from refresh_rns import _compute_max_pages, RNS_PIPELINE_LOCK_KEY
 
 
 def main() -> int:
+    """Take the pipeline lock, then run. Losing the lock is a normal outcome,
+    not a failure: two Dokploy schedules cover the morning drop (a burst every
+    3 min from 07:01, plus a 15-min sweep from 07:00), while a full run takes
+    ~5-8 minutes to rank the 07:00 batch. Without the lock those runs overlap,
+    and because _rank_pending selects on `llm_processed_at IS NULL` with no row
+    claim, each overlapping run re-ranks whatever the previous one hasn't
+    written yet — duplicate DeepSeek calls for identical scores.
+    """
+    with advisory_lock(RNS_PIPELINE_LOCK_KEY) as acquired:
+        if not acquired:
+            print("[rns] another pipeline run is in flight — skipping this run")
+            return 0
+        return _run_pipeline()
+
+
+def _run_pipeline() -> int:
     print(f"[rns] pipeline starting at {datetime.now(timezone.utc).isoformat()}")
     try:
         # Stage 1: Ingest

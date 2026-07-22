@@ -19,6 +19,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
 
@@ -42,6 +43,13 @@ _DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 # keep the old deepseek-chat behaviour and its small max_tokens budgets.
 _THINKING_ON = {"thinking": {"type": "enabled"}}
 _THINKING_OFF = {"thinking": {"type": "disabled"}}
+
+# Concurrent DeepSeek calls per ranking run. Kept deliberately low: the win is
+# in overlapping network waits, not in saturating the API, and a run that gets
+# itself rate-limited would trade a fast batch for a batch full of errors. The
+# shared DB pool (db.py, max 20) comfortably covers this many borrowers.
+# Set to 1 to rank serially.
+_RANK_WORKERS = max(1, int(os.environ.get("RNS_RANK_WORKERS", "5")))
 
 _client = None
 
@@ -652,7 +660,18 @@ def _rank_one(row_id: int) -> dict:
 
 
 def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -> dict:
-    """Rank recent tier A/B rows that haven't been processed yet."""
+    """Rank recent tier A/B rows that haven't been processed yet.
+
+    Ranking is I/O-bound — nearly all of each row's ~8-16s is spent waiting on
+    DeepSeek — so the calls run through a small thread pool rather than end to
+    end. Sequentially a 43-story morning took ~340s, which pushed the batch's
+    completion right up against the 07:30 digest send; concurrency is what makes
+    an earlier send safe. `RNS_RANK_WORKERS=1` restores the serial behaviour.
+
+    Note this is deliberate, bounded concurrency inside ONE run. It is not the
+    same as the overlapping cron runs that used to rank in parallel by accident,
+    re-doing each other's rows — see run_rns.py's pipeline lock.
+    """
     rows = _query(
         """
         SELECT id
@@ -667,13 +686,33 @@ def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -
     )
 
     ranked = errors = 0
-    for r in rows:
+
+    def _attempt(row_id: int) -> bool:
         try:
-            _rank_one(r["id"])
-            ranked += 1
+            _rank_one(row_id)
+            return True
         except Exception as e:
-            print(f"[rns_llm] rank failed for {r['id']}: {e}")
-            errors += 1
+            # Per-row isolation, unchanged from the serial version: one bad row
+            # (or one rate-limited call) must never sink the rest of the batch.
+            print(f"[rns_llm] rank failed for {row_id}: {e}")
+            return False
+
+    workers = min(_RANK_WORKERS, len(rows))
+    if workers > 1:
+        # Build the shared client once here rather than letting several threads
+        # race _get_client()'s lazy init and construct throwaway duplicates.
+        _get_client()
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rns-rank") as pool:
+            for ok in pool.map(_attempt, [r["id"] for r in rows]):
+                ranked += ok
+                errors += not ok
+    else:
+        for r in rows:
+            if _attempt(r["id"]):
+                ranked += 1
+            else:
+                errors += 1
+
     result = {"candidates": len(rows), "ranked": ranked, "errors": errors}
     print(f"[rns_llm] ranking done — {result}")
     return result

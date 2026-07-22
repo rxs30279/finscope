@@ -39,6 +39,12 @@ CATCHUP_BUFFER_PAGES = 3    # extra headroom beyond the computed need
 CATCHUP_PAGE_CAP     = 24   # investegate's hard listing limit — page 25+ returns empty
 CATCHUP_THRESHOLD_H  = 6    # don't bother bumping unless we're 6h+ stale
 
+# Fixed 64-bit key for the pipeline-wide advisory lock ('RNS\0' as an int).
+# Lives here because this module is imported by run_rns.py, so both entry points
+# share one definition — two keys would mean two locks and no mutual exclusion.
+# Any other advisory lock added to this database must not reuse this value.
+RNS_PIPELINE_LOCK_KEY = 0x524E5300
+
 
 def _compute_max_pages() -> tuple[int, str]:
     """Pick max_pages based on staleness of stored data.
@@ -81,18 +87,27 @@ def _stage(name: str, fn, *args, **kwargs) -> dict:
 
 
 if __name__ == "__main__":
-    t_start = time.time()
-    print(f"[rns-pipeline] starting at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    # Shares the lock with run_rns.py so a manual run here can't race the
+    # Dokploy crons — both would otherwise re-rank the same pending rows.
+    from db import advisory_lock
 
-    max_pages, reason = _compute_max_pages()
-    print(f"[rns-pipeline] {reason}")
+    with advisory_lock(RNS_PIPELINE_LOCK_KEY) as _acquired:
+        if not _acquired:
+            print("[rns-pipeline] another pipeline run is in flight — nothing to do")
+            sys.exit(0)
 
-    ingest   = _stage("ingest",    _run_ingest, max_pages=max_pages, stop_on_known=True, sleep_s=1.5)
-    summary  = _stage("summaries", _backfill_summaries, limit=50, sleep_s=1.0, tiers=("A", "B"))
-    ranking  = _stage("rank",      _rank_pending, limit=50, tiers=("A", "B"), hours=48)
+        t_start = time.time()
+        print(f"[rns-pipeline] starting at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    total = round(time.time() - t_start, 1)
-    print(f"[rns-pipeline] complete in {total}s")
-    print(f"  ingest:    {ingest}")
-    print(f"  summaries: {summary}")
-    print(f"  ranking:   {ranking}")
+        max_pages, reason = _compute_max_pages()
+        print(f"[rns-pipeline] {reason}")
+
+        ingest   = _stage("ingest",    _run_ingest, max_pages=max_pages, stop_on_known=True, sleep_s=1.5)
+        summary  = _stage("summaries", _backfill_summaries, limit=50, sleep_s=1.0, tiers=("A", "B"))
+        ranking  = _stage("rank",      _rank_pending, limit=50, tiers=("A", "B"), hours=48)
+
+        total = round(time.time() - t_start, 1)
+        print(f"[rns-pipeline] complete in {total}s")
+        print(f"  ingest:    {ingest}")
+        print(f"  summaries: {summary}")
+        print(f"  ranking:   {ranking}")
