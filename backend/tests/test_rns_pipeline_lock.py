@@ -97,12 +97,18 @@ def test_lock_connects_on_the_session_port_not_the_pool_port(monkeypatch):
         return _Conn()
 
     monkeypatch.setattr(db.psycopg2, "connect", _fake_connect)
+    # Pin both ports to known, *different* values. Reading them from the ambient
+    # config instead made this test pass only where a .env set DB_PORT=6543 — on
+    # CI both defaulted to 5432 and it failed on `'5432' != '5432'`, which said
+    # nothing about the code under test.
+    monkeypatch.setitem(db.DB_CONFIG, "port", "6543")
+    monkeypatch.setattr(db, "_LOCK_PORT", "5432")
+
     with db.advisory_lock(123):
         pass
 
-    assert captured["port"] == db._LOCK_PORT
-    assert captured["port"] != db.DB_CONFIG["port"], (
-        "advisory lock must not use the transaction-mode pooler port"
+    assert captured["port"] == "5432", (
+        "advisory lock must connect on the session port, not the pooled one"
     )
 
 
