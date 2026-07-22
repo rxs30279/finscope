@@ -179,6 +179,49 @@ def test_keeps_bounce_detail(client, inserted):
     }
 
 
+# ── bounced_at wiring ─────────────────────────────────────────────────────────
+
+def _bounce_payload(bounce: dict, to="info@bioseekers.com") -> dict:
+    return {
+        "type": "email.bounced",
+        "created_at": "2026-07-21T09:14:02.000Z",
+        "data": {"email_id": "abc", "to": [to], "bounce": bounce},
+    }
+
+
+@pytest.fixture
+def bounce_calls(monkeypatch):
+    import ses_events
+    calls = []
+    monkeypatch.setattr(ses_events, "_record_bounce", lambda *a: calls.append(a))
+    return calls
+
+
+def test_permanent_bounce_stamps_bounced_at(client, inserted, bounce_calls):
+    _post(client, _bounce_payload(
+        {"type": "Permanent", "subType": "General", "message": "550 5.1.1"}))
+    assert len(bounce_calls) == 1
+    recipient, _occurred_at, reason = bounce_calls[0]
+    assert recipient == "info@bioseekers.com"
+    assert reason == "550 5.1.1"
+
+
+def test_transient_bounce_does_not_stamp_bounced_at(client, inserted, bounce_calls):
+    _post(client, _bounce_payload(
+        {"type": "Transient", "subType": "MailboxFull"}))
+    assert bounce_calls == []
+
+
+def test_bounce_reason_falls_back_to_type_when_no_message(client, inserted, bounce_calls):
+    _post(client, _bounce_payload({"type": "Permanent", "subType": "General"}))
+    assert bounce_calls[0][2] == "Permanent/General"
+
+
+def test_delivery_event_does_not_stamp_bounced_at(client, inserted, bounce_calls):
+    _post(client)  # DELAYED payload, not a bounce
+    assert bounce_calls == []
+
+
 def test_ignores_non_email_payload(client, inserted):
     """Svix ping/test deliveries reach the same URL — 200 without storing, since
     a non-2xx would put them into a multi-hour retry loop."""

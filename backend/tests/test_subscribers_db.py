@@ -43,6 +43,7 @@ class _FakeCursor:
 
     def execute(self, sql, params=None):
         text = " ".join(sql.split())
+        self.state.setdefault("executed_sql", []).append(text)
         email = params[0]
         if text.startswith("INSERT INTO subscribers"):
             if email in self.state["active"]:
@@ -93,8 +94,20 @@ def fake_db(monkeypatch):
 
     def _query(sql, params=None):
         text = " ".join(sql.split())
-        assert "FROM subscribers" in text and "NOT unsubscribed" in text, text
-        return [{"email": e} for e in state["active"]]
+        if text.startswith("SELECT email FROM subscribers"):
+            assert "NOT unsubscribed" in text, text
+            return [{"email": e} for e in state["active"]]
+        if text.startswith("SELECT COUNT(*)"):
+            assert "NOT unsubscribed" in text, text
+            return [{"n": len(state["active"])}]
+        if text.startswith("SELECT unsubscribed FROM subscribers WHERE email"):
+            email = params[0]
+            if email in state["active"]:
+                return [{"unsubscribed": False}]
+            if email in state["unsubscribed"]:
+                return [{"unsubscribed": True}]
+            return []
+        raise AssertionError(f"unexpected SQL: {text}")
 
     monkeypatch.setattr(subscribers, "connection", _connection)
     monkeypatch.setattr(subscribers, "query", _query)
@@ -133,6 +146,21 @@ def test_signup_reactivates_unsubscribed_address(wired):
     result = subscribers.signup(subscribers.SignupBody(email="back@example.com"))
     assert result["status"] == "reactivated"
     assert wired["active"] == ["back@example.com"]
+
+
+def test_reactivation_keeps_unsubscribed_at_and_stamps_resubscribed_at(wired):
+    """migration 019's rationale: re-signup after unsubscribe must not look
+    like a fresh opt-in when a complaint is investigated. unsubscribed_at is
+    the record of the LAST opt-out and must survive reactivation; the new
+    resubscribed_at column is what stamps the opt-in, conditionally on the
+    row having actually been unsubscribed."""
+    wired["unsubscribed"].append("back@example.com")
+    subscribers.signup(subscribers.SignupBody(email="back@example.com"))
+
+    insert_sql = next(s for s in wired["executed_sql"] if s.startswith("INSERT INTO subscribers"))
+    assert "unsubscribed_at = NULL" not in insert_sql
+    assert "resubscribed_at" in insert_sql
+    assert "CASE WHEN subscribers.unsubscribed" in insert_sql
 
 
 def test_signup_rejects_malformed_address(wired):

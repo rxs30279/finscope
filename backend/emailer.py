@@ -226,5 +226,7 @@ def preflight() -> str | None:
                    if not os.environ.get(v)]
         if missing:
             return f"{', '.join(missing)} missing"
+        if not os.environ.get("SES_CONFIGURATION_SET"):
+            return "SES_CONFIGURATION_SET missing — sends would emit no delivery events"
         return None
     return f"unknown EMAIL_PROVIDER {provider!r}"

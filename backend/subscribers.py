@@ -86,13 +86,16 @@ def signup(body: SignupBody):
     # previously-unsubscribed) address is rejected once the list is full.
     cap = _max_subscribers()
     try:
-        active = list_active_contacts()
+        already_unsubscribed = _is_unsubscribed(email)
     except RuntimeError as e:
         raise HTTPException(502, f"Subscriber lookup failed: {e}")
-    already_active = any((c.get("email") or "").lower() == email for c in active)
-    if already_active:
+    if already_unsubscribed is False:  # existing row, currently active
         return {"ok": True, "status": "subscribed"}
-    if len(active) >= cap:
+    try:
+        count = active_count()
+    except RuntimeError as e:
+        raise HTTPException(502, f"Subscriber lookup failed: {e}")
+    if count >= cap:
         raise HTTPException(
             403,
             f"Sign-ups are full — all {cap} spots have been taken. "
@@ -111,7 +114,10 @@ def signup(body: SignupBody):
                 INSERT INTO subscribers (email, unsubscribed, source)
                 VALUES (%s, FALSE, 'signup')
                 ON CONFLICT (email) DO UPDATE
-                    SET unsubscribed = FALSE, unsubscribed_at = NULL
+                    SET unsubscribed = FALSE,
+                        resubscribed_at = CASE WHEN subscribers.unsubscribed
+                                               THEN NOW()
+                                               ELSE subscribers.resubscribed_at END
                 RETURNING (xmax = 0) AS inserted
                 """,
                 (email,),
@@ -160,13 +166,12 @@ def subscriber_count():
 
     cap = _max_subscribers()
     try:
-        active = list_active_contacts()
+        real = active_count()
     except RuntimeError as e:
         if cached is not None:
             return cached
         raise HTTPException(502, f"Subscriber lookup failed: {e}")
 
-    real = len(active)
     # Seed the displayed count with the floor for social proof, but never let
     # the floor alone show "full" — the form closes only when GENUINE
     # subscribers fill the list. While real < cap we always leave ≥1 spot
@@ -308,8 +313,6 @@ def unsubscribe_self(body: UnsubSelfBody, request: Request):
             send_email(
                 to=email,
                 subject="Confirm your unsubscribe — Alpha Move AI",
-                from_addr=os.environ.get("DIGEST_FROM",
-                                         "Alpha Move AI <digest@alphamoveai.co.uk>"),
                 text=(
                     "Someone (hopefully you) asked to unsubscribe this address from "
                     "the Alpha Move AI daily digest.\n\n"
@@ -346,6 +349,34 @@ def build_unsubscribe_url(email: str) -> str:
     token = _unsubscribe_token(email)
     qs = urllib.parse.urlencode({"email": email.lower(), "t": token})
     return f"{base}/api/unsubscribe?{qs}"
+
+
+def active_count() -> int:
+    """COUNT of active (not-unsubscribed) subscribers.
+
+    Used wherever only the number is needed (the capacity gate, the scarcity
+    counter) so those paths don't pull the whole list over the wire just to
+    call len() on it. list_active_contacts() stays the one used by the digest
+    sender, which genuinely needs every row.
+    """
+    try:
+        rows = query("SELECT COUNT(*) AS n FROM subscribers WHERE NOT unsubscribed")
+    except Exception as e:
+        raise RuntimeError(f"subscribers count failed: {e}") from e
+    return int(rows[0]["n"]) if rows else 0
+
+
+def _is_unsubscribed(email: str) -> bool | None:
+    """The address's current `unsubscribed` flag, or None if it has no row.
+
+    Used by signup() to tell "already active" from "new or returning" without
+    loading the whole active list to scan for membership.
+    """
+    try:
+        rows = query("SELECT unsubscribed FROM subscribers WHERE email = %s", (email,))
+    except Exception as e:
+        raise RuntimeError(f"subscribers lookup failed: {e}") from e
+    return bool(rows[0]["unsubscribed"]) if rows else None
 
 
 def list_active_contacts() -> list[dict]:

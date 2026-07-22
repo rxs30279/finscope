@@ -59,9 +59,10 @@ def main() -> int:
     print(f"[ses-events] drain starting at {datetime.now(timezone.utc).isoformat()}")
     try:
         result = drain_queue()
-        print(f"[ses-events] drain done -- {result}")
     except Exception as e:
-        print(f"[ses-events] drain FAILED -- {type(e).__name__}: {e}")
+        # Couldn't even start (SES_EVENT_QUEUE_URL missing, client init
+        # failure) -- nothing was drained, so there's no partial stats to keep.
+        print(f"[ses-events] drain FAILED to start -- {type(e).__name__}: {e}")
         traceback.print_exc()
         try:
             record_run("error", {"error": str(e)})
@@ -69,6 +70,17 @@ def main() -> int:
             pass
         return 1
 
+    if "error" in result:
+        # Crashed mid-loop -- `result` still carries whatever was drained
+        # before the failure, unlike discarding it for a bare {"error": ...}.
+        print(f"[ses-events] drain FAILED -- {result['error']}")
+        try:
+            record_run("error", result)
+        except Exception as e:
+            print(f"[ses-events] pipeline_runs stamp FAILED (non-fatal) -- {type(e).__name__}: {e}")
+        return 1
+
+    print(f"[ses-events] drain done -- {result}")
     try:
         record_run("ok", result)
     except Exception as e:

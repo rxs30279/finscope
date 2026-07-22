@@ -189,6 +189,30 @@ def _insert(row: dict) -> None:
         conn.commit()
 
 
+def _maybe_record_bounce(row: dict) -> None:
+    """Stamp subscribers.bounced_at for a permanent bounce.
+
+    Mirrors ses_events._maybe_record_bounce (same table, same first-bounce-wins
+    UPDATE) — the two providers just spell the bounce sub-object differently:
+    Resend uses type/subType/message, SES uses bounceType/bounceSubType/
+    bouncedRecipients[0].diagnosticCode. Best-effort: email_events already has
+    its row by the time this runs, so a failure here must not surface as a
+    webhook failure (Svix would retry an event we already stored).
+    """
+    bounce = (row.get("detail") or {}).get("bounce") or {}
+    if bounce.get("type") != "Permanent":
+        return
+    recipient = row.get("recipient")
+    if not recipient:
+        return
+    reason = bounce.get("message") or f"{bounce.get('type')}/{bounce.get('subType')}"
+    try:
+        from ses_events import _record_bounce  # local: avoid a module-load cycle
+        _record_bounce(recipient, row["occurred_at"], reason)
+    except Exception as e:
+        print(f"[email-events] WARNING: bounced_at stamp failed for {recipient}: {e}")
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.post("/api/webhooks/resend")
@@ -223,6 +247,8 @@ async def resend_webhook(request: Request):
         return {"ok": True, "stored": False, "reason": "not an email event"}
 
     await run_in_threadpool(_insert, row)
+    if row["event_type"] == "email.bounced":
+        await run_in_threadpool(_maybe_record_bounce, row)
     return {"ok": True, "stored": True, "event": row["event_type"]}
 
 

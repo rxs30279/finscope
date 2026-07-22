@@ -33,8 +33,6 @@ router = APIRouter()
 # malformed addresses anyway.
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
-_DEFAULT_FROM = "Alpha Move AI <digest@alphamoveai.co.uk>"
-
 _MAX_MESSAGE = 5000
 
 # The honeypot only stops dumb bots; without a rate limit a script that leaves
@@ -77,7 +75,6 @@ def submit_feedback(body: FeedbackBody, request: Request):
     if reply_to and not _EMAIL_RE.match(reply_to):
         raise HTTPException(400, "Invalid email address")
 
-    from_addr = os.environ.get("DIGEST_FROM", _DEFAULT_FROM)
     sender_line = reply_to or "(no email given)"
 
     text = f"From: {sender_line}\n\n{message}"
@@ -94,7 +91,6 @@ def submit_feedback(body: FeedbackBody, request: Request):
             subject="Website feedback — Alpha Move AI",
             text=text,
             html=html_body,
-            from_addr=from_addr,
             # Reply-To lets the owner answer the visitor directly from their inbox.
             reply_to=reply_to or None,
         )

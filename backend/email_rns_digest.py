@@ -560,6 +560,53 @@ def _render_html(rows: list[dict], total_all: int = 0, sub_footer_html: str = ""
 </body></html>"""
 
 
+def _render_text(rows: list[dict], total_all: int = 0,
+                 unsub_url: str = "", manage_url: str = "") -> str:
+    """Plain-text alternative to _render_html, reusing the same row fields.
+
+    Without this, SES's build_mime synthesises "This email requires an
+    HTML-capable mail client." as the text/plain part — boilerplate that
+    doesn't match the HTML and is itself a mild spam signal. The unsubscribe
+    URL must appear here too: Gmail cross-checks the visible unsubscribe path
+    against the text part, not just the List-Unsubscribe header.
+    """
+    now_uk = datetime.now(_UK_TZ)
+    date_s = now_uk.strftime("%A %d %B %Y")
+
+    lines = [
+        "Alpha Move AI - RNS Morning Digest",
+        f"{date_s} - last 24h - {len(rows)} items",
+        "",
+    ]
+
+    if not rows:
+        lines.append("No significant items today.")
+    else:
+        for r in rows:
+            time_s = _fmt_uk_time(r["published_at"])
+            category = _CATEGORY_LABELS.get(r.get("category"), r.get("category") or "-")
+            ai_score = r.get("llm_score")
+            ai_s = str(ai_score) if ai_score is not None else "-"
+            action = r.get("llm_action") or "-"
+            lines.append(
+                f"[{time_s}] {r.get('ticker')} (AI {ai_s}, {action}) "
+                f"{r.get('company_name')} - {r.get('headline')} [{category}]"
+            )
+            lines.append(f"  {r['url']}")
+        remaining = total_all - len(rows)
+        if remaining > 0:
+            lines.append("")
+            lines.append(f"{remaining} more below the cutoff (low score / sub-£15m / other tiers)")
+
+    lines += ["", f"Support Alpha Move AI: {_KOFI_URL}", ""]
+    if manage_url:
+        lines.append(f"Manage subscription: {manage_url}")
+    if unsub_url:
+        lines.append(f"Unsubscribe: {unsub_url}")
+
+    return "\n".join(lines)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def _sub_footer(unsub_url: str, manage_url: str) -> str:
@@ -671,8 +718,9 @@ def _send_one(from_addr: str, subject: str, rows: list[dict],
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
         }
         html_body = _render_html(rows, total_all, sub_footer_html=footer)
+        text_body = _render_text(rows, total_all, unsub_url=unsub_url, manage_url=manage_url)
         message_id = send_email(to=to_email, subject=subject, html=html_body,
-                                from_addr=from_addr, headers=headers)
+                                text=text_body, from_addr=from_addr, headers=headers)
         print(f"[digest] sent to {to_email} — id={message_id}")
         return True
     except Exception as e:
@@ -800,6 +848,8 @@ def _send_digest(dry_run: bool = False) -> dict:
     # Best-effort unsub footer for the fallback recipient (only if base + secret set).
     footer = ""
     headers: dict | None = None
+    unsub_url = ""
+    manage_url = ""
     try:
         if base_url and os.environ.get("UNSUBSCRIBE_SECRET"):
             from subscribers import build_unsubscribe_url
@@ -815,8 +865,9 @@ def _send_digest(dry_run: bool = False) -> dict:
 
     from emailer import send_email
     html_body = _render_html(rows, total_all, sub_footer_html=footer)
+    text_body = _render_text(rows, total_all, unsub_url=unsub_url, manage_url=manage_url)
     message_id = send_email(to=to_addr, subject=subject, html=html_body,
-                            from_addr=from_addr, headers=headers)
+                            text=text_body, from_addr=from_addr, headers=headers)
     print(f"[digest] sent to {to_addr} — id={message_id}")
     return {"exit_code": 0, "mode": "fallback", "recipients": 1, "sent": 1, "failed": 0}
 

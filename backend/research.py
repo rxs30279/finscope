@@ -121,8 +121,6 @@ def _notify_new_comment(post_title: str, post_slug: str, author: str,
             subject=f"New research comment — {post_title}",
             text=text,
             html=html_body,
-            from_addr=os.environ.get("DIGEST_FROM",
-                                     "Alpha Move AI <digest@alphamoveai.co.uk>"),
         )
     except Exception:
         pass  # never let notification failures surface anywhere

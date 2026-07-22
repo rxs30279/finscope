@@ -58,24 +58,43 @@ BOUNCE = {
     },
 }
 
+TRANSIENT_BOUNCE = {
+    "eventType": "Bounce",
+    "mail": _mail(destination=["fullbox@example.com"]),
+    "bounce": {
+        "timestamp": "2026-07-21T06:31:02.000Z",
+        "bounceType": "Transient",
+        "bounceSubType": "MailboxFull",
+        "bouncedRecipients": [{"emailAddress": "fullbox@example.com"}],
+    },
+}
+
 
 # ── SNS envelope ──────────────────────────────────────────────────────────────
 
 def test_unwraps_sns_envelope():
-    assert ses_events.unwrap(_sns(DELIVERY_DELAY))["eventType"] == "DeliveryDelay"
+    envelope_id, notification = ses_events.unwrap(_sns(DELIVERY_DELAY, "sns-1"))
+    assert envelope_id == "sns-1"
+    assert notification["eventType"] == "DeliveryDelay"
 
 
-def test_unwrap_returns_none_for_subscription_confirmation():
+def test_unwrap_yields_envelope_id_but_no_notification_for_subscription_confirmation():
     """SNS posts one of these when the subscription is created; it has no
-    Message payload to parse and must not blow up the drain."""
-    body = json.dumps({"Type": "SubscriptionConfirmation", "MessageId": "x",
+    Message payload to parse and must not blow up the drain -- but its
+    MessageId still comes back so the caller can delete it from the queue."""
+    body = json.dumps({"Type": "SubscriptionConfirmation", "MessageId": "sns-x",
                        "Token": "abc", "SubscribeURL": "https://..."})
-    assert ses_events.unwrap(body) is None
+    envelope_id, notification = ses_events.unwrap(body)
+    assert envelope_id == "sns-x"
+    assert notification is None
 
 
-def test_unwrap_returns_none_for_garbage():
-    assert ses_events.unwrap("not json") is None
-    assert ses_events.unwrap(json.dumps({"Message": "also not json"})) is None
+def test_unwrap_returns_none_none_for_garbage():
+    assert ses_events.unwrap("not json") == (None, None)
+    envelope_id, notification = ses_events.unwrap(
+        json.dumps({"MessageId": "sns-y", "Message": "also not json"}))
+    assert envelope_id == "sns-y"
+    assert notification is None
 
 
 # ── Event-name normalisation ──────────────────────────────────────────────────
@@ -235,3 +254,103 @@ def test_drain_requires_queue_url(monkeypatch):
     monkeypatch.delenv("SES_EVENT_QUEUE_URL", raising=False)
     with pytest.raises(RuntimeError, match="SES_EVENT_QUEUE_URL"):
         ses_events.drain_queue()
+
+
+def test_drain_survives_mid_loop_crash_and_keeps_partial_stats(monkeypatch, drained):
+    """A crash after the first batch's work is done must not lose that work --
+    run_email_events.py stamps whatever's in the returned dict either way."""
+
+    class _CrashingSQS(_StubSQS):
+        def __init__(self, bodies):
+            super().__init__(bodies)
+            self.calls = 0
+
+        def receive_message(self, **kwargs):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("SQS unavailable")
+            return super().receive_message(**kwargs)
+
+    sqs = _CrashingSQS([_sns(BOUNCE, "sns-1")])
+    monkeypatch.setattr(ses_events, "_client", lambda: sqs)
+
+    stats = ses_events.drain_queue()
+
+    assert stats["stored"] == 1        # first batch's work wasn't discarded
+    assert "SQS unavailable" in stats["error"]
+
+
+# ── bounced_at wiring ─────────────────────────────────────────────────────────
+
+@pytest.fixture
+def bounce_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ses_events, "_record_bounce",
+                        lambda *args: calls.append(args))
+    return calls
+
+
+def test_permanent_bounce_stamps_bounced_at(monkeypatch, drained, bounce_calls):
+    sqs = _StubSQS([_sns(BOUNCE, "sns-1")])
+    monkeypatch.setattr(ses_events, "_client", lambda: sqs)
+
+    ses_events.drain_queue()
+
+    assert len(bounce_calls) == 1
+    recipient, occurred_at, reason = bounce_calls[0]
+    assert recipient == "info@bioseekers.com"
+    assert "550 5.1.1" in reason
+
+
+def test_transient_bounce_does_not_stamp_bounced_at(monkeypatch, drained, bounce_calls):
+    sqs = _StubSQS([_sns(TRANSIENT_BOUNCE, "sns-1")])
+    monkeypatch.setattr(ses_events, "_client", lambda: sqs)
+
+    ses_events.drain_queue()
+
+    assert bounce_calls == []
+
+
+def test_delivery_event_does_not_stamp_bounced_at(monkeypatch, drained, bounce_calls):
+    sqs = _StubSQS([_sns(DELIVERY_DELAY, "sns-1")])
+    monkeypatch.setattr(ses_events, "_client", lambda: sqs)
+
+    ses_events.drain_queue()
+
+    assert bounce_calls == []
+
+
+def test_bounce_reason_falls_back_to_type_when_no_diagnostic(monkeypatch, drained, bounce_calls):
+    """bouncedRecipients[0] may carry no diagnosticCode (transient/complaint-ish
+    permanent bounces sometimes omit it) -- fall back to bounceType/bounceSubType."""
+    no_diagnostic = {
+        "eventType": "Bounce",
+        "mail": _mail(destination=["gone@example.com"]),
+        "bounce": {
+            "timestamp": "2026-07-21T06:31:02.000Z",
+            "bounceType": "Permanent",
+            "bounceSubType": "General",
+            "bouncedRecipients": [{"emailAddress": "gone@example.com"}],
+        },
+    }
+    sqs = _StubSQS([_sns(no_diagnostic, "sns-1")])
+    monkeypatch.setattr(ses_events, "_client", lambda: sqs)
+
+    ses_events.drain_queue()
+
+    assert bounce_calls[0][2] == "Permanent/General"
+
+
+def test_bounced_at_stamp_failure_does_not_crash_drain(monkeypatch, drained):
+    """The email_events row is already committed by the time _record_bounce
+    runs; a failure there is best-effort and must not lose the drain's place
+    in the queue."""
+    sqs = _StubSQS([_sns(BOUNCE, "sns-1")])
+    monkeypatch.setattr(ses_events, "_client", lambda: sqs)
+    monkeypatch.setattr(ses_events, "_record_bounce",
+                        lambda *a: (_ for _ in ()).throw(RuntimeError("db down")))
+
+    stats = ses_events.drain_queue()
+
+    assert stats["stored"] == 1
+    assert len(sqs.deleted) == 1

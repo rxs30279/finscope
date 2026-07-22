@@ -189,3 +189,50 @@ def test_render_html_full_document():
     assert "2 items" in html                  # section count
     # Every row's canonical company link is present.
     assert "/company/AZN" in html and "/company/XYZ" in html
+
+
+# ── _render_text (plain-text alternative) ──────────────────────────────────────
+
+def test_render_text_contains_ticker_headline_and_unsub_url():
+    text = d._render_text([_row()], total_all=1,
+                          unsub_url="https://x/api/unsubscribe?email=a%40b.com&t=abc",
+                          manage_url="https://x/subscribe")
+    assert "TSCO" in text
+    assert "Interim results" in text
+    assert "https://x/api/unsubscribe?email=a%40b.com&t=abc" in text
+    assert "https://x/subscribe" in text
+    assert "<" not in text and ">" not in text
+
+
+def test_render_text_empty_variant():
+    text = d._render_text([], total_all=0)
+    assert "No significant items today." in text
+
+
+def test_render_text_reports_items_below_the_cutoff():
+    text = d._render_text([_row()], total_all=5)
+    assert "4 more below the cutoff" in text
+
+
+def test_render_text_omits_cutoff_line_when_nothing_is_hidden():
+    text = d._render_text([_row()], total_all=1)
+    assert "more below the cutoff" not in text
+
+
+# ── _send_one (text part reaches send_email) ────────────────────────────────────
+
+def test_send_one_passes_non_empty_text_kwarg(monkeypatch):
+    monkeypatch.setenv("UNSUBSCRIBE_SECRET", "test-secret")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.alphamoveai.co.uk")
+    import emailer
+    captured = {}
+    monkeypatch.setattr(emailer, "send_email",
+                        lambda **kw: captured.update(kw) or "msg-1")
+
+    ok = d._send_one("Alpha <digest@alphamoveai.co.uk>", "Subject", [_row()],
+                     "a@b.com", "https://app.alphamoveai.co.uk", total_all=1)
+
+    assert ok is True
+    assert captured["text"]
+    assert "TSCO" in captured["text"]
+    assert "Unsubscribe:" in captured["text"]

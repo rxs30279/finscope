@@ -136,29 +136,33 @@ def parse_event(notification: dict, event_id: str) -> dict | None:
     }
 
 
-def unwrap(body: str) -> dict | None:
-    """Pull the SES notification out of the SNS envelope.
+def unwrap(body: str) -> tuple[str | None, dict | None]:
+    """Parse one SQS message body once: the SNS envelope's MessageId (used as
+    the idempotency key) and the SES notification nested inside it.
 
     Raw message delivery is deliberately OFF on the subscription, so every
     body is an SNS envelope whose `Message` field is the SES JSON as a string.
-    Returns None for envelopes that carry no parseable notification, e.g. the
-    SubscriptionConfirmation SNS sends when the subscription is created.
+    Either element of the tuple may be None: envelopes that carry no parseable
+    notification (e.g. the SubscriptionConfirmation SNS sends when the
+    subscription is created) still yield a MessageId.
     """
     try:
         envelope = json.loads(body)
     except (TypeError, json.JSONDecodeError):
-        return None
+        return None, None
     if not isinstance(envelope, dict):
-        return None
+        return None, None
+
+    envelope_id = envelope.get("MessageId")
 
     message = envelope.get("Message")
     if not isinstance(message, str):
-        return None
+        return envelope_id, None
     try:
         parsed = json.loads(message)
     except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+        return envelope_id, None
+    return envelope_id, (parsed if isinstance(parsed, dict) else None)
 
 
 def _insert(row: dict) -> None:
@@ -177,6 +181,48 @@ def _insert(row: dict) -> None:
             {**row, "detail": psycopg2.extras.Json(row["detail"]) if row["detail"] else None},
         )
         conn.commit()
+
+
+def _record_bounce(recipient: str, occurred_at, reason: str) -> None:
+    """Stamp subscribers.bounced_at on the FIRST hard bounce for an address.
+
+    A record only -- migration 019's own semantics say bounced_at does not
+    gate sends, the provider's suppression list does. `bounced_at IS NULL`
+    means later bounces of an already-flagged address add nothing, so the
+    column always reflects the first failure, not the most recent.
+    """
+    with connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE subscribers
+               SET bounced_at = %s, bounce_reason = %s
+             WHERE email = %s AND bounced_at IS NULL
+            """,
+            (occurred_at, reason, recipient),
+        )
+        conn.commit()
+
+
+def _maybe_record_bounce(row: dict) -> None:
+    """Stamp bounced_at for a permanent bounce. Transient bounces and
+    complaints are excluded -- both are recoverable, and neither implies the
+    address itself is dead. Best-effort: the email_events row is already
+    committed by `_insert`, so a failure here must not lose it or the
+    drain's place in the queue."""
+    bounce = (row.get("detail") or {}).get("bounce") or {}
+    if bounce.get("bounceType") != "Permanent":
+        return
+    recipient = row.get("recipient")
+    if not recipient:
+        return
+    recipients = bounce.get("bouncedRecipients") or []
+    diagnostic = recipients[0].get("diagnosticCode") if recipients else None
+    reason = diagnostic or f"{bounce.get('bounceType')}/{bounce.get('bounceSubType')}"
+    try:
+        _record_bounce(recipient, row["occurred_at"], reason)
+    except Exception as e:
+        print(f"[ses-events] WARNING: bounced_at stamp failed for {recipient}: {e}")
 
 
 def drain_queue(max_batches: int | None = None) -> dict:
@@ -199,38 +245,41 @@ def drain_queue(max_batches: int | None = None) -> dict:
     stats = {"received": 0, "stored": 0, "skipped": 0, "batches": 0}
     limit = max_batches if max_batches is not None else _MAX_BATCHES
 
-    for _ in range(limit):
-        resp = sqs.receive_message(
-            QueueUrl=queue_url,
-            MaxNumberOfMessages=10,
-            # Long poll: one 10s call instead of a spin of empty short polls.
-            WaitTimeSeconds=10,
-        )
-        messages = resp.get("Messages") or []
-        if not messages:
-            break
+    # A crash mid-loop (an SQS call failing partway through, say) must not
+    # discard whatever was already drained -- run_email_events.py stamps
+    # exactly this dict either way, so losing it here means a real batch of
+    # work reads as "nothing happened" in pipeline_runs.
+    try:
+        for _ in range(limit):
+            resp = sqs.receive_message(
+                QueueUrl=queue_url,
+                MaxNumberOfMessages=10,
+                # Long poll: one 10s call instead of a spin of empty short polls.
+                WaitTimeSeconds=10,
+            )
+            messages = resp.get("Messages") or []
+            if not messages:
+                break
 
-        stats["batches"] += 1
-        for message in messages:
-            stats["received"] += 1
-            body = message.get("Body") or ""
-            envelope_id = None
-            try:
-                envelope = json.loads(body)
-                envelope_id = envelope.get("MessageId")
-            except (TypeError, json.JSONDecodeError):
-                pass
+            stats["batches"] += 1
+            for message in messages:
+                stats["received"] += 1
+                body = message.get("Body") or ""
+                envelope_id, notification = unwrap(body)
 
-            notification = unwrap(body)
-            row = parse_event(notification, envelope_id) if (notification and envelope_id) else None
+                row = parse_event(notification, envelope_id) if (notification and envelope_id) else None
 
-            if row is None:
-                stats["skipped"] += 1
-            else:
-                _insert(row)
-                stats["stored"] += 1
+                if row is None:
+                    stats["skipped"] += 1
+                else:
+                    _insert(row)
+                    stats["stored"] += 1
+                    if row["event_type"] == "email.bounced":
+                        _maybe_record_bounce(row)
 
-            sqs.delete_message(QueueUrl=queue_url,
-                               ReceiptHandle=message["ReceiptHandle"])
+                sqs.delete_message(QueueUrl=queue_url,
+                                   ReceiptHandle=message["ReceiptHandle"])
+    except Exception as e:
+        stats["error"] = f"{type(e).__name__}: {e}"
 
     return stats

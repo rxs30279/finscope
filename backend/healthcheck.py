@@ -258,6 +258,26 @@ def run_db_checks(query_one=None) -> None:
             status = FAIL  # last run errored (see detail)
         return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"
 
+    @check("ses_events.drain")
+    def _ses_events_drain():
+        row = query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'ses_events'"
+        )
+        if not row or row["last_run_at"] is None:
+            # Not a FAIL: the drain cron is intentionally not enabled yet
+            # (blocked on SES production access) — a standing WARN is the
+            # nudge to turn it on once the parallel run starts, not noise.
+            return WARN, ("drain has never run — enable the Dokploy cron "
+                          "(*/15 7-18 * * 1-5) when the SES parallel run starts")
+        d = _age_hours(row["last_run_at"]) / 24.0
+        # Weekday cron, 07:00-18:00 UTC only -- weekend gaps are expected, so
+        # give slack before flagging a miss (warn > 3 days, fail > 5 days).
+        status = _tier(d, warn_at=3, fail_at=5)
+        if row["status"] != "ok":
+            status = FAIL  # last drain errored (see detail)
+        return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"
+
     @check("digest.sent")
     def _digest_sent():
         row = query_one(

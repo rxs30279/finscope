@@ -237,6 +237,7 @@ def test_preflight_passes_when_configured(monkeypatch):
     monkeypatch.setenv("EMAIL_PROVIDER", "ses")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA...")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv("SES_CONFIGURATION_SET", "alphamove-digest")
     assert emailer.preflight() is None
 
 
@@ -247,4 +248,13 @@ def test_preflight_does_not_check_resend_key_under_ses(monkeypatch):
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA...")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv("SES_CONFIGURATION_SET", "alphamove-digest")
     assert emailer.preflight() is None
+
+
+def test_preflight_flags_missing_config_set(monkeypatch):
+    monkeypatch.setenv("EMAIL_PROVIDER", "ses")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA...")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.delenv("SES_CONFIGURATION_SET", raising=False)
+    assert "SES_CONFIGURATION_SET" in emailer.preflight()
