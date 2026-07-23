@@ -13,14 +13,18 @@ import { SITE_URL, SITE_NAME } from "@/lib/seo";
 // variable fonts, so the full weight range is available — globals.css wires
 // these CSS variables to the inline `monospace` (Inter) and `DM Serif Display`
 // (Mulish) keyword placeholders used throughout the app.
+// display:"optional" (not "swap") — avoids the fallback→webfont swap-in reflow
+// that was shifting CompanyHeader/screener layout (CLS); worst case a cold
+// load keeps the fallback font instead of a mid-paint swap, which is the
+// right trade for Core Web Vitals.
 const inter = Inter({
   subsets: ["latin"],
-  display: "swap",
+  display: "optional",
   variable: "--font-inter",
 });
 const mulish = Mulish({
   subsets: ["latin"],
-  display: "swap",
+  display: "optional",
   variable: "--font-mulish",
 });
 

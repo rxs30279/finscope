@@ -116,10 +116,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <div style={{ minHeight: "100vh", background: "#0a0a0a", fontFamily: "monospace" }}>
       {/* Nav */}
       <nav
+        className="appnav"
         style={{
           background: "#0a0a0a",
           borderBottom: "1px solid #2a2a2a",
-          padding: isMobile ? "0 12px" : "0 32px",
           display: "flex",
           alignItems: "center",
           height: 52,
@@ -128,55 +128,56 @@ export default function AppShell({ children }: { children: ReactNode }) {
           zIndex: 100,
         }}
       >
-        {/* Hamburger (mobile) / Sidebar toggle (desktop) */}
-        {isMobile ? (
-          <button
-            onClick={() => setMobileMenuOpen((v) => !v)}
-            title="Menu"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              padding: "4px 8px", marginRight: 8,
-              display: "flex", alignItems: "center", color: "#f1f5f9",
-            }}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <line x1="3" y1="6" x2="21" y2="6" />
-              <line x1="3" y1="12" x2="21" y2="12" />
-              <line x1="3" y1="18" x2="21" y2="18" />
-            </svg>
-          </button>
-        ) : (
-          <button
-            onClick={() => setSidebarCollapsed((v) => !v)}
-            title="Toggle sidebar"
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              padding: "4px 8px 4px 0", marginRight: 8, marginLeft: -20,
-              display: "flex", alignItems: "center",
-              opacity: sidebarCollapsed ? 0.35 : 0.75, transition: "opacity 0.2s",
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect x="2" y="2" width="20" height="20" rx="3" stroke="#f1f5f9" strokeWidth="1.5" />
-              <line x1="8" y1="2" x2="8" y2="22" stroke="#f1f5f9" strokeWidth="1.5" />
-              <line x1="11" y1="7" x2="19" y2="7" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round" />
-              <line x1="11" y1="12" x2="19" y2="12" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round" />
-              <line x1="11" y1="17" x2="16" y2="17" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
+        {/* Hamburger (mobile) / Sidebar toggle (desktop) — both always render;
+            CSS (.appnav-hamburger / .appnav-sidebar-toggle) picks one, so
+            there's no post-hydration swap to shift layout. */}
+        <button
+          onClick={() => setMobileMenuOpen((v) => !v)}
+          title="Menu"
+          className="appnav-hamburger"
+          style={{
+            background: "none", border: "none", cursor: "pointer",
+            padding: "4px 8px", marginRight: 8,
+            alignItems: "center", color: "#f1f5f9",
+          }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+        <button
+          onClick={() => setSidebarCollapsed((v) => !v)}
+          title="Toggle sidebar"
+          className="appnav-sidebar-toggle"
+          style={{
+            background: "none", border: "none", cursor: "pointer",
+            padding: "4px 8px 4px 0", marginRight: 8, marginLeft: -20,
+            alignItems: "center",
+            opacity: sidebarCollapsed ? 0.35 : 0.75, transition: "opacity 0.2s",
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="2" width="20" height="20" rx="3" stroke="#f1f5f9" strokeWidth="1.5" />
+            <line x1="8" y1="2" x2="8" y2="22" stroke="#f1f5f9" strokeWidth="1.5" />
+            <line x1="11" y1="7" x2="19" y2="7" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="11" y1="12" x2="19" y2="12" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round" />
+            <line x1="11" y1="17" x2="16" y2="17" stroke="#f1f5f9" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
 
-        {/* Logo */}
+        {/* Logo — both text variants always render; CSS shows one (font-size
+            is also class-driven, see .appnav-logo in globals.css). */}
         <Link
           href="/"
+          className="appnav-logo"
           style={{
             fontFamily: "var(--font-inter), sans-serif",
-            fontSize: isMobile ? 10 : 12,
             fontWeight: 700,
             color: "#f97316",
             letterSpacing: 2,
             textTransform: "uppercase",
-            marginRight: isMobile ? 8 : isNarrow ? 12 : 32,
             cursor: "pointer",
             padding: "4px 10px",
             borderRadius: 4,
@@ -186,15 +187,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
             textDecoration: "none",
           }}
         >
-          {isMobile ? "AMA" : "Alpha Move AI"}
+          <span className="appnav-mobile-only">AMA</span>
+          <span className="appnav-desktop-only">Alpha Move AI</span>
         </Link>
 
         {/* Desktop nav links */}
-        {!isMobile && (
-          <div
-            className="no-scrollbar"
-            style={{ display: "flex", gap: 2, flexShrink: 1, minWidth: 0, overflowX: "auto" }}
-          >
+        <div
+          className="no-scrollbar appnav-links"
+          style={{ gap: 2, flexShrink: 1, minWidth: 0, overflowX: "auto" }}
+        >
             {NAV_GROUPS.map((g) => {
               if (g.children) {
                 const isActive = g.children.some(
@@ -269,14 +270,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 </Link>
               );
             })}
-          </div>
-        )}
+        </div>
 
         {/* Right side */}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: isMobile ? 6 : isNarrow ? 8 : 12, minWidth: 0, flexShrink: 0 }}>
+        <div className="appnav-right" style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: isNarrow ? 8 : 12, minWidth: 0, flexShrink: 0 }}>
           {/* Tools dropdown (desktop only) */}
-          {!isMobile && (
-            <div style={{ position: "relative", flexShrink: 0 }}>
+          <div className="appnav-desktop-only" style={{ position: "relative", flexShrink: 0 }}>
               <button
                 onClick={() => setToolsOpen((v) => !v)}
                 title="Settings & refresh"
@@ -357,18 +356,21 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   </div>
                 </>
               )}
-            </div>
-          )}
+          </div>
 
-          {/* Search */}
+          {/* Search — placeholder is the short form everywhere: the longer
+              desktop copy varied by isMobile/isNarrow, which is exactly the
+              post-hydration flip this pass is removing; width is CSS-driven
+              (.appnav-search in globals.css) for the same reason. */}
           <div style={{ position: "relative", minWidth: 0 }}>
             <input
-              placeholder={isMobile || isNarrow ? "Search…" : "Search ticker or company…"}
+              placeholder="Search…"
               value={searchQ}
               onChange={(e) => { doSearch(e.target.value); setShowSearch(true); }}
               onFocus={() => setShowSearch(true)}
               onBlur={() => setTimeout(() => setShowSearch(false), 200)}
-              style={{ ...S.searchInput, width: isMobile ? 120 : isNarrow ? 160 : 260, maxWidth: "100%", fontSize: isMobile ? 11 : 13 }}
+              className="appnav-search"
+              style={{ ...S.searchInput, width: isNarrow ? 160 : 260, maxWidth: "100%", fontSize: isNarrow ? 12 : 13 }}
             />
             {showSearch && searchResults.length > 0 && (
               <div style={{ ...S.dropdown, width: isMobile ? 280 : 420, right: isMobile ? -60 : 0 }}>
@@ -542,12 +544,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </>
       )}
 
-      {/* Body: sidebar + main */}
+      {/* Body: sidebar + main. Mobile-hiding is CSS-only (.appshell-sidebar-col
+          in globals.css); the inline display here only handles the desktop
+          collapse toggle, which is genuinely interactive (no SSR/CSR flip). */}
       <div style={{ display: "flex", maxWidth: 1600, margin: "0 auto" }}>
-        <div style={{ flexShrink: 0, display: showSidebar && !sidebarCollapsed && !isMobile ? "block" : "none" }}>
+        <div className="appshell-sidebar-col" style={{ flexShrink: 0, display: showSidebar && !sidebarCollapsed ? "block" : "none" }}>
           <Sidebar refreshKey={refreshKey} onNavigate={onNavigate} />
         </div>
-        <main style={{ flex: 1, padding: isMobile ? "12px 12px" : "16px 24px", minWidth: 0 }}>
+        <main className="appshell-main" style={{ flex: 1, minWidth: 0 }}>
           {children}
         </main>
       </div>

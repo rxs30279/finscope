@@ -562,7 +562,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
         ))}
       </div>
 
-      {loading ? <div style={S.loading}>Screening…</div> : (
+      {loading ? <div style={{ ...S.loading, minHeight: tableMaxH, boxSizing: "border-box" }}>Screening…</div> : (
         <div ref={scrollRef} onScroll={onScroll} style={{ overflow: "auto", maxHeight: tableMaxH, scrollbarGutter: "stable", scrollSnapType: "y proximity", scrollPaddingTop: 29 }}>
           {/* tableLayout:fixed keeps column widths stable as rows scroll into and
               out of the virtualized window (auto-layout would resize columns to

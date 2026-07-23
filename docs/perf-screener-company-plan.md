@@ -1,8 +1,77 @@
 # Perf plan — screener + company page (post-virtualization follow-ups)
 
-**Status:** WS1 + WS2 done (2026-07-23, uncommitted). WS3 (CLS) not started.
+**Status:** WS1 + WS2 + WS3 all done (2026-07-23, uncommitted). All three workstreams complete.
 **Owner context:** follows the screener virtualization/memoization + company scroll-snap
 removal already shipped in commit `8958311`.
+
+## Workstream 3 — CLS — DONE
+
+Result (local prod build, Lighthouse mobile throttled, vs. the baseline table above):
+
+| Metric | /screener before → after | /company/shel before → after |
+|---|---|---|
+| CLS | 0.183 → **0.005** | 0.176 → **0** |
+| Perf score | 59 → 73 | 57 → 63 |
+
+Four fixes, in the order they were found:
+
+1. **Screener loading state reserves height** (`Screener.tsx`) — the
+   `loading ? <div>Screening…</div>` branch now gets `minHeight: tableMaxH`
+   (same value the real table's `maxHeight` uses), so the loading→loaded swap
+   doesn't resize the page.
+2. **CTA banner min-height** (`EmailDigestCTA.tsx`) — the digest/donate
+   variant card gets `minHeight: 112` so the copy-rotation (or the initial
+   mount) can't reflow `CompanyHeader` underneath it.
+3. **Fonts `display:"swap"` → `"optional"`** (`app/layout.tsx`, both Inter and
+   Mulish) — removes the fallback→webfont swap-in reflow.
+4. **CTA sheen animation `left` → `transform`** (`EmailDigestCTA.tsx`) — the
+   sweeping highlight was animating `left` (a layout property, scored by every
+   frame under the Layout Instability API) instead of `transform: translateX`
+   (compositor-only, not scored). This alone took `/company/shel` from
+   0.18–0.26 down to 0.038 — found by instrumenting `PerformanceObserver`
+   layout-shift entries directly via Playwright/CDP rather than trusting
+   Lighthouse's node attribution, which mis-attributed the cumulative shift to
+   the unrelated `CompanyHeader` `<section>`.
+5. **`useIsMobile()` SSR→client flash, AppShell-wide** (`useMediaQuery.ts` was
+   unrelated; the fix is entirely in `AppShell.tsx` + `globals.css`) — this
+   was the dominant, previously-unknown cause, found via the same CDP
+   instrumentation with `Emulation.setCPUThrottlingRate` to reproduce real
+   mobile timing (fast/unthrottled Playwright never showed it — the
+   desktop→mobile correction happens before any paint is flushed when nothing
+   is CPU-constrained). `useMediaQuery`/`useIsMobile` return `false` during SSR
+   and the first client render (`useEffect` corrects it after mount), and
+   `AppShell.tsx` used `isMobile` for ~15 layout conditionals — sidebar
+   presence/width, hamburger vs. toggle button, nav-links row, logo text,
+   search width. On a real mobile load the page painted the full desktop
+   shell first (sidebar included) then snapped to mobile a beat later — the
+   sidebar disappearing alone was CLS 0.266 on `/screener`, basically the
+   whole page's shift budget in one event.
+
+   Fix mirrors the pattern `CompanyHeader.tsx` already used for its own
+   desktop/mobile split: render **both** variants unconditionally in the HTML
+   and let CSS (`.appnav-hamburger`/`.appnav-sidebar-toggle`,
+   `.appnav-links`, `.appnav-mobile-only`/`.appnav-desktop-only`,
+   `.appshell-sidebar-col`, all in `globals.css`, mirroring
+   `useIsMobile()`'s exact `943px`/landscape breakpoint) pick one — no JS
+   timing dependency, nothing to correct post-hydration. `isMobile` is still
+   used in `AppShell.tsx` for genuinely-interactive, non-layout-affecting
+   things (the mobile drawer's `position:fixed` overlay, the search-results
+   dropdown that only renders after a user types). Minor accepted trade-offs
+   to keep the refactor bounded: the search placeholder is now always the
+   short "Search…" (was a longer string on desktop only); the logo's
+   `marginRight`/search width's `isNarrowDesktop` (944–1500px) mid-state was
+   simplified to just desktop-or-mobile — neither affects CLS, both are small
+   cosmetic deltas at in-between viewport widths.
+
+Verification method: Lighthouse's own `layout-shifts` audit node attribution
+turned out to be unreliable for finding the *actual* culprit element (it
+pooled overlapping shift events under the largest bounding-box node, e.g.
+blaming `CompanyHeader` for a shift actually caused by a `left`-animated
+sibling). Ground truth came from injecting a raw `PerformanceObserver({type:
+"layout-shift"})` via `page.addInitScript` in a throttled Playwright/CDP
+session (`Emulation.setCPUThrottlingRate: 4`, matching Lighthouse's mobile
+profile) and reading `entry.sources[].node.outerHTML` + `previousRect`/
+`currentRect` directly — script not committed, was scratch tooling.
 
 ## Why
 

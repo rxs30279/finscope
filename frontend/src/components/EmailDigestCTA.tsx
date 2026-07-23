@@ -66,6 +66,12 @@ export default function EmailDigestCTA({ source }: { source: string }) {
           flexWrap: "wrap",
           cursor: "pointer",
           animation: "digestSwap 0.6s ease",
+          // Both copy variants (digest/donate) must occupy the same box so the
+          // digest→donate rotation (or the initial mount) never reflows
+          // CompanyHeader underneath — the donate subtext is the longer of the
+          // two and sets the floor.
+          minHeight: 112,
+          boxSizing: "border-box",
         }}
       >
         {/* Animated sheen sweeping across the card */}
@@ -75,10 +81,12 @@ export default function EmailDigestCTA({ source }: { source: string }) {
             position: "absolute",
             top: 0,
             bottom: 0,
+            left: -120,
             width: 90,
             background: "linear-gradient(105deg, transparent 0%, rgba(249,115,22,0.14) 50%, transparent 100%)",
             animation: "digestSheen 4.5s ease-in-out infinite",
             pointerEvents: "none",
+            willChange: "transform",
           }}
         />
 
@@ -154,9 +162,12 @@ export default function EmailDigestCTA({ source }: { source: string }) {
 
         <style>{`
           @keyframes digestSheen {
-            0%   { left: -120px; }
-            55%  { left: 110%; }
-            100% { left: 110%; }
+            /* transform, not left — left is a layout property and the Layout
+               Instability API (CLS) counts every frame of it as a real shift;
+               transform is compositor-only and isn't scored. */
+            0%   { transform: translateX(0); }
+            55%  { transform: translateX(1400px); }
+            100% { transform: translateX(1400px); }
           }
           @keyframes digestPulse {
             0%, 100% { opacity: 1; transform: scale(1); }
