@@ -215,6 +215,9 @@ aside::-webkit-scrollbar {
 .appnav-right {
   gap: 12px;
 }
+.appnav-search {
+  width: 260px;
+}
 .appshell-sidebar-col {
   display: block;
 }
@@ -246,6 +249,10 @@ aside::-webkit-scrollbar {
   }
   .appnav-right {
     gap: 6px !important;
+  }
+  .appnav-search {
+    width: 120px !important;
+    font-size: 11px !important;
   }
   .appshell-sidebar-col {
     display: none !important;
