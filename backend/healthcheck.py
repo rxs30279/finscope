@@ -23,6 +23,9 @@ What it checks
                        refresh (stale > 3 days, or last run degraded)
     - Digest           pipeline_runs marker for the weekday 07:30 RNS email
                        send (stale > 3 days, or last send in fallback/partial)
+    - RNS morning batch when today's pre-send A/B batch finished LLM ranking —
+                       guards the early digest send (WARN as it nears 07:12,
+                       FAIL if the batch ranks after the send would have fired)
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
     - Backend API      GET {API_BASE_URL}/api/filters
@@ -51,7 +54,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime, date, timezone
+from datetime import datetime, date, time as dtime, timezone
 
 import psycopg2
 import psycopg2.extras
@@ -296,6 +299,56 @@ def run_db_checks(query_one=None) -> None:
             # fallback); forcing FAIL surfaces it in the daily GHA run.
             status = FAIL
         return status, f"last send {d:.1f}d ago, status '{row['status']}', {row['detail']}"
+
+    @check("rns.morning_batch")
+    def _rns_morning_batch():
+        # Guards the "send the digest at ~07:12 UK" decision. The morning RNS
+        # batch must be fully LLM-ranked before the send fires; if the early
+        # burst crons (07:01/07:04 UK) ever slip later, completion drifts past
+        # the send and high-impact stories get missed — that regression should
+        # show here. Scope = A/B stories published BEFORE the send (06:30-07:10
+        # UK today), i.e. everything that could be in that morning's email.
+        # Legitimately late-published stories (08:00+) are excluded on purpose:
+        # they don't exist at send time, so they must not drag the metric late.
+        row = query_one(
+            "SELECT (NOW() AT TIME ZONE 'Europe/London') AS now_uk, "
+            "COUNT(*) AS n, "
+            "COUNT(*) FILTER (WHERE llm_processed_at IS NULL) AS unscored, "
+            "(MAX(llm_processed_at) AT TIME ZONE 'Europe/London') AS done_uk "
+            "FROM rns_announcements "
+            "WHERE tier IN ('A','B') "
+            "AND (published_at AT TIME ZONE 'Europe/London')::date "
+            "    = (NOW() AT TIME ZONE 'Europe/London')::date "
+            "AND (published_at AT TIME ZONE 'Europe/London')::time "
+            "    BETWEEN '06:30' AND '07:10'"
+        )
+        if not row or row["now_uk"] is None:
+            return PASS, "no data"
+        now_uk = row["now_uk"]
+        n = row["n"] or 0
+        if n == 0:
+            return PASS, (f"no pre-send batch today "
+                          f"({now_uk:%a %H:%M} UK — weekend/holiday or pre-open)")
+        # Only judge lateness once the burst has had time to finish; before
+        # 07:20 an unranked story is still in flight, not a regression.
+        settled = now_uk.time() >= dtime(7, 20)
+        unscored = row["unscored"] or 0
+        if unscored:
+            if not settled:
+                return PASS, f"{n} stories, {unscored} still ranking ({now_uk:%H:%M} UK)"
+            return FAIL, (f"{unscored}/{n} morning stories unscored at "
+                          f"{now_uk:%H:%M} UK — pipeline stalled")
+        done = row["done_uk"]
+        lag = (done.hour * 60 + done.minute) - 7 * 60
+        # Digest sends ~07:11-07:12; the batch must be ranked before then.
+        # WARN as completion creeps toward the send, FAIL once it lands after a
+        # 07:12 send would already have gone out (i.e. the batch was missed).
+        status = _tier(
+            done.hour * 3600 + done.minute * 60 + done.second,
+            warn_at=7 * 3600 + 10 * 60,   # 07:10
+            fail_at=7 * 3600 + 15 * 60,   # 07:15
+        )
+        return status, f"{n} stories ranked by {done:%H:%M:%S} UK (~{lag}m past 07:00)"
 
     @check("financials.rotation")
     def _financials():
