@@ -50,6 +50,21 @@ const COL_TITLES: Record<string, string> = {
 const SCORE_KEYS = new Set(["momentum_score", "quality_score", "value_score", "risk_score"]);
 const SCORE_COL_WIDTH = 72;
 
+// Row virtualization: only the rows in (and just around) the viewport are
+// mounted. The universe is >700 rows and grows, so rendering them all built a
+// ~10k-node table and re-reconciled every one on each sort/filter (the INP
+// cost). Windowing decouples DOM/render cost from universe size. Rows are all
+// single-line (`whiteSpace: nowrap`), so height is uniform — a fixed-height
+// window is safe. ROW_H is a fallback; the real height is measured on mount.
+const ROW_H = 36;
+const OVERSCAN = 8; // rows rendered beyond each edge, so fast scrolls don't flash blank
+// Windowing needs stable column widths — with auto table-layout the browser
+// sizes columns from the *rendered* cells, so widths would jitter as different
+// rows scroll into the window. Fixed layout + explicit widths keeps them still.
+const FUND_COL_WIDTH: Record<string, number> = { symbol: 104, name: 230, sector: 150, ftse_index: 92, market_cap: 116 };
+const fundColWidth = (key: string): number =>
+  SCORE_KEYS.has(key) ? SCORE_COL_WIDTH : FUND_COL_WIDTH[key] ?? 104;
+
 // Display-only shortenings for the widest ICB sector names (full name kept in
 // the cell's title tooltip). Sectors not listed render unchanged.
 const SECTOR_ABBR: Record<string, string> = {
@@ -115,6 +130,14 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   // table's actual top offset sizes it to exactly fill the rest of the viewport.
   const scrollRef = useRef<HTMLDivElement>(null);
   const [tableMaxH, setTableMaxH] = useState("calc(100vh - 245px)");
+  // Row-virtualization state. `scrollTop`/`viewportH` drive which slice of the
+  // sorted rows is mounted; `rowH` is measured from a real row (see effect) so
+  // the spacer math is pixel-accurate across zoom/DPI. viewportH seeds to a
+  // screenful so the very first paint renders a window, not the whole list.
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(800);
+  const [rowH, setRowH] = useState(ROW_H);
+  const scrollRaf = useRef(0);
   // Publish the set of symbols passing the current filters so the nav search can
   // flag a result that's been screened out (clicking it would otherwise scroll to
   // a row that isn't there). `matchKeyRef` dedupes so we only push on real change.
@@ -167,44 +190,17 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
       const el = scrollRef.current;
       if (!el) return;
       const top = el.getBoundingClientRect().top;
-      setTableMaxH(`${Math.max(220, Math.round(window.innerHeight - top - 16))}px`);
+      const h = Math.max(220, Math.round(window.innerHeight - top - 16));
+      setTableMaxH(`${h}px`);
+      setViewportH(h); // == the container's visible height once the list overflows
     };
     compute();
     window.addEventListener("resize", compute);
     return () => window.removeEventListener("resize", compute);
   }, [loading, showAdvanced, filters.exclude_sectors, tableView]);
 
-  // Scroll the searched row into view. Deferred to a rAF loop rather than run
-  // inline: when the search arrives via router.push("/screener") from another
-  // page, Next's App Router resets the new route's scroll to top *after* this
-  // effect runs, which would cancel an inline scrollIntoView (the prod-only
-  // "search doesn't scroll" bug — masked locally by dev timing). Retrying a few
-  // frames also covers the row not being laid out yet on the first frame.
-  // The context value is one-shot: it lives in the root-layout provider, so if
-  // left in place it survives navigation, and a later search for the *same*
-  // symbol becomes a silent no-op (setState to the identical value bails out,
-  // and router.push("/screener") is inert when already there). It's therefore
-  // cleared once consumed — after the scroll lands, or once the universe is
-  // loaded and the row provably isn't in it (screened out). Not cleared while
-  // results are still loading: the re-run on `results` arrival does the scroll.
-  useEffect(() => {
-    if (!highlightSymbol) return;
-    setHighlighted(highlightSymbol);
-    let raf = 0;
-    let tries = 0;
-    const tick = () => {
-      const el = document.getElementById("row-" + highlightSymbol);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        setHighlightSymbol(null);
-        return;
-      }
-      if (tries++ < 30) { raf = requestAnimationFrame(tick); return; }
-      if (results.length > 0) setHighlightSymbol(null);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [highlightSymbol, results, setHighlightSymbol]);
+  // (The searched-row scroll effect lives after `sorted` is computed — it needs
+  // the row's index in the sorted order to position the virtualized window.)
 
   // Fetch the full universe once. All filtering is done client-side (below), so
   // this is a single canonical request → one Vercel edge cache key shared by all
@@ -279,7 +275,11 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   );
 
   const watchlistSet = watchlist instanceof Set ? watchlist : new Set(watchlist || []);
-  const displayed = results.filter((r) => {
+  // Memoized so filtering the ~700-row universe only re-runs when an input that
+  // actually affects the result set changes — not on every unrelated re-render
+  // (scroll, hover, watchlist toggle). `includedSectors`/`excludedSectors` derive
+  // purely from `filters`, so they're covered by the `filters` dependency.
+  const displayed = useMemo(() => results.filter((r) => {
     // Fundamental filters — applied client-side (mirrors backend screener() WHERE clause).
     const f = filters;
     if (includedSectors.length && !includedSectors.includes(r.sector)) return false;
@@ -309,13 +309,14 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     if (sf.min_value && (r.value_score == null || r.value_score < +sf.min_value)) return false;
     if (sf.max_risk && (r.risk_score == null || r.risk_score > +sf.max_risk)) return false;
     return true;
-  });
+  }), [results, filters, scoreFilters, colFilters, visibleToggleCols]);
 
   // Push the passing-symbol set to the shared context whenever it changes. Keyed
   // on the joined symbols and guarded by a ref so we only setState on a genuine
-  // change — `displayed` is a fresh array each render, so an unguarded update
-  // would loop (the context update re-renders this component). Skip while the
-  // universe is still loading so we don't briefly flag every result as excluded.
+  // change (the context update re-renders this component, which would otherwise
+  // loop). Now that `displayed` is memoized, this effect only fires when the
+  // filtered set actually changes. Skip while the universe is still loading so
+  // we don't briefly flag every result as excluded.
   useEffect(() => {
     if (loading || results.length === 0) return;
     const syms = displayed.map((r) => r.symbol);
@@ -323,7 +324,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     if (key === matchKeyRef.current) return;
     matchKeyRef.current = key;
     setScreenMatches(new Set(syms));
-  });
+  }, [displayed, loading, results.length, setScreenMatches]);
 
   // Only enabled columns' filters count as active (a lingering filter on a
   // now-hidden column shouldn't light up "Clear" or the Advanced dot).
@@ -338,13 +339,77 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     else { setSortCol(key); setSortDir("desc"); }
   };
 
-  const sorted = sortCol == null ? displayed : [...displayed].sort((a, b) => {
+  // Memoized so the ~700-row copy-and-sort only runs when the order can actually
+  // change (new data, or a change of sort column/direction) — not on every
+  // scroll frame the virtualized window triggers.
+  const sorted = useMemo(() => sortCol == null ? displayed : [...displayed].sort((a, b) => {
     const av = a[sortCol], bv = b[sortCol];
     if (av == null && bv == null) return 0;
     if (av == null) return 1; if (bv == null) return -1;
     if (typeof av === "string") return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
     return sortDir === "asc" ? av - bv : bv - av;
-  });
+  }), [displayed, sortCol, sortDir]);
+
+  // Reset the scroll position to the top whenever the filtered/sorted set
+  // changes. With virtualization the container's scrollHeight comes from spacer
+  // rows sized to the full list; if the list shrinks under a stale scrollTop the
+  // window would point past the end (blank view), so snap back to the top —
+  // which is also the expected UX when a filter or sort is applied. A search
+  // jump (below) doesn't touch these deps, so it isn't clobbered.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [filters, scoreFilters, colFilters, tableView, sortCol, sortDir, visibleToggleCols]);
+
+  // Scroll the searched row into view. Placed here because it needs the row's
+  // index in `sorted` to position the virtualized window: the target row may not
+  // be mounted yet, but the spacer rows give the container its full scroll height
+  // immediately, so scrolling to `index * rowH` always lands and the row mounts
+  // as the window catches up. The context value is one-shot (it lives in the
+  // root-layout provider and survives navigation), so it's cleared once consumed
+  // — after the jump, or once the universe is loaded and the row provably isn't
+  // in the filtered set. Not cleared while results are still loading: the re-run
+  // on `sorted` arrival does the scroll.
+  useEffect(() => {
+    if (!highlightSymbol) return;
+    const el = scrollRef.current;
+    const idx = sorted.findIndex((r) => r.symbol === highlightSymbol);
+    if (idx < 0) {
+      if (results.length > 0) setHighlightSymbol(null); // loaded, but screened out — stop waiting
+      return;
+    }
+    if (!el) return;
+    setHighlighted(highlightSymbol);
+    // Measure a real row *now* rather than trusting the rowH state, which may
+    // still be the fallback on this first render. For a row far down the list a
+    // 1-2px per-row estimate error compounds into hundreds of px, landing the
+    // approximate jump outside the mounted window (so the exact scroll below
+    // never finds its row). A live measurement makes phase 1 land close enough.
+    const sample = el.querySelector("tr[data-vrow]") as HTMLElement | null;
+    const rh = sample?.offsetHeight || rowH;
+    // Phase 1 — approximate jump so the target row mounts into the virtualized
+    // window. Instant (not smooth) so it doesn't fight the exact scroll below.
+    const approx = Math.max(0, idx * rh - el.clientHeight / 2 + rh / 2);
+    el.scrollTop = approx;
+    setScrollTop(approx);
+    // Phase 2 — once the row is actually in the DOM, centre it exactly; this
+    // self-corrects any residual estimate error regardless of rowH. Retry across
+    // frames because the row only mounts after the phase-1 scroll re-renders the
+    // window (and to cover layout not being settled on the first frame).
+    let raf = 0, tries = 0;
+    const settle = () => {
+      const row = document.getElementById("row-" + highlightSymbol);
+      if (row) {
+        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightSymbol(null);
+        return;
+      }
+      if (tries++ < 30) raf = requestAnimationFrame(settle);
+      else setHighlightSymbol(null);
+    };
+    raf = requestAnimationFrame(settle);
+    return () => cancelAnimationFrame(raf);
+  }, [highlightSymbol, sorted, results, rowH, setHighlightSymbol]);
 
   // Header column spec for the fundamentals view: the always-on left columns,
   // then the chosen optional columns, then the 4 always-on score pills.
@@ -358,6 +423,44 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     ],
     [visibleToggleCols],
   );
+
+  // The columns actually rendered for the active view (drives the colgroup and
+  // the spacer-row colSpan). Analysts view carries its own widths (4th tuple
+  // slot); fundamentals derives them from `fundColWidth`.
+  const activeCols = tableView === "fundamentals" ? fundCols : ANALYST_COLS;
+  const colCount = activeCols.length;
+  // Fixed-layout tables need a definite width; sum the fundamentals column
+  // widths so the table scrolls horizontally on narrow screens and stretches
+  // uniformly (never per-row) on wide ones.
+  const fundMinWidth = fundCols.reduce((s, [, , key]: any) => s + fundColWidth(key), 0);
+
+  // rAF-coalesced scroll tracking, so we re-render the window at most once per
+  // frame rather than on every scroll event.
+  const onScroll = useCallback(() => {
+    if (scrollRaf.current) return;
+    scrollRaf.current = requestAnimationFrame(() => {
+      scrollRaf.current = 0;
+      if (scrollRef.current) setScrollTop(scrollRef.current.scrollTop);
+    });
+  }, []);
+  useEffect(() => () => { if (scrollRaf.current) cancelAnimationFrame(scrollRaf.current); }, []);
+
+  // Measure a real row's height once it's on screen so the spacer math is exact
+  // (font metrics vary with zoom/DPI). Guarded so it settles after one update.
+  useEffect(() => {
+    const el = scrollRef.current?.querySelector("tr[data-vrow]") as HTMLElement | null;
+    if (el && el.offsetHeight && Math.abs(el.offsetHeight - rowH) > 0.5) setRowH(el.offsetHeight);
+  }, [tableView, sorted.length, rowH, loading]);
+
+  // The mounted window: rows in view plus an overscan margin, with spacer rows
+  // above and below standing in for the un-mounted rows so the scrollbar and
+  // row striping stay correct.
+  const total = sorted.length;
+  const startIndex = Math.max(0, Math.floor(scrollTop / rowH) - OVERSCAN);
+  const endIndex = Math.min(total, startIndex + Math.ceil(viewportH / rowH) + OVERSCAN * 2);
+  const windowRows = sorted.slice(startIndex, endIndex);
+  const padTop = startIndex * rowH;
+  const padBottom = Math.max(0, (total - endIndex) * rowH);
 
   return (
     <div>
@@ -460,8 +563,16 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
       </div>
 
       {loading ? <div style={S.loading}>Screening…</div> : (
-        <div ref={scrollRef} style={{ overflow: "auto", maxHeight: tableMaxH, scrollbarGutter: "stable", scrollSnapType: "y proximity", scrollPaddingTop: 29 }}>
-          <table style={{ ...S.table, minWidth: tableView === "analysts" ? 700 : 900, ...(tableView === "analysts" ? { tableLayout: "fixed" as const } : {}) }}>
+        <div ref={scrollRef} onScroll={onScroll} style={{ overflow: "auto", maxHeight: tableMaxH, scrollbarGutter: "stable", scrollSnapType: "y proximity", scrollPaddingTop: 29 }}>
+          {/* tableLayout:fixed keeps column widths stable as rows scroll into and
+              out of the virtualized window (auto-layout would resize columns to
+              whatever slice is currently mounted). The colgroup pins the widths. */}
+          <table style={{ ...S.table, tableLayout: "fixed" as const, minWidth: tableView === "analysts" ? 700 : fundMinWidth }}>
+            <colgroup>
+              {activeCols.map(([, , key, width]: any) => (
+                <col key={key} style={width ? { width } : tableView === "fundamentals" ? { width: fundColWidth(key) } : undefined} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
                 {(tableView === "fundamentals" ? fundCols : ANALYST_COLS).map(([h, num, key, width]: any) => {
@@ -475,11 +586,17 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r, i) => {
+              {/* Spacer rows stand in for the un-mounted rows above/below the
+                  window so the scrollbar length and striping stay correct. */}
+              {padTop > 0 && (
+                <tr aria-hidden="true"><td colSpan={colCount} style={{ height: padTop, padding: 0, border: 0 }} /></tr>
+              )}
+              {windowRows.map((r, wi) => {
+                const i = startIndex + wi; // absolute index — keeps zebra striping stable while scrolling
                 const isHighlighted = r.symbol === highlighted;
                 const baseBg = isHighlighted ? "#2d1e00" : i % 2 === 0 ? "#1e293b" : "#162032";
                 return (
-                  <tr key={r.symbol} id={"row-" + r.symbol} onClick={() => onSelect(r.symbol)} style={{ background: baseBg, cursor: "pointer", scrollSnapAlign: "start", boxShadow: isHighlighted ? "inset 3px 0 0 #f97316" : "none" }} onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")} onMouseLeave={(e) => (e.currentTarget.style.background = baseBg)}>
+                  <tr key={r.symbol} data-vrow id={"row-" + r.symbol} onClick={() => onSelect(r.symbol)} style={{ background: baseBg, cursor: "pointer", scrollSnapAlign: "start", boxShadow: isHighlighted ? "inset 3px 0 0 #f97316" : "none" }} onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")} onMouseLeave={(e) => (e.currentTarget.style.background = baseBg)}>
                     <td style={{ ...S.td, fontFamily: "monospace", fontWeight: 700, color: watchlistSet.has(r.symbol) ? "#f59e0b" : "#818cf8" }}>
                       <span style={{ display: "inline-flex", alignItems: "center" }}>
                         <StarButton active={watchlistSet.has(r.symbol)} onClick={(e) => { e.stopPropagation(); onToggleWatchlist && onToggleWatchlist(r.symbol); }} />
@@ -488,9 +605,9 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                         </Link>
                       </span>
                     </td>
-                    {/* maxWidth lives on an inner div, not the td: in the auto-layout
-                        fundamentals table a td's max-width is ignored, so a long name
-                        would stretch the whole column. The div is respected and truncates. */}
+                    {/* Truncation lives on an inner div (max-width + ellipsis): the
+                        fixed column width caps the cell, and the div clips a long name
+                        to the visible width rather than letting it force a horizontal scroll. */}
                     <td style={{ ...S.td, color: "#f1f5f9" }} title={r.name}>
                       <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "inherit", textDecoration: "none" }}>
                         <div style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
@@ -530,6 +647,9 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                   </tr>
                 );
               })}
+              {padBottom > 0 && (
+                <tr aria-hidden="true"><td colSpan={colCount} style={{ height: padBottom, padding: 0, border: 0 }} /></tr>
+              )}
             </tbody>
           </table>
         </div>

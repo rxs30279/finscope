@@ -127,21 +127,6 @@ aside::-webkit-scrollbar {
   }
 }
 
-/* Company page: once the reader scrolls down a little, the page settles with the
-   company name at the top (just below the 52px sticky nav), skipping the
-   breadcrumb + CTA banner above it. The snap target is the company header alone
-   (scroll-snap-align + scroll-margin-top there); `proximity` means it only engages
-   near the header and never traps scrolling through the content below.
-
-   The rule is gated on `.company-snap`, which CompanySnap.tsx adds to <html> only
-   after the reader's first scroll gesture. Without that gate the browser snaps to
-   the header AT LOAD (it's only ~120px down, well inside the proximity range),
-   hiding the ad before the reader has scrolled at all. Arming on first scroll keeps
-   the ad visible on load and still snaps once they scroll toward the name. */
-html.company-snap {
-  scroll-snap-type: y proximity;
-}
-
 /* Company-page server-rendered header (CompanyHeader.tsx). The component renders
    two server-side variants — .company-header--wide (desktop, two columns) and
    .company-header-mobile (the original production stacked layout) — and CSS shows

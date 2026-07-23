@@ -118,10 +118,8 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
     })),
   };
 
-  // scrollSnapAlign + scrollMarginTop (= 52px sticky-nav height) let a small scroll
-  // settle the company name just below the nav (see the html rule in globals.css).
   return (
-    <section style={{ marginBottom: 24, scrollSnapAlign: "start", scrollMarginTop: 52 }}>
+    <section style={{ marginBottom: 24 }}>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: jsonLdString([jsonLd, breadcrumb]) }}

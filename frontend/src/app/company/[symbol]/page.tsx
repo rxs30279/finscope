@@ -3,7 +3,6 @@ import CompanyClient from "../_client";
 import CompanyHeader from "@/components/company/CompanyHeader";
 import CompanyBreadcrumb from "@/components/company/CompanyBreadcrumb";
 import CompanyEnrichment from "@/components/company/CompanyEnrichment";
-import CompanySnap from "@/components/company/CompanySnap";
 import EmailDigestCTA from "@/components/EmailDigestCTA";
 import { getCompanyData, getCompanyExtras } from "@/lib/companyData";
 import { slugToSymbol, tickerSlug } from "@/lib/company";
@@ -67,7 +66,6 @@ export default async function CompanyPage({ params, searchParams }: PageProps) {
 
   return (
     <>
-      <CompanySnap />
       <CompanyBreadcrumb symbol={symbol} meta={meta} />
       <EmailDigestCTA source="company_page" />
       <CompanyHeader symbol={symbol} meta={meta} snap={snap} />
