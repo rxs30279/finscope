@@ -1,10 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import {
-  LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart, Cell, LabelList,
-  XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer,
-} from "recharts";
+import dynamic from "next/dynamic";
 import { API } from "@/lib/api";
 import { fmt, gc, currSym } from "@/lib/format";
 import { useIsMobile } from "@/hooks/useMediaQuery";
@@ -12,29 +9,58 @@ import { S } from "@/lib/theme";
 import MetricCard from "./MetricCard";
 import InfoDot from "@/components/InfoDot";
 import FairValueCard from "./FairValueCard";
-import PriceChart from "./PriceChart";
 import AnalystTab from "@/components/AnalystTab";
 import NewsTab from "@/components/NewsTab";
 import DividendsTab from "./DividendsTab";
 import ShortInterestMetric from "./ShortInterestSection";
 
-// The waterfall's category labels ("Cost of Revenue", "Other Expenses", …) are
-// too wide to sit horizontally on mobile without overlapping. Rather than rotate
-// them, wrap multi-word labels onto two lines (split at the midpoint word) so
-// they stay horizontal. A custom tick is needed because Recharts ticks are
-// single-line by default.
-const WrapTick = ({ x, y, payload }: any) => {
-  const words = String(payload?.value ?? "").split(" ");
-  const mid = Math.ceil(words.length / 2);
-  const lines = words.length <= 1 ? words : [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
-  return (
-    <text x={x} y={y} textAnchor="middle" fill="#cbd5e1" fontSize={11} fontFamily="monospace">
-      {lines.map((ln, i) => (
-        <tspan key={i} x={x} dy={12}>{ln}</tspan>
-      ))}
-    </text>
-  );
-};
+// Every chart below is dynamically imported (ssr:false) so recharts is not
+// part of CompanyDetail's own chunk — it streams in per chart, behind a
+// fixed-height placeholder matching the chart's rendered height (no CLS),
+// instead of blocking the whole dashboard shell's parse/mount.
+// height:400 matches PriceChart's own internal loading/error states and
+// CompanyDetail's loading state above, so the placeholder doesn't shift once
+// the chunk resolves.
+const PriceChart = dynamic(() => import("./PriceChart"), {
+  ssr: false,
+  loading: () => <div style={{ minHeight: 400 }} />,
+});
+const OverviewChart = dynamic(() => import("./charts/OverviewChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 220 }} />,
+});
+const WaterfallChart = dynamic(() => import("./charts/WaterfallChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 260 }} />,
+});
+const RevenueEbitdaFcfChart = dynamic(() => import("./charts/RevenueEbitdaFcfChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 220 }} />,
+});
+const EpsChart = dynamic(() => import("./charts/EpsChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 220 }} />,
+});
+const QuarterlyRevenueChart = dynamic(() => import("./charts/QuarterlyRevenueChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 200 }} />,
+});
+const ReturnOnCapitalChart = dynamic(() => import("./charts/ReturnOnCapitalChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 220 }} />,
+});
+const DebtEquityChart = dynamic(() => import("./charts/DebtEquityChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 210 }} />,
+});
+const CurrentRatioChart = dynamic(() => import("./charts/CurrentRatioChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 210 }} />,
+});
+const ProfitMarginsChart = dynamic(() => import("./charts/ProfitMarginsChart"), {
+  ssr: false,
+  loading: () => <div style={{ height: 250 }} />,
+});
 
 interface Props {
   symbol: string;
@@ -192,15 +218,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
           </div>
           <div style={S.card}>
             <h3 style={S.cardTitle}>{`Revenue & Net Income (Annual ${sym}B)`}</h3>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                <XAxis dataKey="year" tick={{ fontSize: 11, fill: "#666", fontFamily: "monospace" }} />
-                <YAxis tick={{ fontSize: 11, fill: "#666", fontFamily: "monospace" }} />
-                <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
-                <Bar dataKey="revenue" fill="#f97316" radius={[2, 2, 0, 0]} name="Revenue" />
-                <Bar dataKey="net_income" fill="#10b981" radius={[2, 2, 0, 0]} name="Net Income" />
-              </BarChart>
-            </ResponsiveContainer>
+            <OverviewChart data={annualChart} sym={sym} />
           </div>
         </div>
       )}
@@ -210,86 +228,23 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
           {waterfall && (
             <div style={S.card}>
               <h3 style={S.cardTitle}>{`Earnings & Revenue (FY ${latestAnnual.period_end_date?.slice(0, 4)})`}</h3>
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={waterfall} margin={{ top: 24, right: 10, bottom: 5, left: 4 }} barCategoryGap="12%">
-                  <XAxis dataKey="name" tick={isMobile ? <WrapTick /> : { fontSize: 12, fill: "#cbd5e1" }} interval={0} tickLine={false} axisLine={{ stroke: "#334155" }} {...(isMobile ? { height: 48 } : {})} />
-                  <YAxis hide domain={wfDomain} />
-                  <Tooltip
-                    cursor={{ fill: "#ffffff08" }}
-                    contentStyle={S.tooltip}
-                    itemStyle={{ color: "#e5e7eb" }}
-                    formatter={(_v: any, _n: any, p: any) => [fmt(p?.payload?.amount, "currency", fcur), p?.payload?.name]}
-                    labelFormatter={() => ""}
-                  />
-                  <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3" />
-                  <Bar dataKey="range" radius={[2, 2, 0, 0]}>
-                    {waterfall.map((d, i) => <Cell key={i} fill={d.fill} />)}
-                    <LabelList
-                      dataKey="amount"
-                      content={(props: any) => {
-                        const { x, y, width, height, value } = props;
-                        // A loss bar hangs below zero and recharts reports it with
-                        // a negative height (y is the bottom edge), so derive the
-                        // top edge explicitly and always sit the label just above
-                        // it — on top of the bar, never inside. Colour the loss red.
-                        const neg = value < 0;
-                        const top = Math.min(y, y + height);
-                        return (
-                          <text x={x + width / 2} y={top - 6} textAnchor="middle" fill={neg ? "#f87171" : "#e5e7eb"} fontSize={12} fontFamily="monospace">
-                            {fmt(value, "currency", fcur)}
-                          </text>
-                        );
-                      }}
-                    />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <WaterfallChart data={waterfall} domain={wfDomain} fcur={fcur} isMobile={isMobile} />
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 20 }}>
             <div style={S.card}>
               <h3 style={S.cardTitle}>{`Revenue, EBITDA & FCF (Annual ${sym}B)`}</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <ComposedChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <defs>
-                    <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} /><stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="gE" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
-                  <Area type="monotone" dataKey="revenue" stroke="#6366f1" fill="url(#gR)" strokeWidth={2} dot={singleDot("revenue", "#6366f1")} name="Revenue" />
-                  <Area type="monotone" dataKey="ebitda" stroke="#10b981" fill="url(#gE)" strokeWidth={2} dot={singleDot("ebitda", "#10b981")} name="EBITDA" />
-                  <Line type="monotone" dataKey="fcf" stroke="#f59e0b" strokeWidth={2} dot={singleDot("fcf", "#f59e0b")} name="FCF" />
-                </ComposedChart>
-              </ResponsiveContainer>
+              <RevenueEbitdaFcfChart data={annualChart} sym={sym} singleDot={singleDot} />
             </div>
             <div style={S.card}>
               <h3 style={S.cardTitle}>EPS Diluted (Annual)</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: any) => sym + v?.toFixed(2)} contentStyle={S.tooltip} />
-                  <ReferenceLine y={0} stroke="#334155" />
-                  <Line type="monotone" dataKey="eps" stroke="#6366f1" strokeWidth={2.5} dot={singleDot("eps", "#6366f1")} name="EPS" />
-                </LineChart>
-              </ResponsiveContainer>
+              <EpsChart data={annualChart} sym={sym} singleDot={singleDot} />
             </div>
           </div>
           {hasQuarterlyRevenue && (
             <div style={S.card}>
               <h3 style={S.cardTitle}>{`Quarterly Revenue (${sym}B)`}</h3>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={qChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <XAxis dataKey="q" tick={{ fontSize: 10 }} /><YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip formatter={(v: any) => sym + v?.toFixed(2) + "B"} contentStyle={S.tooltip} />
-                  <Bar dataKey="revenue" fill="#6366f1" radius={[4, 4, 0, 0]} name="Revenue" />
-                </BarChart>
-              </ResponsiveContainer>
+              <QuarterlyRevenueChart data={qChart} sym={sym} />
             </div>
           )}
           <div style={S.card}>
@@ -327,16 +282,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
             <div style={S.card}>
               <h3 style={S.cardTitle}>Return on Capital (%)</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" />
-                  <Tooltip formatter={(v: any) => `${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
-                  <ReferenceLine y={0} stroke="#334155" />
-                  <Line type="monotone" dataKey="roe" stroke="#6366f1" strokeWidth={2} dot={singleDot("roe", "#6366f1")} name="ROE" />
-                  <Line type="monotone" dataKey="roic" stroke="#10b981" strokeWidth={2} dot={singleDot("roic", "#10b981")} name="ROIC" />
-                  <Line type="monotone" dataKey="roa" stroke="#f59e0b" strokeWidth={2} dot={singleDot("roa", "#f59e0b")} name="ROA" />
-                </LineChart>
-              </ResponsiveContainer>
+              <ReturnOnCapitalChart data={annualChart} singleDot={singleDot} />
             </div>
           </div>
         </div>
@@ -386,18 +332,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
             <div style={S.card}>
               <h3 style={S.cardTitle}>Debt / Equity History</h3>
               {hasDebtEq ? (
-                <ResponsiveContainer width="100%" height={210}>
-                  <AreaChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                    <defs>
-                      <linearGradient id="gD" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} /><stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip contentStyle={S.tooltip} />
-                    <Area type="monotone" dataKey="debt_eq" stroke="#ef4444" fill="url(#gD)" strokeWidth={2} dot={singleDot("debt_eq", "#ef4444")} name="D/E" />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <DebtEquityChart data={annualChart} singleDot={singleDot} />
               ) : (
                 <div style={{ height: 210, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 13 }}>
                   No debt / equity data reported
@@ -412,14 +347,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
                   text="Current ratio = current assets ÷ current liabilities. It gauges short-term liquidity: whether a company can cover the bills due within a year from assets it can turn to cash in that time. Above 1 (the dashed line) means current assets exceed current liabilities — generally healthy. Below 1 can signal a liquidity squeeze, while a very high ratio may mean cash or inventory is sitting idle."
                 />
               </h3>
-              <ResponsiveContainer width="100%" height={210}>
-                <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                  <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip contentStyle={S.tooltip} />
-                  <ReferenceLine y={1} stroke="#f59e0b" strokeDasharray="4 4" />
-                  <Line type="monotone" dataKey="curr_ratio" stroke="#10b981" strokeWidth={2.5} dot={singleDot("curr_ratio", "#10b981")} name="Current Ratio" />
-                </LineChart>
-              </ResponsiveContainer>
+              <CurrentRatioChart data={annualChart} singleDot={singleDot} />
             </div>
           </div>
         </div>
@@ -434,16 +362,7 @@ export default function CompanyDetail({ symbol, initialTab }: Props) {
           </div>
           <div style={S.card}>
             <h3 style={S.cardTitle}>Profit Margins History (%)</h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={annualChart} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
-                <XAxis dataKey="year" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} unit="%" />
-                <Tooltip formatter={(v: any) => `${v?.toFixed(1)}%`} contentStyle={S.tooltip} />
-                <ReferenceLine y={0} stroke="#334155" />
-                <Line type="monotone" dataKey="gross_margin" stroke="#6366f1" strokeWidth={2} dot={singleDot("gross_margin", "#6366f1")} name="Gross Margin" />
-                <Line type="monotone" dataKey="op_margin" stroke="#10b981" strokeWidth={2} dot={singleDot("op_margin", "#10b981")} name="Op. Margin" />
-                <Line type="monotone" dataKey="net_margin" stroke="#f59e0b" strokeWidth={2} dot={singleDot("net_margin", "#f59e0b")} name="Net Margin" />
-              </LineChart>
-            </ResponsiveContainer>
+            <ProfitMarginsChart data={annualChart} singleDot={singleDot} />
           </div>
         </div>
       )}

@@ -1,12 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Mulish } from "next/font/google";
-import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { WatchlistProvider, RefreshProvider } from "./providers";
 import { PostHogProvider } from "./posthog-provider";
 import AppShell from "@/components/layout/AppShell";
+import DeferredGA from "@/components/analytics/DeferredGA";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
 
 // Self-hosted at build time (no runtime Google Fonts fetch, no FOUT). Both are
@@ -85,19 +85,6 @@ export default function RootLayout({
             API) so it is present at HTML-parse time and reliably detected as
             installable. See the metadata note above. */}
         <link rel="manifest" href="/site.webmanifest" />
-        {/* Google Analytics 4 */}
-        <Script
-          src="https://www.googletagmanager.com/gtag/js?id=G-4D7NSXL95B"
-          strategy="lazyOnload"
-        />
-        <Script id="ga4-init" strategy="lazyOnload">
-          {`
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-            gtag('config', 'G-4D7NSXL95B');
-          `}
-        </Script>
       </head>
       <body style={{ margin: 0 }} suppressHydrationWarning>
         <script
@@ -128,6 +115,7 @@ export default function RootLayout({
             </RefreshProvider>
           </WatchlistProvider>
         </PostHogProvider>
+        <DeferredGA />
         <Analytics />
         {/* Sampled to conserve the Speed Insights data-point quota — still enough
             volume per page to see trends (e.g. ~35+/period on high-impact-rns). */}
