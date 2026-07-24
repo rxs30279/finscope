@@ -366,7 +366,7 @@ function ArticlePageStyles() {
       }
       .amra-back {
         position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
-        width: 100%; max-width: 760px; padding: 0 22px; box-sizing: border-box;
+        width: 100%; max-width: 760px; padding: 0 22px; box-sizing: border-box; z-index: 2;
         font-family: var(--font-inter), sans-serif; font-size: 12px; font-weight: 600; color: var(--indigo);
       }
       .amra-hinner {
