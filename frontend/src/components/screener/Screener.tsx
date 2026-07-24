@@ -48,7 +48,7 @@ const COL_TITLES: Record<string, string> = {
 // Composite-score columns — rendered as graded pills and visually grouped.
 // Pinned to one equal width so the columns stay even regardless of header text.
 const SCORE_KEYS = new Set(["momentum_score", "quality_score", "value_score", "risk_score"]);
-const SCORE_COL_WIDTH = 72;
+const SCORE_COL_WIDTH = 56;
 
 // Row virtualization: only the rows in (and just around) the viewport are
 // mounted. The universe is >700 rows and grows, so rendering them all built a
@@ -61,9 +61,9 @@ const OVERSCAN = 8; // rows rendered beyond each edge, so fast scrolls don't fla
 // Windowing needs stable column widths — with auto table-layout the browser
 // sizes columns from the *rendered* cells, so widths would jitter as different
 // rows scroll into the window. Fixed layout + explicit widths keeps them still.
-const FUND_COL_WIDTH: Record<string, number> = { symbol: 104, name: 230, sector: 150, ftse_index: 92, market_cap: 116 };
+const FUND_COL_WIDTH: Record<string, number> = { symbol: 90, name: 170, sector: 112, ftse_index: 82, market_cap: 94 };
 const fundColWidth = (key: string): number =>
-  SCORE_KEYS.has(key) ? SCORE_COL_WIDTH : FUND_COL_WIDTH[key] ?? 104;
+  SCORE_KEYS.has(key) ? SCORE_COL_WIDTH : FUND_COL_WIDTH[key] ?? 82;
 
 // Display-only shortenings for the widest ICB sector names (full name kept in
 // the cell's title tooltip). Sectors not listed render unchanged.
@@ -72,6 +72,16 @@ const SECTOR_ABBR: Record<string, string> = {
   "Consumer Discretionary": "Consmr Discr",
   "Consumer Staples": "Consmr Stapl",
 };
+// Compact display for the Index cell (full value kept in the title tooltip). The
+// FTSE-prefixed indices collapse to their number/tier via the `.replace` below;
+// these two are the long, un-prefixed values that would otherwise overflow the
+// narrow Index column — "Main (non-index)" especially.
+const INDEX_ABBR: Record<string, string> = {
+  "Main (non-index)": "Main",
+  "FTSE SmallCap": "SmallCap",
+};
+const indexLabel = (v: string | null | undefined): string =>
+  v == null ? "" : INDEX_ABBR[v] ?? v.replace("FTSE ", "");
 // Analyst view has few columns, so we use a fixed table layout with explicit
 // header widths to keep them evenly spaced; Name (no width) absorbs the slack.
 const ANALYST_COLS = [
@@ -610,13 +620,13 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                         to the visible width rather than letting it force a horizontal scroll. */}
                     <td style={{ ...S.td, color: "#f1f5f9" }} title={r.name}>
                       <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "inherit", textDecoration: "none" }}>
-                        <div style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
+                        <div style={{ maxWidth: 152, overflow: "hidden", textOverflow: "ellipsis" }}>{r.name}</div>
                       </Link>
                     </td>
                     <td style={{ ...S.td, color: "#64748b" }} title={r.sector}>
-                      <div style={{ maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis" }}>{SECTOR_ABBR[r.sector] || r.sector}</div>
+                      <div style={{ maxWidth: 104, overflow: "hidden", textOverflow: "ellipsis" }}>{SECTOR_ABBR[r.sector] || r.sector}</div>
                     </td>
-                    <td style={{ ...S.td, color: "#64748b" }}>{r.ftse_index?.replace("FTSE ", "")}</td>
+                    <td style={{ ...S.td, color: "#64748b" }} title={r.ftse_index}>{indexLabel(r.ftse_index)}</td>
                     <td style={{ ...S.tdNum, color: "#ccc" }}>{fmt(r.market_cap, "currency", r.currency)}</td>
                     {tableView === "fundamentals" ? (
                       <>
