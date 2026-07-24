@@ -1,4 +1,4 @@
-import { apiUrl } from "./seo";
+import { backendUrl } from "./seo";
 
 // Shape mirrors backend/showcase.py's approved-list serialiser. Loose typing —
 // the client component (HighImpactRnsTab.js) already handles this data untyped.
@@ -13,7 +13,7 @@ const REVALIDATE = 300;
 // browser instead of rendering an empty list.
 export async function getShowcase(): Promise<ShowcaseRow[] | null> {
   try {
-    const res = await fetch(apiUrl("/api/showcase"), {
+    const res = await fetch(backendUrl("/api/showcase"), {
       next: { revalidate: REVALIDATE },
     });
     if (!res.ok) return null;
