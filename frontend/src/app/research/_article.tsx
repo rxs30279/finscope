@@ -13,46 +13,55 @@ export default function ArticleView({
   dateLabel,
   tags,
   body,
+  // The public article page renders its own hero (title/date/tags over the
+  // cover image), so it hides this built-in header. The admin preview keeps it
+  // so "preview" still shows the full standalone article.
+  showHeader = true,
 }: {
   title: string;
   dateLabel: string;
   tags: string[];
   body: string;
+  showHeader?: boolean;
 }) {
   return (
     <article>
-      <div
-        style={{
-          fontFamily: "monospace",
-          fontSize: 11,
-          color: colors.textFaint,
-          textTransform: "uppercase",
-          letterSpacing: 0.5,
-          marginBottom: 10,
-          display: "flex",
-          gap: 10,
-          flexWrap: "wrap",
-        }}
-      >
-        <span>{dateLabel}</span>
-        {tags?.map((t) => (
-          <span key={t} style={{ color: colors.indigo }}>
-            #{t}
-          </span>
-        ))}
-      </div>
-      <h1
-        style={{
-          fontFamily: "var(--font-mulish), var(--font-inter), sans-serif",
-          fontSize: 32,
-          fontWeight: 700,
-          color: colors.white,
-          margin: "0 0 24px",
-          lineHeight: 1.2,
-        }}
-      >
-        {title}
-      </h1>
+      {showHeader && (
+        <>
+          <div
+            style={{
+              fontFamily: "monospace",
+              fontSize: 11,
+              color: colors.textFaint,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              marginBottom: 10,
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+            }}
+          >
+            <span>{dateLabel}</span>
+            {tags?.map((t) => (
+              <span key={t} style={{ color: colors.indigo }}>
+                #{t}
+              </span>
+            ))}
+          </div>
+          <h1
+            style={{
+              fontFamily: "var(--font-mulish), var(--font-inter), sans-serif",
+              fontSize: 32,
+              fontWeight: 700,
+              color: colors.white,
+              margin: "0 0 24px",
+              lineHeight: 1.2,
+            }}
+          >
+            {title}
+          </h1>
+        </>
+      )}
 
       <div className="research-prose" style={proseStyle}>
         <ReactMarkdown
@@ -64,6 +73,24 @@ export default function ArticleView({
             // is react-markdown's AST handle — destructured away so it isn't
             // spread onto the DOM element.)
             img: ({ node: _node, ...props }) => (props.src ? <img {...props} /> : null),
+            // A paragraph whose only content is a single link becomes a
+            // prominent call-to-action button. Authors get a button just by
+            // putting a bare `[label](url)` on its own line.
+            p: ({ node, children, ...props }) => {
+              const kids = (node?.children ?? []).filter(
+                (c: { type?: string; value?: string }) =>
+                  !(c.type === "text" && !(c.value ?? "").trim()),
+              );
+              const onlyLink =
+                kids.length === 1 &&
+                (kids[0] as { type?: string; tagName?: string }).type === "element" &&
+                (kids[0] as { tagName?: string }).tagName === "a";
+              return onlyLink ? (
+                <p className="research-cta">{children}</p>
+              ) : (
+                <p {...props}>{children}</p>
+              );
+            },
           }}
         >
           {body}
@@ -87,7 +114,22 @@ export default function ArticleView({
         .research-prose p { margin: 0 0 16px; }
         .research-prose ul, .research-prose ol { margin: 0 0 16px; padding-left: 24px; }
         .research-prose li { margin: 4px 0; }
-        .research-prose a { color: ${colors.indigo}; text-decoration: underline; }
+        .research-prose a {
+          color: #b3bbff; font-weight: 600;
+          text-decoration: underline; text-decoration-color: rgba(179, 187, 255, 0.5);
+          text-underline-offset: 2px; transition: color 0.15s ease;
+        }
+        .research-prose a:hover { color: #d6dbff; text-decoration-color: #d6dbff; }
+        /* Standalone-link paragraph → CTA button */
+        .research-prose .research-cta { margin: 26px 0; }
+        .research-prose .research-cta a {
+          display: inline-flex; align-items: center; gap: 8px;
+          font-family: var(--font-inter), sans-serif; font-weight: 700; font-size: 14px;
+          color: #0a0a0a; background: linear-gradient(135deg, #a5aefc, #8b93f8);
+          padding: 12px 22px; border-radius: 7px; text-decoration: none;
+          box-shadow: 0 6px 22px rgba(129, 140, 248, 0.28); transition: filter 0.15s ease;
+        }
+        .research-prose .research-cta a:hover { filter: brightness(1.08); text-decoration: none; }
         .research-prose blockquote {
           border-left: 3px solid ${colors.accent};
           margin: 16px 0; padding: 4px 16px; color: ${colors.textMuted};

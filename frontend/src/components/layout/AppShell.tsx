@@ -55,7 +55,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [priceToast, setPriceToast] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const isCompanyPage = pathname.startsWith("/company");
-  const showSidebar = !isCompanyPage;
+  const isResearchPage = pathname.startsWith("/research");
+  const showSidebar = !isCompanyPage && !isResearchPage;
 
   const doSearch = useCallback((q: string) => {
     setSearchQ(q);

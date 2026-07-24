@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import ReactDOM from "react-dom";
 import ResearchPostClient from "./_client";
-import { getResearchPost } from "@/lib/research";
+import { getResearchPost, getResearchPosts } from "@/lib/research";
+import { coverFor } from "@/lib/researchCovers";
 import { SITE_URL } from "@/lib/seo";
 
 interface PageProps {
@@ -51,6 +53,16 @@ export default async function ResearchPostPage({ params }: PageProps) {
   const post = await getResearchPost(slug);
   if (!post) notFound();
 
+  // Post list drives the "Related notes" strip and the cover assignment. null
+  // (API blip) degrades to no related section rather than failing the article.
+  const allPosts = (await getResearchPosts()) ?? [];
+
+  // The hero cover is a CSS background — preload it so it doesn't wait on CSS
+  // parse, protecting LCP. Use the same list position the client renders from.
+  ReactDOM.preload(coverFor(post, allPosts.findIndex((p) => p.slug === post.slug)).src, {
+    as: "image",
+  });
+
   const url = `${SITE_URL}/research/${post.slug}`;
   // JSON-LD so the article is eligible for rich results.
   const jsonLd = {
@@ -88,7 +100,7 @@ export default async function ResearchPostPage({ params }: PageProps) {
         // could close the tag early — escape it into the JS string form.
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }}
       />
-      <ResearchPostClient initialPost={post} />
+      <ResearchPostClient initialPost={post} allPosts={allPosts} />
     </>
   );
 }
