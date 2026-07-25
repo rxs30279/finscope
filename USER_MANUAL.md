@@ -1671,7 +1671,7 @@ Aerospace and defence, engineering, construction, and business services.
 |---|---|
 | RR.L | Rolls-Royce |
 | BA.L | BAE Systems |
-| AHT.L | Ashtead Group |
+| SMIN.L | Smiths Group |
 | IMI.L | IMI |
 | WEIR.L | Weir Group |
 | RTO.L | Rentokil Initial |
@@ -1680,7 +1680,7 @@ Aerospace and defence, engineering, construction, and business services.
 | EXPN.L | Experian |
 | HLMA.L | Halma |
 
-> **Sector characteristics:** Highly diverse. Defence names like BAE are increasingly seen as defensive given rising government spending. Cyclical industrials like Ashtead (equipment rental) are closely tied to construction activity. Halma is a quality compounder of safety and environmental technology.
+> **Sector characteristics:** Highly diverse. Defence names like BAE are increasingly seen as defensive given rising government spending. Cyclical industrials like Weir (mining equipment) are closely tied to capital spending. Halma is a quality compounder of safety and environmental technology.
 
 ---
 
