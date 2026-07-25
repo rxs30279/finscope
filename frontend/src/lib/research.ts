@@ -1,4 +1,5 @@
 import { backendUrl } from "./seo";
+import { fetchRetry } from "./fetchRetry";
 
 // Shapes mirror backend/research.py serialisers.
 export interface ResearchPostSummary {
@@ -41,7 +42,7 @@ const REVALIDATE = 60;
 // invite search engines to de-index it.
 export async function getResearchPost(slug: string): Promise<ResearchPost | null> {
   if (!slug) return null;
-  const res = await fetch(backendUrl(`/api/research/posts/${encodeURIComponent(slug)}`), {
+  const res = await fetchRetry(backendUrl(`/api/research/posts/${encodeURIComponent(slug)}`), {
     next: { revalidate: REVALIDATE },
   });
   if (res.status === 404) return null;
@@ -54,7 +55,7 @@ export async function getResearchPost(slug: string): Promise<ResearchPost | null
 // falls back to a client-side fetch) rather than 500 the whole page.
 export async function getResearchPosts(): Promise<ResearchPostSummary[] | null> {
   try {
-    const res = await fetch(backendUrl("/api/research/posts"), {
+    const res = await fetchRetry(backendUrl("/api/research/posts"), {
       next: { revalidate: REVALIDATE },
     });
     if (!res.ok) return null;

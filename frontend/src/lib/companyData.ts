@@ -1,4 +1,5 @@
 import { backendUrl } from "./seo";
+import { fetchRetry } from "./fetchRetry";
 
 export interface CompanyMeta {
   symbol?: string;
@@ -35,10 +36,10 @@ export async function getCompanyData(
   const enc = encodeURIComponent(symbol);
   const opts = { next: { revalidate: 3600 } } as const;
   const [meta, snap] = await Promise.all([
-    fetch(backendUrl(`/api/company?symbol=${enc}`), opts)
+    fetchRetry(backendUrl(`/api/company?symbol=${enc}`), opts)
       .then((r) => (r.ok ? (r.json() as Promise<CompanyMeta>) : null))
       .catch(() => null),
-    fetch(backendUrl(`/api/snapshot?symbol=${enc}`), opts)
+    fetchRetry(backendUrl(`/api/snapshot?symbol=${enc}`), opts)
       .then((r) => (r.ok ? (r.json() as Promise<CompanySnap>) : null))
       .catch(() => null),
   ]);
@@ -64,7 +65,7 @@ export interface CompanyListItem {
 // "temporarily unavailable" page (or a notFound()) would be cached by ISR for
 // the full revalidate window, whereas a throw keeps serving the last good page.
 export async function getCompaniesList(): Promise<CompanyListItem[]> {
-  return fetch(backendUrl("/api/companies"), { next: { revalidate: 86400 } })
+  return fetchRetry(backendUrl("/api/companies"), { next: { revalidate: 86400 } })
     .then((r) => (r.ok ? (r.json() as Promise<CompanyListItem[]>) : []))
     .catch(() => []);
 }
@@ -135,7 +136,7 @@ const EMPTY_EXTRAS: CompanyExtras = {
 export async function getCompanyExtras(symbol: string): Promise<CompanyExtras> {
   if (!symbol) return EMPTY_EXTRAS;
   const enc = encodeURIComponent(symbol);
-  return fetch(backendUrl(`/api/company-extras?symbol=${enc}`), {
+  return fetchRetry(backendUrl(`/api/company-extras?symbol=${enc}`), {
     next: { revalidate: 900 },
   })
     .then((r) => (r.ok ? (r.json() as Promise<CompanyExtras>) : EMPTY_EXTRAS))

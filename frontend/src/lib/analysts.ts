@@ -1,4 +1,5 @@
 import { backendUrl } from "./seo";
+import { fetchRetry } from "./fetchRetry";
 
 // Shapes mirror backend/analysts.py's serialisers. Loose typing — the client
 // component (AnalystMonitorTab.js) already handles this data untyped.
@@ -14,7 +15,7 @@ const MOVER_WINDOW_DAYS = 30;
 
 async function getList(path: string): Promise<AnalystRow[] | null> {
   try {
-    const res = await fetch(backendUrl(path), { next: { revalidate: REVALIDATE } });
+    const res = await fetchRetry(backendUrl(path), { next: { revalidate: REVALIDATE } });
     if (!res.ok) return null;
     const data = await res.json();
     return Array.isArray(data) ? data : null;

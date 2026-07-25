@@ -1,4 +1,5 @@
 import { backendUrl } from "./seo";
+import { fetchRetry } from "./fetchRetry";
 
 // Shapes mirror backend/shorts.py's _build_leaderboard serialiser.
 export type ShortLeaderRow = {
@@ -35,7 +36,7 @@ const REVALIDATE = 3600;
 // rendering an empty page.
 export async function getMostShorted(): Promise<ShortLeaderboard | null> {
   try {
-    const res = await fetch(backendUrl("/api/shorts/top"), {
+    const res = await fetchRetry(backendUrl("/api/shorts/top"), {
       next: { revalidate: REVALIDATE },
     });
     if (!res.ok) return null;
