@@ -15,7 +15,7 @@ import {
 } from "recharts";
 import { API } from "@/lib/api";
 import { currSym, fmtUKDate } from "@/lib/format";
-import { latestSessionDate } from "@/lib/lse";
+import { latestSessionDate, lsePriceMayChange } from "@/lib/lse";
 import { loadChartPrefs, saveChartPrefs } from "@/lib/storage";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { S } from "@/lib/theme";
@@ -119,6 +119,13 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
       .catch(() => setLoading(false));
   }, [symbol]);
 
+  // Live last-price poll. Each miss on /api/quotes is a yfinance fetch (its
+  // cache TTL is 60s, same as this interval), so the repeating poll only runs
+  // when the tab is visible and the price can still move (trading hours plus
+  // the closing-auction window). The two one-shot fetches — on mount and on
+  // return to the tab — are deliberately unguarded: they cost one call, and
+  // after the close the nightly cron hasn't stored today's bar yet, so the live
+  // quote is the only source for today's price (see liveIsNewSession below).
   useEffect(() => {
     if (!symbol) return;
     setLiveQuote(null);
@@ -133,9 +140,19 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
         })
         .catch(() => {});
     };
+    const pollQuote = () => {
+      if (document.hidden || !lsePriceMayChange()) return;
+      fetchQuote();
+    };
+    const onVisible = () => { if (!document.hidden) fetchQuote(); };
     fetchQuote();
-    const id = setInterval(fetchQuote, 60000);
-    return () => { cancelled = true; clearInterval(id); };
+    const id = setInterval(pollQuote, 60000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [symbol]);
 
   const computeMA = (data: PriceRow[], n: number) =>

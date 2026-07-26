@@ -41,6 +41,14 @@ function isLseTradingDay(iso: string, weekday: string) {
   return !UK_HOLIDAYS.has(iso);
 }
 
+// Seconds elapsed in the London day. Intl gives hour '24' at midnight rather
+// than '00', so normalise before arithmetic.
+function londonDaySec(p: Record<string, string>) {
+  let hour = parseInt(p.hour, 10);
+  if (hour === 24) hour = 0;
+  return hour * 3600 + parseInt(p.minute, 10) * 60 + parseInt(p.second, 10);
+}
+
 export function nextOpenLabel(year: number, month: number, day: number) {
   const d = new Date(Date.UTC(year, month - 1, day, 12));
   for (let i = 0; i < 14; i++) {
@@ -62,9 +70,7 @@ export function nextOpenLabel(year: number, month: number, day: number) {
 // served series up to a further day).
 export function latestSessionDate(now = new Date()): string {
   const p = londonParts(now);
-  let hour = parseInt(p.hour, 10);
-  if (hour === 24) hour = 0;
-  const secNow = hour * 3600 + parseInt(p.minute, 10) * 60 + parseInt(p.second, 10);
+  const secNow = londonDaySec(p);
   const iso = `${p.year}-${p.month}-${p.day}`;
   if (isLseTradingDay(iso, p.weekday) && secNow >= LSE_OPEN_SEC) return iso;
   const d = new Date(Date.UTC(
@@ -79,15 +85,29 @@ export function latestSessionDate(now = new Date()): string {
   return iso;
 }
 
+// The closing auction uncrosses a few minutes after the 16:30 bell (12:30 on
+// half-days), so the official closing price lands *after* lseStatus() reports
+// closed. Price pollers use this window instead of lseStatus().open, otherwise
+// a tab left open across the close sits on the last continuous-trading print
+// and never picks the auction price up.
+const LSE_AUCTION_GRACE_SEC = 15 * 60;
+
+export function lsePriceMayChange(now = new Date()): boolean {
+  const p = londonParts(now);
+  const iso = `${p.year}-${p.month}-${p.day}`;
+  if (!isLseTradingDay(iso, p.weekday)) return false;
+  const closeSec = UK_HALF_DAYS.has(iso) ? LSE_HALF_CLOSE_SEC : LSE_CLOSE_SEC;
+  const secNow = londonDaySec(p);
+  return secNow >= LSE_OPEN_SEC && secNow < closeSec + LSE_AUCTION_GRACE_SEC;
+}
+
 export type LseStatus =
   | { open: true;  secondsToClose: number }
   | { open: false; nextOpen: string };
 
 export function lseStatus(): LseStatus {
   const p = londonParts();
-  let hour = parseInt(p.hour, 10);
-  if (hour === 24) hour = 0;
-  const secNow   = hour * 3600 + parseInt(p.minute, 10) * 60 + parseInt(p.second, 10);
+  const secNow   = londonDaySec(p);
   const iso      = `${p.year}-${p.month}-${p.day}`;
   const trading  = isLseTradingDay(iso, p.weekday);
   const closeSec = UK_HALF_DAYS.has(iso) ? LSE_HALF_CLOSE_SEC : LSE_CLOSE_SEC;
