@@ -121,9 +121,12 @@ export default function RootLayout({
         </PostHogProvider>
         <DeferredGA />
         <Analytics />
-        {/* Sampled to conserve the Speed Insights data-point quota — still enough
-            volume per page to see trends (e.g. ~35+/period on high-impact-rns). */}
-        <SpeedInsights sampleRate={0.25} />
+        {/* Sampled to stay inside the Hobby Speed Insights quota (10k data points
+            per period). Full-rate volume is ~340/day (~10.2k/period) — right at the
+            cap — so we sample. 0.25 proved too thin: the dashboard couldn't compute
+            a P75 for the per-device metric breakdowns. 0.5 lands at ~5k/period,
+            leaving headroom while keeping the breakdowns populated. */}
+        <SpeedInsights sampleRate={0.5} />
       </body>
     </html>
   );
