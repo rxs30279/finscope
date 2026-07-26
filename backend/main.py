@@ -1950,6 +1950,31 @@ def _watchlist_rows(requested: list[str]) -> list[dict]:
     # 3. Risk score — reuse the screener's blended Altman-Z + volatility scorer.
     _attach_risk_score(list(by_symbol.values()))
 
+    # 3b. Momentum / quality / value for the watchlist's factor strip — the same
+    #     recipe /api/snapshot uses for the company-page pills (momentum stored in
+    #     screener_scores, quality/value computed on the scrubbed screener columns),
+    #     so the two pages never disagree on a stock's scores.
+    from showcase import _MQVR_SQL
+
+    mrows = query(_MQVR_SQL, (list(by_symbol.keys()),))
+    _scrub_screener_metrics(mrows)
+    _attach_pegy(mrows)
+    mqv = {
+        m["symbol"]: {
+            "momentum_score": m.get("momentum_score"),
+            "quality_score": _quality_score(m),
+            "value_score": _value_score(m),
+        }
+        for m in mrows
+    }
+    for sym, r in by_symbol.items():
+        r.update(
+            mqv.get(
+                sym,
+                {"momentum_score": None, "quality_score": None, "value_score": None},
+            )
+        )
+
     # 4. Recent RNS — count in the last 7 days + the single latest headline (for a tooltip).
     rns_latest = query(
         """

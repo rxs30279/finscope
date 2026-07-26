@@ -4,10 +4,12 @@ import Link from "next/link";
 import { API } from "@/lib/api";
 import { companyHref } from "@/lib/company";
 import { loadTargets, saveTargets, DEFAULT_LIST_ID } from "@/lib/storage";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import { lseStatus, latestSessionDate } from "@/lib/lse";
 import PageHeader from "@/components/layout/PageHeader";
+import ScorePill from "@/components/screener/ScorePill";
+import ScoreStrip, { MEASURES as SCORE_COLS } from "@/components/company/ScoreStrip";
 
 // Relative time for recent items ("2h", "3d"); a real date once past a week,
 // which reads better than "5w" for older news.
@@ -35,24 +37,13 @@ const fmtPounds = (pence) =>
 const pctColor = (v) =>
   v == null ? "#64748b" : v > 0.05 ? "#10b981" : v < -0.05 ? "#ef4444" : "#94a3b8";
 
-const riskColor = (s) =>
-  s == null
-    ? "#444"
-    : s <= 3
-      ? "#4ade80"
-      : s <= 6
-        ? "#fbbf24"
-        : "#f87171";
-const riskBg = (s) =>
-  s == null ? "transparent" : s <= 3 ? "#14532d" : s <= 6 ? "#78350f" : "#7f1d1d";
-
 // Investegate-style tier colours, reused for the RNS signal badge.
 const TIER_COLOR = { A: "#f87171", B: "#fbbf24", C: "#94a3b8" };
 
 const S = {
   th: {
     textAlign: "left",
-    padding: "8px 18px",
+    padding: "8px 14px",
     background: "#0a0a0a",
     color: "#f97316",
     fontSize: 10,
@@ -68,7 +59,7 @@ const S = {
     userSelect: "none",
   },
   td: {
-    padding: "9px 18px",
+    padding: "9px 14px",
     borderBottom: "1px solid #1a1a1a",
     color: "#ccc",
     whiteSpace: "nowrap",
@@ -138,7 +129,10 @@ function NewsCluster({ rnsCount, rnsLatest, pressCount, onClick }) {
 
 // Thumbnail price graph — last ~3 months of closes. Indigo line + filled area to
 // match the price chart on the company detail page.
-function Sparkline({ points, width = 76, height = 26 }) {
+// `fluid` stretches the chart to whatever width its cell gives it (the table's
+// columns are percentages) instead of drawing at a fixed pixel width; `width`
+// then only sets the coordinate space.
+function Sparkline({ points, width = 76, height = 26, fluid = false }) {
   if (!points || points.length < 2)
     return <span style={{ color: "#3a3a3a", fontSize: 11 }}>—</span>;
   const min = Math.min(...points);
@@ -160,9 +154,11 @@ function Sparkline({ points, width = 76, height = 26 }) {
   const color = "#6366f1";
   return (
     <svg
-      width={width}
+      width={fluid ? "100%" : width}
       height={height}
-      style={{ display: "block", flexShrink: 0 }}
+      viewBox={fluid ? `0 0 ${width} ${height}` : undefined}
+      preserveAspectRatio={fluid ? "none" : undefined}
+      style={{ display: "block", flexShrink: fluid ? 1 : 0 }}
       title="Last 3 months"
     >
       <path d={area} fill={color} opacity={0.13} />
@@ -181,7 +177,9 @@ function Sparkline({ points, width = 76, height = 26 }) {
 // 52-week range bar: a solid fill from the 52w low (left) to the current price,
 // colour-coded by where in the range the price sits — red near the low, amber in
 // the middle, green near the 52w high.
-function RangeBar({ pos }) {
+// `fluid` lets the bar grow to fill its table cell; fixed at 64px otherwise
+// (the mobile card, where it sits in a flex row beside other content).
+function RangeBar({ pos, fluid = false }) {
   if (pos == null)
     return <span style={{ color: "#444", fontSize: 11 }}>—</span>;
   const clamped = Math.max(0, Math.min(100, pos));
@@ -190,11 +188,17 @@ function RangeBar({ pos }) {
   return (
     <div
       title={`${clamped.toFixed(0)}% of 52-week range`}
-      style={{ display: "flex", alignItems: "center", gap: 8 }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        width: fluid ? "100%" : undefined,
+      }}
     >
       <div
         style={{
-          width: 64,
+          width: fluid ? undefined : 64,
+          flex: fluid ? 1 : undefined,
           height: 8,
           background: "#0b1120",
           borderRadius: 2,
@@ -425,9 +429,9 @@ function AddStockBox({ onAdd, existing }) {
 // News for a single selected share: RNS + press, newest first. Defaults to the
 // first share in the list; clicking a row's News cell switches it to that share.
 // Reuses /api/news/{symbol}, which live-fetches press when the cache is stale
-// (or always, with refresh=true). Sits right of the table on wide screens,
-// underneath on narrow ones.
-function NewsPanel({ symbol, name, sideBySide }) {
+// (or always, with refresh=true). Always sits underneath the table/cards, at
+// every width.
+function NewsPanel({ symbol, name }) {
   const isAdmin = useIsAdmin();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -482,16 +486,13 @@ function NewsPanel({ symbol, name, sideBySide }) {
   return (
     <div
       style={{
-        // Grow into whatever room the table leaves (e.g. when the sidebar is
-        // closed), down to a sensible minimum. Full width when stacked.
-        flex: sideBySide ? "1 1 360px" : "0 0 auto",
-        minWidth: sideBySide ? 320 : "auto",
+        flex: "0 0 auto",
         background: "#0d0d0d",
         border: "1px solid #1e1e1e",
         borderRadius: 3,
         display: "flex",
         flexDirection: "column",
-        maxHeight: sideBySide ? "calc(100vh - 245px)" : 520,
+        maxHeight: 520,
       }}
     >
       <div
@@ -665,30 +666,253 @@ function NewsPanel({ symbol, name, sideBySide }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
+// Desktop sparkline width — wide enough that the trend + 52-week range fill their
+// shared column instead of leaving a gap before Target buy.
+const SPARK_W = 110;
+
+// The four factor columns — identical width AND padding, so the pills sit on an
+// even pitch. (Giving MOM extra left padding to open up the divider knocked its
+// pill out of step with the other three.) MOM carries the faint rule; the space
+// before it comes from Target buy's right padding.
+const SCORE_TABLE_COLS = SCORE_COLS.map((c, i) => ({
+  ...c,
+  align: "center",
+  width: "4%",
+  padding: "8px 10px",
+  cellPadding: "9px 10px",
+  divider: i === 0,
+}));
+
+// Widths sum to 100% and drive a fixed table layout, so the columns keep the same
+// proportions at every page width instead of auto-layout handing the spare space
+// to whichever columns happen to hold the widest content. The bulk (72%) goes to
+// the price/trend block left of the divider; the four score pills and the news
+// chip only need what their fixed-size content occupies.
+// The news column's left padding is the gap between the RSK pill and the news
+// chip. Named because the header cell and the body cell are written separately
+// (the body <td> is hand-rolled, not part of the COLS map) and silently drifted
+// apart once already.
+const NEWS_HEAD_PAD = "8px 14px 8px 76px";
+const NEWS_CELL_PAD = "9px 14px 9px 76px";
+// How far into the news column the orange "showing this share" marker sits, so it
+// leads the chip rather than crowding the RSK pill. Keep it under the left padding
+// above or it will overlap the chip.
+const NEWS_MARK_LEFT = 62;
+
 const COLS = [
   {
     key: "name",
     // Indent past the row's ★ button (icon + gap) so the header lines up with the ticker.
     label: <span style={{ marginLeft: 22 }}>Stock</span>,
+    // Only as wide as a ticker + elided company name needs; any more and it opens
+    // a dead gap that pushes every other column to the right.
     align: "left",
+    width: "15%",
   },
-  { key: "price", label: "Price", align: "right" },
-  { key: "day", label: "Day", align: "right" },
-  { key: "run", label: "Run", align: "right" },
+  { key: "price", label: "Price", align: "right", width: "7%" },
+  { key: "day", label: "Day", align: "right", width: "7%" },
+  { key: "run", label: "Run", align: "right", width: "7%" },
+  // No sort: the sparkline has no single number to order by — 52W Range next to
+  // it covers "where is this trading".
+  { key: "trend", label: "Trend", align: "left", width: "11%", noSort: true },
+  { key: "range", label: "52W Range", align: "left", width: "11%" },
+  // Extra right padding here and extra left padding on MOM below open up the
+  // faint divider that separates the price block from the factor block.
   {
-    key: "range",
-    label: (
-      <span style={{ display: "inline-flex", gap: 12 }}>
-        <span style={{ width: 76, display: "inline-block" }}>Trend</span>
-        <span>52W Range</span>
-      </span>
-    ),
-    align: "left",
+    key: "target",
+    label: "Target buy",
+    align: "right",
+    width: "7%",
+    padding: "8px 24px 8px 10px",
+    cellPadding: "9px 24px 9px 10px",
   },
-  { key: "target", label: "Target buy", align: "right" },
-  { key: "signals", label: "News", align: "left", noSort: true },
-  { key: "risk", label: "Risk", align: "right" },
+  ...SCORE_TABLE_COLS,
+  // Deep left padding sets the news chip well clear of the RSK pill, and the wider
+  // column pulls everything to its left further left.
+  {
+    key: "signals",
+    label: "News",
+    align: "left",
+    noSort: true,
+    width: "18%",
+    padding: NEWS_HEAD_PAD,
+    cellPadding: NEWS_CELL_PAD,
+  },
 ];
+
+// Faint vertical rule marking a group boundary between columns.
+const DIVIDER = "1px solid rgba(148,163,184,0.18)";
+
+// Cards have no column headers to click, so mobile gets its own sort chips.
+// Price/trend keys only — the four factor scores are shown on the card but not
+// offered as sorts, to keep the chip row to a single line.
+const MOBILE_SORTS = [
+  { key: "day", label: "Day" },
+  { key: "price", label: "Price" },
+  { key: "name", label: "Name" },
+  { key: "range", label: "52W" },
+  { key: "run", label: "Run" },
+];
+
+// ── Mobile card ───────────────────────────────────────────────────────────────
+// One card per holding, replacing the (horizontally scrolling) table row on
+// phones. Tapping the card points the news panel below at this share; the
+// ticker/name block is a link through to the company page.
+function WatchlistCard({
+  row,
+  price,
+  live,
+  dayChange,
+  rangePosition,
+  selected,
+  listName,
+  onRemove,
+  onPickNews,
+}) {
+  const hasNews = !!(row.rns_count || row.news_count);
+  return (
+    <div
+      onClick={onPickNews}
+      style={{
+        background: selected ? "rgba(249,115,22,0.07)" : "#131c2e",
+        border: "1px solid #24314a",
+        borderLeft: `3px solid ${selected ? "#f97316" : "#24314a"}`,
+        borderRadius: 8,
+        padding: "11px 13px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        fontFamily: "monospace",
+        cursor: "pointer",
+      }}
+    >
+      {/* Ticker + name on the left, price + day move on the right */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <button
+          title={`Remove from "${listName || "list"}"`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "#f59e0b",
+            fontSize: 18,
+            lineHeight: 1,
+            padding: "2px 2px 0 0",
+            flexShrink: 0,
+          }}
+        >
+          ★
+        </button>
+        <Link
+          prefetch={false}
+          href={companyHref(row.symbol)}
+          onClick={(e) => e.stopPropagation()}
+          style={{ minWidth: 0, flex: 1, textDecoration: "none", color: "inherit" }}
+        >
+          <div style={{ color: "#e5e5e5", fontWeight: 700, fontSize: 14 }}>
+            {row.symbol.replace(".L", "")}
+          </div>
+          <div
+            style={{
+              color: "#64748b",
+              fontSize: 11,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              marginTop: 2,
+            }}
+          >
+            {row.name}
+          </div>
+        </Link>
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 15 }}>
+            {live && (
+              <span
+                title="Live (yfinance, 60s cache)"
+                style={{ marginRight: 4, fontSize: 8, color: "#10b981", verticalAlign: "middle" }}
+              >
+                ●
+              </span>
+            )}
+            {fmtPounds(price)}
+          </div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+              gap: 6,
+              marginTop: 3,
+            }}
+          >
+            <StreakBadge streak={row.streak} />
+            <span style={{ color: pctColor(dayChange), fontWeight: 700, fontSize: 12 }}>
+              {dayChange == null
+                ? "—"
+                : `${dayChange >= 0 ? "+" : ""}${dayChange.toFixed(2)}%`}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 3-month trend + where the price sits in its 52-week range */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          borderTop: "1px solid #1e293b",
+          paddingTop: 9,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ color: "#475569", fontSize: 9, fontWeight: 700 }}>3M</span>
+          <Sparkline points={row.spark} width={88} height={26} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
+          <span style={{ color: "#475569", fontSize: 9, fontWeight: 700 }}>52W</span>
+          <RangeBar pos={rangePosition} />
+        </div>
+      </div>
+
+      {/* News for the last 7 days + the four factor scores. Wraps to two lines
+          on the narrowest phones rather than squashing the pills. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          rowGap: 12,
+          flexWrap: "wrap",
+          borderTop: "1px solid #1e293b",
+          paddingTop: 9,
+        }}
+      >
+        {hasNews ? (
+          <NewsCluster
+            rnsCount={row.rns_count}
+            rnsLatest={row.rns_latest}
+            pressCount={row.news_count}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPickNews();
+            }}
+          />
+        ) : (
+          <span style={{ color: "#475569", fontSize: 10 }}>no news in 7d</span>
+        )}
+        <div style={{ marginLeft: "auto" }}>
+          <ScoreStrip snap={row} align="right" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function WatchlistTab({
   watchlists,
@@ -864,10 +1088,10 @@ export default function WatchlistTab({
         return targetGap(r);
       case "range":
         return rangePos(r);
-      case "risk":
-        return r.risk_score;
       default:
-        return null;
+        // The four factor columns are keyed by their field name (momentum_score,
+        // quality_score, value_score, risk_score).
+        return sortCol.endsWith("_score") ? r[sortCol] : null;
     }
   };
 
@@ -899,20 +1123,22 @@ export default function WatchlistTab({
 
   const allSymbolSet = useMemo(() => new Set(symbols), [symbols]);
 
-  // Side-by-side once there's room; the news panel stacks underneath below this.
-  const sideBySide = useMediaQuery("(min-width: 1280px)");
+  // Phones/small tablets get cards instead of the horizontally scrolling table.
+  const isMobile = useIsMobile();
 
   return (
     <div>
       <PageHeader
         title="Watchlists"
         subtitle="Track and compare the stocks you're following, with live prices and notes."
+        // The count lives on the list tab's pill, so the header only reports
+        // the in-flight fetch.
         right={
-          <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
-            {symbols.length === 0
-              ? "no stocks in this list"
-              : `${symbols.length} in list${loading ? " · loading…" : ""}`}
-          </span>
+          loading ? (
+            <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
+              loading…
+            </span>
+          ) : null
         }
       />
 
@@ -986,35 +1212,21 @@ export default function WatchlistTab({
             </button>
           </div>
         )}
-        <div style={{ marginLeft: "auto" }}>
-          <AddStockBox
-            onAdd={(sym) => onAddSymbol(activeId, sym)}
-            existing={allSymbolSet}
-          />
-        </div>
+        <AddStockBox
+          onAdd={(sym) => onAddSymbol(activeId, sym)}
+          existing={allSymbolSet}
+        />
       </div>
 
       <div
         style={{
           display: "flex",
-          flexDirection: sideBySide ? "row" : "column",
+          flexDirection: "column",
           gap: 16,
           alignItems: "stretch",
         }}
       >
-        <div
-          style={{
-            // When populated, size to the table's content so the news panel can
-            // claim the rest of the row (and grow when the sidebar closes). When
-            // empty, let the placeholder fill the width instead.
-            flex: sideBySide
-              ? symbols.length
-                ? "0 1 auto"
-                : "1 1 auto"
-              : "1 1 auto",
-            minWidth: 0,
-          }}
-        >
+        <div style={{ flex: "1 1 auto", minWidth: 0 }}>
       {symbols.length === 0 ? (
         <div
           style={{
@@ -1032,6 +1244,73 @@ export default function WatchlistTab({
             ? "This list is empty. Use the search box above to add stocks, or tap the ☆ next to any stock in the Screener."
             : "This list is empty. Use the search box above to add stocks."}
         </div>
+      ) : isMobile ? (
+        <>
+          {/* Sort chips — the cards have no clickable column headers. */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              flexWrap: "wrap",
+              marginBottom: 12,
+            }}
+          >
+            <span
+              style={{
+                color: "#475569",
+                fontSize: 9,
+                fontWeight: 700,
+                fontFamily: "monospace",
+                letterSpacing: 0.5,
+              }}
+            >
+              SORT
+            </span>
+            {MOBILE_SORTS.map((s) => {
+              const active = s.key === sortCol;
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => toggleSort(s.key)}
+                  style={{
+                    background: active ? "rgba(249,115,22,0.15)" : "#131c2e",
+                    color: active ? "#fbbf24" : "#94a3b8",
+                    border: `1px solid ${active ? "#f9731677" : "#24314a"}`,
+                    borderRadius: 999,
+                    padding: "4px 10px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    fontFamily: "monospace",
+                    cursor: "pointer",
+                  }}
+                >
+                  {s.label}
+                  {active ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {sorted.map((r) => (
+              <WatchlistCard
+                key={r.symbol}
+                row={r}
+                price={priceOf(r)}
+                live={isLive(r)}
+                dayChange={dayPct(r)}
+                rangePosition={rangePos(r)}
+                selected={r.symbol === selectedNewsSymbol}
+                listName={activeList?.name}
+                onRemove={() =>
+                  onRemoveSymbol && onRemoveSymbol(activeId, r.symbol)
+                }
+                onPickNews={() => setSelectedNewsSymbol(r.symbol)}
+              />
+            ))}
+          </div>
+        </>
       ) : (
         <div
           style={{
@@ -1046,7 +1325,10 @@ export default function WatchlistTab({
                 borderSpacing: 0,
                 fontSize: 12,
                 fontFamily: "monospace",
-                tableLayout: "auto",
+                // Match the full-width news panel below, with COLS' percentage
+                // widths deciding the spacing.
+                tableLayout: "fixed",
+                width: "100%",
               }}
             >
               <thead>
@@ -1056,9 +1338,13 @@ export default function WatchlistTab({
                     return (
                       <th
                         key={c.key}
+                        title={c.title}
                         onClick={c.noSort ? undefined : () => toggleSort(c.key)}
                         style={{
                           ...S.th,
+                          width: c.width,
+                          ...(c.padding ? { padding: c.padding } : {}),
+                          borderLeft: c.divider ? DIVIDER : undefined,
                           textAlign: c.align,
                           cursor: c.noSort ? "default" : "pointer",
                           color: active ? "#fbbf24" : "#f97316",
@@ -1177,23 +1463,23 @@ export default function WatchlistTab({
                         )}
                       </td>
 
-                      {/* 3-month sparkline + 52-week range position */}
+                      {/* 3-month sparkline */}
                       <td style={S.td}>
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 12,
-                          }}
-                        >
-                          <Sparkline points={r.spark} />
-                          <RangeBar pos={rangePos(r)} />
-                        </div>
+                        <Sparkline points={r.spark} width={SPARK_W} fluid />
+                      </td>
+
+                      {/* 52-week range position */}
+                      <td style={S.td}>
+                        <RangeBar pos={rangePos(r)} fluid />
                       </td>
 
                       {/* Target buy */}
                       <td
-                        style={{ ...S.td, textAlign: "right" }}
+                        style={{
+                          ...S.td,
+                          textAlign: "right",
+                          padding: "9px 24px 9px 10px",
+                        }}
                         onClick={(e) => e.stopPropagation()}
                       >
                         <TargetCell
@@ -1204,6 +1490,22 @@ export default function WatchlistTab({
                         />
                       </td>
 
+                      {/* MOM / QUAL / VAL / RSK — same pills as the company header */}
+                      {SCORE_TABLE_COLS.map((c) => (
+                        <td
+                          key={c.key}
+                          title={c.title}
+                          style={{
+                            ...S.td,
+                            textAlign: "center",
+                            padding: c.cellPadding,
+                            borderLeft: c.divider ? DIVIDER : undefined,
+                          }}
+                        >
+                          <ScorePill value={r[c.key]} invert={c.invert} />
+                        </td>
+                      ))}
+
                       {/* News — click to load this share's news in the panel */}
                       <td
                         title="Show this share's news in the panel"
@@ -1213,22 +1515,38 @@ export default function WatchlistTab({
                         }}
                         style={{
                           ...S.td,
+                          padding: NEWS_CELL_PAD,
                           cursor: "pointer",
-                          borderLeft: `3px solid ${
-                            r.symbol === selectedNewsSymbol ? "#f97316" : "transparent"
-                          }`,
-                          background:
-                            r.symbol === selectedNewsSymbol
-                              ? "rgba(249,115,22,0.08)"
-                              : undefined,
+                          // The selection marker is drawn by the overlay below, not
+                          // as a border here: a border sits on the column edge, hard
+                          // against the RSK pill, where no amount of padding moves it.
+                          position: "relative",
                         }}
                       >
+                        {r.symbol === selectedNewsSymbol && (
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              position: "absolute",
+                              left: NEWS_MARK_LEFT,
+                              right: 0,
+                              top: 0,
+                              bottom: 0,
+                              borderLeft: "3px solid #f97316",
+                              background: "rgba(249,115,22,0.08)",
+                              pointerEvents: "none",
+                            }}
+                          />
+                        )}
                         <div
                           style={{
                             display: "flex",
                             alignItems: "center",
                             gap: 10,
                             flexWrap: "wrap",
+                            // Sits above the marker overlay (both auto z-index, so
+                            // DOM order decides).
+                            position: "relative",
                           }}
                         >
                           <NewsCluster
@@ -1247,28 +1565,6 @@ export default function WatchlistTab({
                           )}
                         </div>
                       </td>
-
-                      {/* Risk */}
-                      <td style={{ ...S.td, textAlign: "right" }}>
-                        {r.risk_score == null ? (
-                          <span style={{ color: "#444" }}>—</span>
-                        ) : (
-                          <span
-                            style={{
-                              display: "inline-block",
-                              minWidth: 22,
-                              textAlign: "center",
-                              padding: "2px 6px",
-                              borderRadius: 4,
-                              fontWeight: 700,
-                              background: riskBg(r.risk_score),
-                              color: riskColor(r.risk_score),
-                            }}
-                          >
-                            {r.risk_score}
-                          </span>
-                        )}
-                      </td>
                     </tr>
                   );
                 })}
@@ -1284,7 +1580,6 @@ export default function WatchlistTab({
             rows.find((r) => r.symbol === selectedNewsSymbol)?.name ||
             (selectedNewsSymbol ? selectedNewsSymbol.replace(".L", "") : "")
           }
-          sideBySide={sideBySide}
         />
       </div>
     </div>

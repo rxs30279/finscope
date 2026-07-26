@@ -9,7 +9,10 @@ import ScorePill from "@/components/screener/ScorePill";
 // low score reads green. Renders nothing when no score is available (e.g.
 // brand-new listings).
 
-const MEASURES = [
+// Exported so other surfaces that show the same four factors as separate,
+// sortable table columns (the watchlist) stay in step with the strip's labels,
+// tooltips and invert flags.
+export const MEASURES = [
   { key: "momentum_score", label: "MOM", title: "Momentum score (0–10)", invert: false },
   { key: "quality_score", label: "QUAL", title: "Quality score (0–10)", invert: false },
   { key: "value_score", label: "VAL", title: "Value score (0–10, higher = cheaper)", invert: false },
