@@ -62,3 +62,7 @@ manual_assets/shots/
 # Research blog image uploads — dev-default storage for backend/research.py's
 # upload endpoint (prod uses RESEARCH_IMAGE_DIR on the Dokploy volume)
 backend/research_images/
+
+# Chart output from the on-demand analysis scripts in backend/analysis — the
+# script is the source, the PNG is a re-runnable artifact of one day's data
+backend/analysis/*.png

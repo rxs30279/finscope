@@ -132,22 +132,56 @@ NA_FIELDS_BY_MODEL = {
 }
 
 
-def blank_model_fields(row, unknown_is_trust=True):
-    """Null out the metrics that are meaningless for this row's business model.
+def _fund_name_upgrade(model, row):
+    """Promote a fund filed as an ordinary financial to "trust".
 
-    Mutates and returns `row`. Uses the stored risk_model when present, falling
-    back to classify_risk_model for rows screener_scores hasn't covered yet,
-    plus the trust-name test for funds filed as ordinary financials.
+    Yahoo files most UK closed-end funds under Financial Services / Asset
+    Management, so neither the sector nor the industry gives them away — only
+    the name does (TRUST_NAME_RE). Applied to a stored model as well as a fresh
+    one: screener_scores holds 'financial' for 108 of them.
 
     The name is read from `name` or `company_name`: the screener selects
     company_metadata.name, while an RNS candidate carries the announcement's
-    company_name. Missing both would silently skip the fund-name upgrade.
+    company_name. A row carrying NEITHER silently misses the upgrade, so any
+    query feeding this must select a name — see _MQVR_SQL and
+    _attach_risk_score's own SELECT, neither of which did.
     """
-    model = row.get("risk_model") or classify_risk_model(row, unknown_is_trust)
-    name = row.get("name") or row.get("company_name") or ""
-    if model == "financial" and TRUST_NAME_RE.search(name):
-        model = "trust"
-    for field in NA_FIELDS_BY_MODEL.get(model, ()):
+    if model == "financial" and TRUST_NAME_RE.search(
+        row.get("name") or row.get("company_name") or ""
+    ):
+        return "trust"
+    return model
+
+
+def classify_model(row, unknown_is_trust=True):
+    """Fresh classification including the fund-name upgrade.
+
+    For callers that are *computing* the model — notably _attach_risk_score,
+    which then stores it. Deliberately ignores any stored risk_model on the row,
+    so adding that column to a compute query can never make the derivation
+    circular.
+    """
+    return _fund_name_upgrade(classify_risk_model(row, unknown_is_trust), row)
+
+
+def effective_model(row, unknown_is_trust=True):
+    """The model whose rules actually apply to this row, for callers *reading* it.
+
+    Prefers the stored risk_model, falling back to a fresh classification for
+    rows screener_scores hasn't covered yet; the fund-name upgrade applies
+    either way. This lived inside blank_model_fields until the scrub and
+    _value_score both needed the same answer and could disagree about it.
+    """
+    return _fund_name_upgrade(
+        row.get("risk_model") or classify_risk_model(row, unknown_is_trust), row)
+
+
+def blank_model_fields(row, unknown_is_trust=True):
+    """Null out the metrics that are meaningless for this row's business model.
+
+    Mutates and returns `row`.
+    """
+    for field in NA_FIELDS_BY_MODEL.get(effective_model(row, unknown_is_trust), ()):
         row[field] = None
     return row
 

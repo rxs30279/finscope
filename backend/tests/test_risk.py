@@ -1,10 +1,12 @@
 import sys, os, math, pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import (
-    _lin, _weighted_blend, _classify_risk_model, _altman_terms, _z_score,
+    _lin, _weighted_blend, _classify_risk_model, _classify_model,
+    _altman_terms, _z_score,
     _Z_WEIGHTS, _ZDD_WEIGHTS, _z_to_risk, _zdd_to_risk, _annualised_vol,
     _vol_to_score, _roe_to_risk, _roe_blend, _debt_service_component,
 )
+from quality import effective_model
 
 
 # ── _lin ──────────────────────────────────────────────────────────────────────
@@ -92,6 +94,50 @@ def test_classify_null_revenue_stays_general():
     row = {'sector': 'Healthcare', 'industry': 'Biotechnology',
            'revenue': None, 'total_assets': 100e6}
     assert _classify_risk_model(row) == 'general'
+
+
+# ── _classify_model: the fund-name upgrade on the risk-score path ─────────────
+# _attach_risk_score routes on _classify_model, not _classify_risk_model. Yahoo
+# files most UK closed-end funds under Asset Management, so 108 of them used to
+# run the asset-manager blend (vol 0.6 + ROE 0.4) — treating a NAV return as
+# operating profitability — while the scrub and the value score already read
+# them as trusts. The trust model is volatility-only.
+
+_FUND = {'sector': 'Financial Services', 'industry': 'Asset Management'}
+
+
+def test_classify_model_promotes_a_name_matched_fund():
+    row = {**_FUND, 'name': 'Scottish Mortgage Ord'}
+    assert _classify_risk_model(row) == 'financial'   # sector/industry alone
+    assert _classify_model(row) == 'trust'            # + the name test
+
+
+def test_classify_model_leaves_a_real_asset_manager_alone():
+    row = {**_FUND, 'name': 'Liontrust Asset Management Plc'}
+    assert _classify_model(row) == 'financial'
+
+
+def test_classify_model_ignores_a_stored_risk_model():
+    """_attach_risk_score computes the value that becomes risk_model, so its
+    router must not read a stored one back — otherwise adding that column to
+    the query would freeze whatever is already in screener_scores."""
+    row = {**_FUND, 'name': 'Widgets plc', 'risk_model': 'trust'}
+    assert _classify_model(row) == 'financial'
+    assert effective_model(row) == 'trust'   # readers DO honour the stored value
+
+
+def test_classify_model_needs_a_name_to_work():
+    """The whole defect was a SELECT that omitted m.name — pin the dependency."""
+    assert _classify_model({**_FUND}) == 'financial'
+
+
+def test_classify_model_matches_classify_risk_model_off_the_fund_path():
+    for row in ({'sector': 'Industrials', 'industry': 'Airlines',
+                 'name': 'Some Trust plc'},          # name only counts for funds
+                {'sector': 'Financial Services', 'industry': 'Banks—Regional',
+                 'name': 'Big Trust Bank plc'},      # bank wins before financial
+                {'sector': None, 'industry': None, 'name': 'Opaque'}):
+        assert _classify_model(row) == _classify_risk_model(row)
 
 
 # ── _altman_terms / _z_score ──────────────────────────────────────────────────

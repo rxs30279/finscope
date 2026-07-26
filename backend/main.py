@@ -40,7 +40,9 @@ from quality import (
     _ASSET_HEAVY_SECTORS,
     _ASSET_HEAVY_TURNOVER,
     blank_model_fields,
+    classify_model,
     classify_risk_model,
+    effective_model,
     quality_legs,
     quality_score,
 )
@@ -493,13 +495,38 @@ _quality_legs = quality_legs
 _quality_score = quality_score
 
 
+# Three lenses before an operating company gets a value score. Two is not a
+# thin average, it is a coin flip: across the universe, non-trust rows with two
+# lenses score a median 4.5 and land 40% at >=8 AND 45% at <=3 — both tails fat,
+# no signal in the middle. Mulberry screened 9/10 on forward P/E + P/S alone.
+# Rows below the floor score None rather than a number nothing supports.
+_VALUE_MIN_LENSES = 3
+
+# Closed-end funds are the exception, and not by exemption. Price/book IS
+# discount-to-NAV, the canonical valuation measure for the form — one lens that
+# is the complete answer, not a thin sample of a fuller one. So the floor does
+# not apply, and the other lenses are dropped rather than averaged in:
+#   * forward P/E — "earnings" are investment gains, not an operating result
+#   * dividend yield — a fund's yield follows its mandate (income vs growth),
+#     so scoring on it marks every income trust cheap and Scottish Mortgage
+#     dear, which classifies mandates rather than measuring value
+#   * P/S, PEGY, FCF yield — already blanked by TRUST_NA_FIELDS
+_TRUST_PB_CHEAP = 0.80   # a fifth below NAV: cheap
+_TRUST_PB_RICH = 1.20    # a fifth above NAV: rich
+# Par lands mid-scale by construction (the band is symmetric about 1.0), which
+# is the whole point. The operating-company band below scored a trust AT NAV
+# 0.93 out of 1.0, which is why 46 of the universe's 76 perfect-10 value scores
+# were funds trading at roughly fair value, all with quality n/a beside them.
+
+
 def _value_score(r):
     """Value score 0-10: how cheap the stock looks across several valuation
     lenses — earnings (forward P/E), book, sales, free-cash-flow yield, dividend
     yield, and growth-adjusted (PEGY). Each available lens is mapped to 0-1
     (1 = cheapest), then averaged and scaled to 0-10, so a stock isn't penalised
-    for a lens it lacks (e.g. a loss-maker with no P/E). Returns None if fewer
-    than two lenses are available.
+    for a lens it lacks (e.g. a loss-maker with no P/E). Returns None below
+    _VALUE_MIN_LENSES; closed-end funds are scored on price/book alone (see
+    the constants above).
 
     Uses the forward P/E (analyst-rebased) so one-off statutory items can't make
     a stock look cheap when it isn't — same basis as PEGY (see _forward_pe).
@@ -507,6 +534,9 @@ def _value_score(r):
     Thresholds are absolute, so the score is comparable across the whole
     universe but blunt across sectors (banks/insurers screen 'cheap' on P/E and
     P/B by design). Read it alongside quality_score and the sector, not alone.
+
+    Expects a row carrying a name and, ideally, the stored risk_model — the
+    trust branch is keyed on effective_model, which needs them.
     """
     def _f(x):
         try:
@@ -534,6 +564,11 @@ def _value_score(r):
             return 1.0
         return (x - low) / (high - low)
 
+    if effective_model(r) == "trust":
+        discount = low_cheap(_f(r.get("price_to_book")),
+                             _TRUST_PB_CHEAP, _TRUST_PB_RICH)
+        return None if discount is None else round(discount * 10)
+
     lenses = [
         low_cheap(_forward_pe(r, _f), 8.0, 25.0),   # earnings
         low_cheap(_f(r.get("price_to_book")), 0.75, 4.0),
@@ -549,7 +584,7 @@ def _value_score(r):
         lenses.append(high_cheap(fcf / mc, 0.0, 0.10))
 
     legs = [v for v in lenses if v is not None]
-    if len(legs) < 2:
+    if len(legs) < _VALUE_MIN_LENSES:
         return None
     return round(sum(legs) / len(legs) * 10)
 
@@ -591,14 +626,15 @@ def _is_financial(row):
     """True for banks/insurers/financials by sector naming.
 
     Kept for the fair-value eligibility check (_valuation_eligible); the risk
-    score itself now routes through _classify_risk_model below, which splits
-    this group into bank / insurer / financial.
+    score itself now routes through _classify_model below, which splits this
+    group into bank / insurer / financial / trust.
     """
     sector = (row.get("sector") or "").lower()
     return "financ" in sector or "bank" in sector or "insurance" in sector
 
 
 _classify_risk_model = classify_risk_model
+_classify_model = classify_model
 
 
 def _altman_terms(row):
@@ -910,7 +946,7 @@ def _attach_risk_score(results):
     # 1. Fundamental inputs + sector/industry for model routing
     fin_rows = query(
         """
-        SELECT t.company_symbol, m.sector, m.industry,
+        SELECT t.company_symbol, m.name, m.sector, m.industry,
                t.market_cap, t.price_to_book, t.revenue, t.operating_income,
                t.working_capital, t.retained_earnings, t.total_equity,
                t.total_assets, t.interest_coverage, t.net_debt, t.ebitda,
@@ -958,7 +994,15 @@ def _attach_risk_score(results):
         # No ttm row at all → no sector/industry to route on; "general" keeps
         # the row from being mistaken for a trust (whose signature is a real
         # row with no classification).
-        model = _classify_risk_model(f) if f else "general"
+        #
+        # classify_model, not classify_risk_model: a fund Yahoo files under
+        # Asset Management needs the name test to be recognised, and without it
+        # 108 of them (Scottish Mortgage, City of London, F&C, …) ran the
+        # asset-manager blend below — reading a NAV return as operating
+        # profitability — while every other consumer treated them as trusts.
+        # Not effective_model: this branch computes the value that gets stored
+        # as risk_model, so it must never read a stored one back.
+        model = _classify_model(f) if f else "general"
         z_display = None
         components = {"volatility": vol_c}
 
@@ -1490,11 +1534,13 @@ def _scrub_screener_metrics(results):
 
     Two passes per row: degenerate-value guards that apply to every company
     (negative/zero denominators, shell-sized revenue, base-effect growth,
-    phantom debt-free D/E), then business-model blanking keyed on the stored
-    risk_model — falling back to _classify_risk_model when screener_scores
-    hasn't covered the row yet — plus the trust-name test above. Runs on the
-    raw rows straight from SQL, before _attach_pegy/_quality_score/_value_score
-    and before the GICS→ICB sector rename.
+    phantom debt-free D/E), then business-model blanking keyed on
+    quality.effective_model — the stored risk_model, or a fresh classification
+    when screener_scores hasn't covered the row yet, plus the fund-name test in
+    either case. Rows must therefore carry a name; _value_score reads the same
+    function, so the two cannot disagree about what a row is. Runs on the raw
+    rows straight from SQL, before _attach_pegy/_quality_score/_value_score and
+    before the GICS→ICB sector rename.
     """
     for r in results:
         rev = r.get("revenue")

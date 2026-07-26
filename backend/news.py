@@ -341,7 +341,7 @@ def _load_fundamentals(symbol: str) -> dict | None:
     risk/momentum/piotroski/altman come precomputed from screener_scores.
     Returns None if the symbol has no TTM financials row."""
     rows = _query("""
-        SELECT m.sector, m.financial_currency,
+        SELECT m.name, m.sector, m.industry, m.financial_currency,
                t.market_cap, t.revenue,
                CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END AS price_to_earnings,
                t.price_to_book, t.price_to_sales, t.dividend_yield, t.fcf,
@@ -352,7 +352,7 @@ def _load_fundamentals(symbol: str) -> dict | None:
                t.operating_margin_median, t.net_margin_median,
                a.total_analysts, a.eps_growth_next_yr, a.eps_est_current_yr,
                s.momentum_score, s.risk_score, s.piotroski_score,
-               s.altman_z, s.volatility_annualised
+               s.risk_model, s.altman_z, s.volatility_annualised
         FROM ttm_financials t
         JOIN company_metadata m ON m.symbol = t.company_symbol
         LEFT JOIN (
