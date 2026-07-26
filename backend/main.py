@@ -32,6 +32,18 @@ from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
 from admin_auth import require_admin_token
 from request_utils import client_ip
+from quality import (
+    NA_FIELDS_BY_MODEL,
+    QUALITY_LEG_BASE_RATES,
+    QUALITY_MIN_LEGS,
+    TRUST_NAME_RE,
+    _ASSET_HEAVY_SECTORS,
+    _ASSET_HEAVY_TURNOVER,
+    blank_model_fields,
+    classify_risk_model,
+    quality_legs,
+    quality_score,
+)
 
 load_dotenv()
 
@@ -471,48 +483,14 @@ def _piotroski_score(row):
     return score
 
 
-def _quality_score(r):
-    """Quality score 0-10: rewards high AND consistent returns/margins."""
-    score = 0
-    roic = r.get("roic")
-    roic_med = r.get("roic_median")
-    roe = r.get("roe")
-    roe_med = r.get("roe_median")
-    gm = r.get("gross_margin")
-    gm_med = r.get("gross_margin_median")
-    om = r.get("operating_margin")
-    om_med = r.get("operating_margin_median")
-    fcfm = r.get("fcf_margin")
-    nm = r.get("net_income_margin")
-    nm_med = r.get("net_margin_median")
-
-    if roic is not None:
-        if roic > 0.10:
-            score += 1
-        if roic_med is not None and roic >= roic_med:
-            score += 1
-    if roe is not None:
-        if roe > 0.15:
-            score += 1
-        if roe_med is not None and roe >= roe_med:
-            score += 1
-    if gm is not None:
-        if gm > 0.30:
-            score += 1
-        if gm_med is not None and gm >= gm_med:
-            score += 1
-    if om is not None:
-        if om > 0.10:
-            score += 1
-        if om_med is not None and om >= om_med:
-            score += 1
-    if fcfm is not None:
-        if fcfm > 0.05:
-            score += 1
-        if nm is not None and nm_med is not None and nm >= nm_med:
-            score += 1
-
-    return score
+# Quality scoring and business-model classification live in quality.py so the
+# RNS ranker shares one definition with the screener (main imports rns_llm, so
+# the dependency cannot run the other way). Re-exported under the private names
+# this module has always used, to keep call sites and tests unchanged.
+_QUALITY_LEG_BASE_RATES = QUALITY_LEG_BASE_RATES
+_QUALITY_MIN_LEGS = QUALITY_MIN_LEGS
+_quality_legs = quality_legs
+_quality_score = quality_score
 
 
 def _value_score(r):
@@ -609,14 +587,6 @@ def _weighted_blend(components):
     return max(1, min(10, round(sum(c * w for c, w in avail) / total)))
 
 
-_ASSET_HEAVY_SECTORS = {"Utilities", "Real Estate", "Energy", "Basic Materials"}
-# Below this revenue/total_assets the classic Z-Score is out of its calibration
-# domain: asset/goodwill-heavy names outside the sectors above (Whitbread,
-# Ocado, BATS) and float-heavy fintechs (Boku carries merchant float like a
-# bank but is filed under Technology) all read as "distressed manufacturers".
-_ASSET_HEAVY_TURNOVER = 0.4
-
-
 def _is_financial(row):
     """True for banks/insurers/financials by sector naming.
 
@@ -628,30 +598,7 @@ def _is_financial(row):
     return "financ" in sector or "bank" in sector or "insurance" in sector
 
 
-def _classify_risk_model(row):
-    """Route a company to the risk model that fits its business.
-
-    Order matters: investment trusts (Yahoo gives them no sector/industry)
-    first, banks/insurers by industry before the broad financial-sector
-    catch-all, then asset-heavy by sector, telecom industry, or measured
-    asset turnover. See docs/superpowers/specs/2026-07-03-risk-score-v2-design.md.
-    """
-    sector = (row.get("sector") or "").lower()
-    industry = (row.get("industry") or "").lower()
-    if not sector and not industry:
-        return "trust"
-    if "bank" in industry:
-        return "bank"
-    if "insur" in industry:
-        return "insurer"
-    if "financ" in sector or "bank" in sector or "insurance" in sector:
-        return "financial"
-    if row.get("sector") in _ASSET_HEAVY_SECTORS or "telecom" in industry:
-        return "asset_heavy"
-    revenue, ta = row.get("revenue"), row.get("total_assets")
-    if revenue is not None and ta and ta > 0 and revenue / ta < _ASSET_HEAVY_TURNOVER:
-        return "asset_heavy"
-    return "general"
+_classify_risk_model = classify_risk_model
 
 
 def _altman_terms(row):
@@ -1517,55 +1464,12 @@ def compute_and_store_valuations():
 
 
 # ── Screener metric scrubbing ─────────────────────────────────────────────────
-# Closed-end funds that Yahoo files under Financial Services / Asset Management
-# come through _classify_risk_model as "financial"; catch them by name so their
-# investment-gain "revenue" doesn't screen as operating performance. Only ever
-# tested against financial-model rows, so fund-flavoured words that exist in
-# other sectors ("infrastructure") are safe here. Audited against the live
-# Asset Management/Capital Markets cohort (2026-07-04): "Ord"/"Income"/
-# "Infrastructure"/"Investments" appear exclusively in fund names there;
-# word-boundaried so Liontrust ("trust") and City of London Investment Group
-# (singular "Investment") don't match. Known escapees (Pershing Square, BH
-# Macro, Syncona, …) are left to the degenerate-value caps below.
-_TRUST_NAME_RE = re.compile(
-    r"\btrust\b|\bfund\b|\bvct\b|\bord\b|\bincome\b|\binvestments\b"
-    r"|\binfrastructure\b|investment company|inv\.? company|private equity",
-    re.I,
-)
-
-# Everything income-statement-derived is meaningless for a closed-end fund:
-# "revenue" is investment gains/losses (BRWM printed +1,158% revenue growth,
-# FEV a P/S of 1.6e-08), so margins, P/S and every growth rate are noise, and
-# Piotroski leans on the same fields. P/B, dividend yield, ROE/ROA and
-# volatility stay — those are the honest lenses for a trust.
-_TRUST_NA_FIELDS = (
-    "price_to_sales", "gross_margin", "operating_margin", "net_income_margin",
-    "fcf_margin", "revenue_growth", "eps_diluted_growth", "fcf_growth",
-    "revenue_cagr_10", "eps_cagr_10", "roic", "roce", "current_ratio",
-    "debt_to_equity", "piotroski_score", "fcf",
-)
-# Banks/insurers: FCF is meaningless (deposit/claims flows swamp it — the
-# NatWest +734% case), current assets/liabilities aren't reported so the
-# current ratio is absent or junk (TBCG: 2,462), D/E's numerator misses the
-# funding book entirely, and ROIC/ROCE have no sensible denominator. Piotroski
-# loses its liquidity/margin legs and reads structurally weak (Financials
-# median 3 vs 5 elsewhere) — blanked too. Operating/net margin and P/S are
-# kept: for a bank they behave like efficiency ratios and are comparable.
-_BANK_INSURER_NA_FIELDS = (
-    "fcf_margin", "fcf_growth", "fcf", "gross_margin", "current_ratio",
-    "roic", "roce", "debt_to_equity", "piotroski_score",
-)
-# Other financials (asset managers, capital markets, credit services): fee
-# revenue is real, so margins and growth stand; only the FCF lens is junk
-# (client/fund cash movements dominate the cash-flow statement).
-_FINANCIAL_NA_FIELDS = ("fcf_margin", "fcf_growth", "fcf")
-
-_NA_FIELDS_BY_MODEL = {
-    "trust": _TRUST_NA_FIELDS,
-    "bank": _BANK_INSURER_NA_FIELDS,
-    "insurer": _BANK_INSURER_NA_FIELDS,
-    "financial": _FINANCIAL_NA_FIELDS,
-}
+# The business-model blanking (which metrics are junk for a trust/bank/insurer,
+# and the fund-name test) lives in quality.py so the RNS ranker applies exactly
+# the same rules before scoring. Aliased here under the names this module and
+# its tests have always used.
+_TRUST_NAME_RE = TRUST_NAME_RE
+_NA_FIELDS_BY_MODEL = NA_FIELDS_BY_MODEL
 
 # Revenue below this (in the filing currency's base units) makes any revenue
 # ratio a shell-company artifact (AVCT: £113k revenue → -34,170% net margin).
@@ -1627,13 +1531,7 @@ def _scrub_screener_metrics(results):
         ):
             r["debt_to_equity"] = None
 
-        model = r.get("risk_model") or _classify_risk_model(r)
-        if model == "financial" and _TRUST_NAME_RE.search(r.get("name") or ""):
-            model = "trust"
-        fields = _NA_FIELDS_BY_MODEL.get(model)
-        if fields:
-            for k in fields:
-                r[k] = None
+        blank_model_fields(r)
 
         # Fetched only for the phantom-D/E check — not part of the response.
         r.pop("st_debt", None)

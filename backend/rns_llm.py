@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 
 from admin_auth import require_admin_token
 from rns import _query, _get_pool
+from quality import quality_score_from_raw
 
 load_dotenv()
 
@@ -247,62 +248,24 @@ def _fmt_num(v: Optional[float], decimals: int = 1) -> str:
     return f"{v:.{decimals}f}"
 
 
-# ── Quality & risk helpers (ported from main.py) ──────────────────────────────
+# ── Quality & risk helpers ─────────────────────────────────────────────────
+# The quality score used to be a hand-ported copy of main.py's, kept in sync by
+# hand and drifting anyway: it summed the ten legs against a RAW ttm_financials
+# row, so a bank was graded on its meaningless FCF margin (the NatWest +734%
+# case) while the screener blanked that field and then counted the blank as a
+# failure. Same company, two different scores. Both now route through
+# quality.py; quality_score_from_raw applies the model blanking to a COPY, so
+# the figures printed into the prompt below are untouched.
 
 
 def _quality_score(r: dict) -> Optional[int]:
-    """Quality score 0-10: rewards high AND consistent returns/margins.
+    """Quality score 0-10 for an unscrubbed ttm_financials row.
 
-    Returns None when no inputs are present at all (e.g. out-of-universe
-    tickers with no ttm_financials row) — a 0 there would read as "failed
-    every check" and wrongly trip the LOW QUALITY flag.
+    None when too few legs survive to be meaningful (out-of-universe tickers
+    with no financials, closed-end funds) — a 0 there would read as "failed
+    every check" and wrongly trip the LOW QUALITY flag below.
     """
-    score = 0
-    has_data = False
-    roic = r.get("roic")
-    roic_med = r.get("roic_median")
-    roe = r.get("roe")
-    roe_med = r.get("roe_median")
-    gm = r.get("gross_margin")
-    gm_med = r.get("gross_margin_median")
-    om = r.get("operating_margin")
-    om_med = r.get("operating_margin_median")
-    fcfm = r.get("fcf_margin")
-    nm = r.get("net_income_margin")
-    nm_med = r.get("net_margin_median")
-
-    if roic is not None:
-        has_data = True
-        if roic > 0.10:
-            score += 1
-        if roic_med is not None and roic >= roic_med:
-            score += 1
-    if roe is not None:
-        has_data = True
-        if roe > 0.15:
-            score += 1
-        if roe_med is not None and roe >= roe_med:
-            score += 1
-    if gm is not None:
-        has_data = True
-        if gm > 0.30:
-            score += 1
-        if gm_med is not None and gm >= gm_med:
-            score += 1
-    if om is not None:
-        has_data = True
-        if om > 0.10:
-            score += 1
-        if om_med is not None and om >= om_med:
-            score += 1
-    if fcfm is not None:
-        has_data = True
-        if fcfm > 0.05:
-            score += 1
-        if nm is not None and nm_med is not None and nm >= nm_med:
-            score += 1
-
-    return score if has_data else None
+    return quality_score_from_raw(r)
 
 
 def _risk_score(cand: dict) -> Optional[int]:

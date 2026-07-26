@@ -78,14 +78,69 @@ def test_no_fundamentals_quality_is_na_not_zero():
     assert "LOW QUALITY" not in user
 
 
-def test_all_failing_metrics_still_score_zero():
-    # A company with real (bad) data keeps the genuine 0/10 + flag.
+def test_all_failing_metrics_still_trip_low_quality():
+    # A company with real (bad) data keeps a low score + the flag.
+    #
+    # Scores 3, not 0: this fixture supplies no *_median fields, so the five
+    # "vs its own history" legs are unavailable rather than failed, and
+    # quality.py credits an unavailable leg at the universe base rate. All five
+    # measurable legs still fail, and 3 is inside the qs <= 3 flag threshold —
+    # which is what this test is really guarding.
     user = _user_prompt(
         roic=0.01, roic_median=None, roe=0.02, roe_median=None,
         gross_margin=0.05, operating_margin=0.01, fcf_margin=-0.02,
     )
+    assert "Quality:      3/10" in user
+    assert "LOW QUALITY" in user
+
+
+def test_failing_metrics_with_full_history_score_zero():
+    # With the medians present every leg is available and genuinely failed,
+    # so nothing is imputed and the score is a true 0/10.
+    user = _user_prompt(
+        roic=0.01, roic_median=0.10, roe=0.02, roe_median=0.15,
+        gross_margin=0.05, gross_margin_median=0.40,
+        operating_margin=0.01, operating_margin_median=0.12,
+        fcf_margin=-0.02, net_income_margin=0.01, net_margin_median=0.08,
+    )
     assert "Quality:      0/10" in user
     assert "LOW QUALITY" in user
+
+
+def test_unknown_metadata_is_not_treated_as_a_trust():
+    """An out-of-universe ticker must not be read as a closed-end fund.
+
+    company_metadata is a LEFT JOIN here, so sector/industry are NULL for a
+    ticker we don't cover. Classifying that as "trust" would blank its margins,
+    render quality n/a and silently drop the LOW QUALITY flag on a weak
+    company — the CLBS-shaped failure the test above guards against.
+    """
+    user = _user_prompt(
+        sector=None, industry=None,
+        roic=0.01, roic_median=0.10, roe=0.02, roe_median=0.15,
+        gross_margin=0.05, gross_margin_median=0.40,
+        operating_margin=0.01, operating_margin_median=0.12,
+        fcf_margin=-0.02, net_income_margin=0.01, net_margin_median=0.08,
+    )
+    assert "Quality:      n/a" not in user
+    assert "LOW QUALITY" in user
+
+
+def test_bank_is_not_scored_on_its_junk_fcf():
+    """The ranker used to grade banks on raw, meaningless FCF/gross margin.
+
+    A bank passing the legs that are honest for it (ROE, operating margin, net
+    margin vs history) should read as decent quality, not trip LOW QUALITY.
+    """
+    user = _user_prompt(
+        sector="Financial Services", industry="Banks - Diversified",
+        roic=None, roic_median=None, roe=0.25, roe_median=0.15,
+        gross_margin=None, gross_margin_median=None,
+        operating_margin=0.18, operating_margin_median=0.12,
+        fcf_margin=7.34,  # the NatWest +734% case
+        net_income_margin=0.11, net_margin_median=0.08,
+    )
+    assert "LOW QUALITY" not in user
 
 
 def test_quality_score_none_when_no_inputs():
