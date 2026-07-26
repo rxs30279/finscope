@@ -3,6 +3,12 @@ uvicorn==0.41.0
 psycopg2-binary==2.9.11
 python-dotenv==1.1.0
 yfinance==0.2.61
+# Transitive via yfinance, bounded only to keep a rebuild off the next major.
+# pandas 4 removes Timestamp.utcnow, which yfinance 0.2.61 still calls (it warns
+# on every quote fetch under pandas 3) — unbounded, some future rebuild turns
+# that warning into a hard failure on /api/quotes.
+pandas<4
+numpy<3
 fear-and-greed==0.4
 openpyxl==3.1.2
 beautifulsoup4==4.12.2
