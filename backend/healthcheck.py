@@ -245,6 +245,24 @@ def run_db_checks(query_one=None) -> None:
             status = FAIL  # last run errored (see detail)
         return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"
 
+    @check("landing_story.pick")
+    def _landing_story_pick():
+        row = query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'landing_story'"
+        )
+        if not row or row["last_run_at"] is None:
+            return FAIL, "no landing_story marker in pipeline_runs"
+        d = _age_hours(row["last_run_at"]) / 24.0
+        # Weekly Monday Dokploy cron — successive runs are ~7d apart, so give a
+        # couple of days' slack before flagging a miss.
+        status = _tier(d, warn_at=8, fail_at=10)
+        # 'skipped' is a thin week with nothing worth showing, which is designed
+        # behaviour (the previous story stays live) — only a real error fails.
+        if row["status"] not in ("ok", "skipped"):
+            status = FAIL
+        return status, f"last run {d:.1f}d ago, status '{row['status']}', {row['detail']}"
+
     @check("shorts.refresh")
     def _shorts_refresh():
         row = query_one(

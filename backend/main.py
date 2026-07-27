@@ -27,6 +27,7 @@ from showcase import router as showcase_router
 from research import router as research_router, published_slugs as _research_slugs
 from dividends import router as dividends_router
 from shorts import router as shorts_router
+from landing_story import router as landing_story_router
 from email_events import router as email_events_router, recent_summary as _email_event_summary
 from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
@@ -70,6 +71,7 @@ app.include_router(showcase_router)
 app.include_router(research_router)
 app.include_router(dividends_router)
 app.include_router(shorts_router)
+app.include_router(landing_story_router)
 app.include_router(email_events_router)
 
 # DB pool + helpers live in db.py (one process-wide pool, shared by every

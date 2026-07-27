@@ -13,11 +13,15 @@ import { DigestSample } from "@/components/DigestSample";
  *
  * Posts to the same endpoint as the dedicated /subscribe page
  * (POST /api/subscribers/signup → Resend segment, single opt-in).
+ *
+ * `phone` is the story-of-the-week player, rendered on the server and passed in
+ * as a slot (it needs data this client island never fetches). It sits beside the
+ * copy as aria-hidden decoration — the signup offer itself is plain markup here.
  */
 type Msg = { kind: "ok" | "err"; text: string } | null;
 type Spots = { count: number; cap: number; remaining: number };
 
-export default function LandingSignup() {
+export default function LandingSignup({ phone }: { phone?: React.ReactNode }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
@@ -83,66 +87,72 @@ export default function LandingSignup() {
   return (
     <section className="am-cta" id="subscribe">
       <div className="am-cta-inner am-reveal">
-        <div className="am-cta-eyebrow">
-          <span className="am-dot" aria-hidden="true" />
-          Free email digest
-        </div>
-        <h2>
-          Your UK market, <span className="am-accent">filtered and explained.</span>
-        </h2>
-        <p className="am-cta-sub">
-          One short email at 07:30 every weekday. The notable movers and the RNS
-          that actually matters — AI-ranked across the FTSE 100, 250, SmallCap
-          and AIM. Cuts the noise to the news that moves prices. The only
-          pre-market email you'll need.
-        </p>
+        <div className={phone ? "am-cta-split" : undefined}>
+          <div className="am-cta-copy">
+            <div className="am-cta-eyebrow">
+              <span className="am-dot" aria-hidden="true" />
+              Free email digest
+            </div>
+            <h2>
+              Your UK market, <span className="am-accent">filtered and explained.</span>
+            </h2>
+            <p className="am-cta-sub">
+              One short email at 07:30 every weekday. The notable movers and the RNS
+              that actually matters — AI-ranked across the FTSE 100, 250, SmallCap
+              and AIM. Cuts the noise to the news that moves prices. The only
+              pre-market email you'll need.
+            </p>
 
-        {spots && (
-          <div className={`am-cta-spots${full ? " full" : ""}`}>
-            <span className="am-spots-dot" aria-hidden="true" />
-            {full ? (
-              <span>All {spots.cap} spots taken — sign-ups are closed for now.</span>
-            ) : (
-              <span>
-                Only <span className="am-spots-num">{spots.remaining}</span> of {spots.cap} free spots left
-              </span>
+            {spots && (
+              <div className={`am-cta-spots${full ? " full" : ""}`}>
+                <span className="am-spots-dot" aria-hidden="true" />
+                {full ? (
+                  <span>All {spots.cap} spots taken — sign-ups are closed for now.</span>
+                ) : (
+                  <span>
+                    Only <span className="am-spots-num">{spots.remaining}</span> of {spots.cap} free spots left
+                  </span>
+                )}
+              </div>
             )}
+
+            <form className="am-cta-form" onSubmit={submit}>
+              <input
+                className="am-cta-input"
+                type="email"
+                required
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onFocus={onFocus}
+                autoComplete="email"
+                aria-label="Email address"
+                disabled={busy || full}
+              />
+              <button type="submit" className="am-btn am-btn-primary am-cta-btn" disabled={busy || full}>
+                {full ? "Sign-ups closed" : busy ? "Subscribing…" : "Get the briefing"}
+                {!busy && !full && (
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                )}
+              </button>
+            </form>
+
+            {msg && (
+              <p className={`am-cta-msg ${msg.kind}`} role="status">
+                {msg.text}
+              </p>
+            )}
+
+            <div className="am-cta-trust">
+              <span><span className="am-tick" aria-hidden="true">●</span> No spam, ever</span>
+              <span><span className="am-tick" aria-hidden="true">●</span> Weekday mornings only</span>
+              <span><span className="am-tick" aria-hidden="true">●</span> One-click unsubscribe</span>
+            </div>
           </div>
-        )}
 
-        <form className="am-cta-form" onSubmit={submit}>
-          <input
-            className="am-cta-input"
-            type="email"
-            required
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onFocus={onFocus}
-            autoComplete="email"
-            aria-label="Email address"
-            disabled={busy || full}
-          />
-          <button type="submit" className="am-btn am-btn-primary am-cta-btn" disabled={busy || full}>
-            {full ? "Sign-ups closed" : busy ? "Subscribing…" : "Get the briefing"}
-            {!busy && !full && (
-              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 12h14M13 6l6 6-6 6" />
-              </svg>
-            )}
-          </button>
-        </form>
-
-        {msg && (
-          <p className={`am-cta-msg ${msg.kind}`} role="status">
-            {msg.text}
-          </p>
-        )}
-
-        <div className="am-cta-trust">
-          <span><span className="am-tick" aria-hidden="true">●</span> No spam, ever</span>
-          <span><span className="am-tick" aria-hidden="true">●</span> Weekday mornings only</span>
-          <span><span className="am-tick" aria-hidden="true">●</span> One-click unsubscribe</span>
+          {phone && <div className="am-cta-phone">{phone}</div>}
         </div>
 
         {/* The sample email, inline — visitors see the product without a click. */}

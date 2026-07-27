@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
 import { getResearchPosts } from "@/lib/research";
+import { getLandingStory } from "@/lib/landingStory";
 import { companyHref } from "@/lib/company";
 import LandingEffects from "@/components/landing/LandingEffects";
 import InstallButton from "@/components/landing/InstallButton";
 import LandingSignup from "@/components/landing/LandingSignup";
+import StoryPhone from "@/components/landing/StoryPhone";
 import "./landing.css";
 
 export const metadata: Metadata = {
@@ -124,7 +126,10 @@ export default async function Home() {
   // Latest posts get first-class links from the homepage — the most-crawled
   // URL — so search engines discover new articles without waiting on a
   // /research index re-crawl. Degrades to the generic card if the API is down.
-  const posts = (await getResearchPosts())?.slice(0, 3) ?? [];
+  // The story of the week now appears only as the phone player inside the
+  // signup card, so the page fetches it and hands it straight to LandingSignup.
+  const [allPosts, story] = await Promise.all([getResearchPosts(), getLandingStory()]);
+  const posts = allPosts?.slice(0, 3) ?? [];
   const latest = posts[0];
   return (
     <div className="am-landing">
@@ -175,11 +180,6 @@ export default async function Home() {
           <Link href="/markets" className="am-btn am-btn-ghost">See market signals</Link>
           <InstallButton />
         </div>
-        <div className="am-trust am-reveal">
-          <span><span className="am-tick" aria-hidden="true">●</span> 600+ UK shares scored daily</span>
-          <span><span className="am-tick" aria-hidden="true">●</span> AI-scored RNS news</span>
-          <span><span className="am-tick" aria-hidden="true">●</span> Free — no spreadsheets required</span>
-        </div>
         <Link
           href={latest ? `/research/${latest.slug}` : "/research"}
           className="am-research-cta am-reveal"
@@ -194,6 +194,11 @@ export default async function Home() {
         </Link>
       </header>
 
+      {/* Proof that the RNS scoring works — the story of the week, picked weekly
+          by a backend cron, replayed as the phone player beside the signup copy.
+          Omitted entirely if the API is down or nothing has been picked yet. */}
+      <LandingSignup phone={story?.wire ? <StoryPhone story={story} /> : null} />
+
       <section className="am-caps" id="caps">
         <h2 className="am-caps-title am-reveal">What&apos;s inside</h2>
         <div className="am-caps-grid">
@@ -206,8 +211,6 @@ export default async function Home() {
           ))}
         </div>
       </section>
-
-      <LandingSignup />
 
       {/* Featured large caps — real crawlable links from the site's highest-authority
           page into the company pages, to seed discovery + pass PageRank. Hardcoded

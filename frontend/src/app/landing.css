@@ -22,12 +22,58 @@
   color: var(--ink);
   font-family: var(--font-inter), "Segoe UI", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  /* No overflow-x:hidden here (deliberately — see the Scroll snap comment
+     below): <html> already clamps horizontal overflow globally
+     (globals.css), so this box doesn't need its own. */
 }
 .am-landing :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
   border-radius: 8px;
+}
+
+/* ---------- Scroll snap ----------
+   Scoped to :has() rather than a bare `html` selector so it can't leak into
+   the app chrome on other routes via this global stylesheet. `proximity`, not
+   `mandatory` — mandatory fights the user mid-scroll on sections taller than
+   the viewport (the digest card is ~1829px with the phone in it), which read
+   as too aggressive once snapping was actually working. Proximity only pulls
+   you in once you're already close to a boundary.
+
+   Getting <html> to actually be the operative scroll-snap container took two
+   fixes, not just this rule. `scroll-snap-align` on a descendant only
+   registers against its NEAREST ANCESTOR that is itself a scroll container
+   (any element with overflow other than visible/clip on either axis — even
+   one that never actually overflows, like a min-height div). Two ancestors
+   between <html> and these sections were accidentally qualifying:
+     1. .am-landing had `overflow-x: hidden`, which — by the CSS Overflow
+        spec's x/y coupling rule — silently computed its overflow-y to
+        `auto` too (setting overflow-y: visible explicitly does NOT escape
+        this; the rule fires on the computed value). Fixed by dropping
+        .am-landing's overflow-x:hidden entirely (see above).
+     2. globals.css sets `body { overflow-x: hidden }` under 943px for the
+        app shell's mobile drawer, which trips the identical coupling at
+        that breakpoint. Neutralised below, scoped to this route only. */
+html:has(.am-landing) {
+  scroll-snap-type: y proximity;
+  scroll-behavior: smooth;
+}
+@media (max-width: 943px) {
+  body:has(.am-landing) {
+    overflow-x: visible;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html:has(.am-landing) {
+    scroll-behavior: auto;
+  }
+}
+.am-landing .am-hero,
+.am-landing .am-caps,
+.am-landing .am-cta,
+.am-landing .am-featured,
+.am-landing footer {
+  scroll-snap-align: start;
 }
 
 /* ---------- Animated candle background ---------- */
@@ -242,24 +288,11 @@
   color: var(--accent);
   font-weight: 600;
 }
-.am-landing .am-trust {
-  margin-top: 48px;
-  display: flex;
-  gap: 30px;
-  flex-wrap: wrap;
-  color: var(--muted);
-  font-size: 13.5px;
-}
-.am-landing .am-trust span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.am-landing .am-trust .am-tick {
-  color: var(--accent);
-}
 .am-landing .am-research-cta {
-  margin-top: 22px;
+  /* Sits directly under the action buttons now that the am-trust bullet row is
+     gone, so it needs its own breathing room rather than the 22px it had when
+     stacked under that row. */
+  margin-top: 44px;
   display: inline-flex;
   align-items: center;
   gap: 11px;
@@ -381,6 +414,271 @@
   margin: 0;
 }
 
+/* ---------- The phone player ----------
+   The Shorts storyboard, replayed in its native 9:16 frame. Sizes inside the
+   screen are container-query units so every scene scales with the frame, which
+   is what let the original storyboard work at any stage size. It is aria-hidden
+   decoration — the story card above carries the same facts as real markup.
+   Lives in the email-signup card (see .am-cta-split). */
+.am-landing .am-phone {
+  position: relative;
+  width: min(300px, 78vw);
+  padding: 10px;
+  border-radius: 32px;
+  background: #14181f;
+  border: 1px solid var(--line);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
+}
+.am-landing .am-phone-screen {
+  position: relative;
+  aspect-ratio: 9 / 16;
+  container-type: size;
+  overflow: hidden;
+  border-radius: 24px;
+  background: #0b0e14;
+}
+.am-landing .am-ph-scene {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 7cqw;
+  color: var(--ink);
+}
+/* Every scene ends with the storyboard's burnt-in subtitle line — most people
+   watch this sort of thing muted, so the claim has to be on screen as type. */
+.am-landing .am-ph-sub {
+  position: absolute;
+  left: 6cqw;
+  right: 6cqw;
+  bottom: 5cqh;
+  text-align: center;
+  font-size: 3.4cqw;
+  font-weight: 600;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+/* Scene 1 — the wire */
+.am-landing .am-ph-clock {
+  position: absolute;
+  top: 5cqh;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 3.4cqw;
+  letter-spacing: 0.3em;
+  color: rgba(249, 115, 22, 0.7);
+  font-variant-numeric: tabular-nums;
+  z-index: 2;
+}
+.am-landing .am-ph-feed {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 60%, transparent 86%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 18%, #000 60%, transparent 86%);
+}
+.am-landing .am-ph-track {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0 6cqw;
+}
+.am-landing .am-ph-line {
+  font-size: 2.7cqw;
+  line-height: 2.05;
+  color: rgba(249, 115, 22, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.am-landing .am-ph-tic {
+  color: rgba(249, 115, 22, 0.85);
+  font-weight: 600;
+}
+.am-landing .am-ph-plate {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 15cqh;
+  text-align: center;
+}
+.am-landing .am-ph-count {
+  font-size: 24cqw;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+.am-landing .am-ph-label {
+  margin-top: 1.5cqh;
+  font-size: 3.2cqw;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* Scene 2 — the funnel */
+.am-landing .am-ph-funnel {
+  gap: 3.2cqh;
+}
+.am-landing .am-ph-row {
+  display: flex;
+  align-items: baseline;
+  gap: 3cqw;
+  opacity: 0;
+}
+.am-landing .am-ph-n {
+  font-size: 13cqw;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  min-width: 3.4ch;
+  text-align: right;
+}
+.am-landing .am-ph-t {
+  font-size: 3.5cqw;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.am-landing .am-ph-dim .am-ph-n { color: #39414f; }
+.am-landing .am-ph-live .am-ph-n { color: var(--ink); }
+.am-landing .am-ph-key .am-ph-n { color: var(--accent); }
+.am-landing .am-ph-key .am-ph-t { color: var(--ink); }
+.am-landing .am-ph-rule {
+  height: 1px;
+  background: var(--line);
+}
+
+/* Scenes 3 & 4 — the score card and the result */
+.am-landing .am-ph-card-scene,
+.am-landing .am-ph-result {
+  gap: 2.6cqh;
+}
+.am-landing .am-ph-stamp {
+  font-size: 2.9cqw;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.am-landing .am-ph-card {
+  background: #141926;
+  border: 1px solid #1d2434;
+  border-radius: 3cqw;
+  padding: 5cqw;
+  display: flex;
+  flex-direction: column;
+  gap: 3.4cqw;
+}
+.am-landing .am-ph-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 3cqw;
+}
+.am-landing .am-ph-co {
+  min-width: 0;
+}
+.am-landing .am-ph-co-tic {
+  font-size: 5.6cqw;
+  font-weight: 700;
+}
+.am-landing .am-ph-co-name {
+  font-size: 3.1cqw;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.am-landing .am-ph-badge {
+  flex: none;
+  width: 20cqw;
+  height: 20cqw;
+  border-radius: 2cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.am-landing .am-ph-badge-n {
+  font-size: 9cqw;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.am-landing .am-ph-badge-l {
+  margin-top: 0.6cqh;
+  font-size: 2.2cqw;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.am-landing .am-ph-neg {
+  color: var(--red);
+  background: rgba(229, 82, 75, 0.16);
+  border: 1px solid rgba(229, 82, 75, 0.34);
+}
+.am-landing .am-ph-pos {
+  color: var(--green);
+  background: rgba(66, 229, 138, 0.16);
+  border: 1px solid rgba(66, 229, 138, 0.34);
+}
+.am-landing .am-ph-headline {
+  font-size: 3.3cqw;
+  color: var(--muted);
+}
+.am-landing .am-ph-thesis {
+  font-size: 4cqw;
+  line-height: 1.42;
+  border-left: 2px solid #1d2434;
+  padding-left: 3.4cqw;
+  text-wrap: pretty;
+}
+.am-landing .am-ph-chart {
+  position: relative;
+  width: 100%;
+  height: 32cqh;
+}
+.am-landing .am-ph-chart canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.am-landing .am-ph-move {
+  display: flex;
+  align-items: baseline;
+  gap: 3cqw;
+  font-variant-numeric: tabular-nums;
+}
+.am-landing .am-ph-from,
+.am-landing .am-ph-arrow {
+  font-size: 4.6cqw;
+  color: var(--muted);
+}
+.am-landing .am-ph-to {
+  font-size: 4.6cqw;
+  font-weight: 600;
+}
+.am-landing .am-ph-pct {
+  font-size: 17cqw;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.am-landing .am-ph-cap {
+  font-size: 3cqw;
+  color: var(--muted);
+}
+.am-landing .am-ph-c-neg { color: var(--red); }
+.am-landing .am-ph-c-pos { color: var(--green); }
+
 /* ---------- Email signup band ---------- */
 .am-landing .am-cta {
   position: relative;
@@ -399,6 +697,33 @@
     rgba(13, 17, 23, 0.72);
   backdrop-filter: blur(8px);
   padding: clamp(34px, 5vw, 56px) clamp(24px, 5vw, 60px);
+}
+/* Copy on the left, the story-of-the-week player on the right. The phone column
+   is `auto` so it takes exactly its own width and the copy gets the rest; below
+   900px the two stack and the phone centres under the form. */
+.am-landing .am-cta-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(30px, 4vw, 60px);
+}
+.am-landing .am-cta-copy {
+  min-width: 0;
+}
+.am-landing .am-cta-phone {
+  display: flex;
+  justify-content: center;
+}
+.am-landing .am-cta-phone .am-phone {
+  width: min(264px, 74vw);
+}
+@media (max-width: 900px) {
+  .am-landing .am-cta-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .am-landing .am-cta-phone {
+    padding-top: 34px;
+  }
 }
 .am-landing .am-cta-eyebrow {
   display: inline-flex;
