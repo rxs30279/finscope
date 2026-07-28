@@ -246,6 +246,12 @@ def _annual_lines(hist: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _vet_body_text(cand: dict) -> str:
+    if cand.get("body_is_stub"):
+        return "(body unavailable — announcement links to an external document)"
+    return cand.get("body") or "(not available)"
+
+
 def _vet_messages(cand: dict, annual: Optional[list[dict]] = None) -> list[dict]:
     system = (
         "You are a sceptical UK equity analyst vetting positive-looking RNS "
@@ -284,6 +290,10 @@ def _vet_messages(cand: dict, annual: Optional[list[dict]] = None) -> list[dict]
 
 Investegate AI summary
 {cand.get('summary') or '(not available)'}
+
+Announcement text (verbatim, may be truncated) — this is the primary source;
+the summary above is a useful lead but can omit or misread material detail
+  {_vet_body_text(cand)}
 
 Historical annual financials (from our own database; NOTE: "revenue" here is
 TOTAL revenue, which can differ from the company's preferred headline metric
@@ -338,6 +348,58 @@ def _vet_candidate(cand: dict, before=None) -> dict:
     }
 
 
+# ── Guidance gate ─────────────────────────────────────────────────────────────
+# Guidance that the company has NOT raised, against a consensus the
+# announcement itself prints as higher, is the LUCE 2026-07-28 failure: an
+# unchanged ">£40m" that beat consensus in May but sat under the £40.7m
+# consensus printed in the same document ten weeks later. LUCE fell 11.8% that
+# session after being flagged at 75/positive.
+#
+# This is a gate on the FACT rather than the score by design. Scoring LUCE 7
+# times at temperature 0.2 gave llm_score 75 in 6 runs and 85 in 1 — never once
+# below the flag threshold — while ULVR (a genuine +8.7% winner) ranged 45-75
+# across its own 7 runs. A ~30-point spread is wider than the 75/80/85 band the
+# page gates on, so llm_score alone is not a sound thing to gate on. The
+# structured field is far steadier, so the decision is made here in Python,
+# deterministically and testably.
+#
+# Which combination disqualifies, measured rather than assumed. Over those same
+# 7 LUCE runs vs_prior was "reiterated" 7/7, but vs_consensus split 4 "below" /
+# 3 "in_line" — ">£40m" is a floor and the £40.7m consensus is only 1.75% above
+# it, so both labels are defensible and the model cannot be relied on to pick
+# one. Gating on "below" alone would therefore fire on barely half the runs.
+# Including "in_line" makes it fire 7/7 and is sound on its own terms: a guide
+# the company has NOT raised, which the announcement's own printed consensus
+# shows it does not exceed, is not a positive catalyst.
+#
+# Still deliberately narrow. "raised" never disqualifies, so ULVR — which
+# restates a pre-existing 4-6% range while explicitly upgrading its outlook —
+# stays flaggable. "no_consensus_stated" never disqualifies, so the common case
+# (no consensus footnote at all) is untouched; this gate only ever fires on
+# announcements that printed a consensus figure and failed to clear it.
+# "unknown" never disqualifies either: it is the fail-safe value
+# _clean_guidance_checks assigns to labels it didn't recognise, so treating it
+# as disqualifying would silently drop rows on a parsing miss.
+_GUIDANCE_DISQUALIFYING_VS_PRIOR = ("reiterated", "lowered")
+_GUIDANCE_DISQUALIFYING_VS_CONSENSUS = ("below", "in_line")
+
+
+def _disqualifying_guidance(cand: dict) -> Optional[dict]:
+    """Return the first guidance entry that should block flagging, else None."""
+    checks = cand.get("guidance_checks")
+    if not isinstance(checks, list):
+        return None
+    for entry in checks:
+        if not isinstance(entry, dict):
+            continue
+        if (
+            entry.get("vs_consensus") in _GUIDANCE_DISQUALIFYING_VS_CONSENSUS
+            and entry.get("vs_prior") in _GUIDANCE_DISQUALIFYING_VS_PRIOR
+        ):
+            return entry
+    return None
+
+
 # ── Auto-flag ─────────────────────────────────────────────────────────────────
 def flag_high_impact_candidates(hours: int = 48) -> dict:
     """Flag rules-passing candidates from the last `hours` straight onto the
@@ -348,8 +410,9 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         """
         SELECT r.id, r.symbol, r.company_name, r.headline, r.url, r.published_at,
                r.tier, r.category, r.score, r.keyword_hits, r.summary,
+               r.body, r.body_is_stub,
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_risks, r.llm_action,
-               r.llm_sentiment,
+               r.llm_sentiment, r.guidance_checks,
                m.sector, m.industry, m.country, m.ftse_index,
                t.market_cap, t.net_debt
         FROM rns_announcements r
@@ -422,10 +485,24 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
 
     flagged = 0
     skipped_sentiment = 0
+    skipped_guidance = 0
     vetted = 0
     for c in cands:
         if _sentiment(c) != "positive":
             skipped_sentiment += 1
+            continue
+
+        # Checked before the vet so a disqualified row costs no LLM call.
+        bad_guidance = _disqualifying_guidance(c)
+        if bad_guidance:
+            skipped_guidance += 1
+            print(
+                f"[showcase] {c['symbol']} not flagged — "
+                f"{bad_guidance.get('period')} {bad_guidance.get('metric')} "
+                f"{bad_guidance.get('vs_prior')} and below consensus "
+                f"({bad_guidance.get('guided_value')} vs "
+                f"{bad_guidance.get('consensus_value')})"
+            )
             continue
 
         story_close = _story_close(c["symbol"], c["published_at"])
@@ -479,6 +556,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         "candidates": len(cands),
         "flagged": flagged,
         "skipped_sentiment": skipped_sentiment,
+        "skipped_guidance": skipped_guidance,
         "vetted": vetted,
     }
 

@@ -1028,8 +1028,9 @@ def _build_row(raw: dict) -> dict:
     }
 
 
-def _prune_old(days: int = 14) -> dict:
-    """Hard-delete Tier C rns_announcements older than `days` (by published_at).
+def _prune_old(days: int = 14, body_days: int = 30) -> dict:
+    """Hard-delete Tier C rns_announcements older than `days` (by published_at),
+    and NULL out the `body` column on Tier A/B rows older than `body_days`.
 
     Tier C is routine paperwork (PDMR, TVR, buybacks) at high volume with no
     lasting value, so it's still bounded at `days`. Tier A/B rows are kept
@@ -1037,6 +1038,16 @@ def _prune_old(days: int = 14) -> dict:
     shown on the High Impact showcase and fed to the ranker's per-issuer
     history prompt (see rns_llm._load_history), so they must outlive the
     showcase's own tracking window instead of a fixed cutoff.
+
+    The full announcement body is only needed at scoring time, though — kept
+    indefinitely on every retained A/B row it would grow rns_announcements
+    against Supabase's free-tier storage cap, so it's NULLed after
+    `body_days` while body_chars/body_fetched_at survive for diagnostics.
+    guidance_metric/value/period also survive — they're the per-issuer memory
+    the NEXT announcement compares against (see rns_llm._load_prior_guidance)
+    and cost negligible space compared to the body text itself. So does
+    guidance_checks, which is the audit trail for why showcase did or didn't
+    flag a row (see showcase._disqualifying_guidance).
     """
     pool = _get_pool()
     conn = pool.getconn()
@@ -1052,7 +1063,25 @@ def _prune_old(days: int = 14) -> dict:
             (str(days),),
         )
         deleted = cur.rowcount
-        return {"deleted": deleted, "older_than_days": days}
+
+        cur.execute(
+            """
+            UPDATE rns_announcements
+            SET body = NULL
+            WHERE tier IN ('A', 'B')
+              AND body IS NOT NULL
+              AND published_at < NOW() - (%s || ' days')::interval
+            """,
+            (str(body_days),),
+        )
+        body_pruned = cur.rowcount
+
+        return {
+            "deleted": deleted,
+            "older_than_days": days,
+            "body_pruned": body_pruned,
+            "body_older_than_days": body_days,
+        }
     finally:
         pool.putconn(conn)
 
@@ -1105,19 +1134,32 @@ def _run_ingest(
     return result
 
 
-# ── Summary scraper (investegate AI summary) ──────────────────────────────────
+# ── Summary + body scraper (investegate AI summary + full announcement text) ──
+
+# Full-text container per wire, checked in order. Deliberately NOT `.art-board`
+# — verified over 20 recent Tier A/B rows to match 6 nodes per page, the first
+# being page chrome rather than the announcement.
+_BODY_SELECTORS = (
+    ("RNS", "fr-view-element"),
+    ("PRN", "prn-announcement"),
+)
+
+# Bodies under this many chars are stubs — announcements that only point at an
+# external PDF rather than carrying the text themselves.
+_BODY_STUB_CHARS = 600
+
+# Store (and prompt with) at most this many chars: head + tail, not head-only.
+# Outlook statements and CEO quotes sit near the top; consensus footnotes and
+# reiterated-guidance language have been seen ~85% of the way through a long
+# results document, so head-only truncation would silently drop exactly the
+# sentences this feature exists to surface.
+_BODY_CAP = 24_000
+_BODY_HEAD = 16_000
+_BODY_TAIL = 8_000
 
 
-def _fetch_summary(url: str, timeout: int = 15) -> Optional[str]:
-    """Fetch one announcement page and extract the #collapseSummary text.
-
-    Returns stripped summary text, or None if the page has no AI summary.
-    """
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        html = resp.read().decode("utf-8", errors="replace")
-    from bs4 import BeautifulSoup  # deferred — only the ingest/scrape path needs it
-    soup = BeautifulSoup(html, "html.parser")
+def _extract_summary(soup) -> Optional[str]:
+    """Pull the #collapseSummary text out of an already-parsed announcement page."""
     node = soup.find(id="collapseSummary")
     if node is None:
         return None
@@ -1128,7 +1170,65 @@ def _fetch_summary(url: str, timeout: int = 15) -> Optional[str]:
     return text or None
 
 
-def _update_summary(ann_id: int, summary: Optional[str]) -> None:
+def _fetch_body(soup) -> Optional[str]:
+    """Pull the full announcement text out of an already-parsed announcement page.
+
+    Tries each wire's container in turn; returns None if none matched (page
+    layout changed, or genuinely nothing there). A short body that DOES match
+    a container is a stub, not a miss — see _BODY_STUB_CHARS / body_is_stub.
+    """
+    for _wire, cls in _BODY_SELECTORS:
+        node = soup.find("div", class_=cls)
+        if node is not None:
+            text = node.get_text(" ", strip=True)
+            if text:
+                return text
+    return None
+
+
+def _truncate_body(text: str) -> tuple[str, int, bool]:
+    """Cap body text for storage/prompting.
+
+    Returns (stored_text, original_chars, is_stub). Under the cap the text is
+    kept whole; over it, head+tail with an explicit omission marker so the
+    model knows the middle was cut rather than silently trusting a truncated
+    document as complete.
+    """
+    n = len(text)
+    is_stub = n < _BODY_STUB_CHARS
+    if n <= _BODY_CAP:
+        return text, n, is_stub
+    omitted = n - _BODY_HEAD - _BODY_TAIL
+    stored = (
+        text[:_BODY_HEAD]
+        + f"\n\n[… {omitted} chars omitted …]\n\n"
+        + text[-_BODY_TAIL:]
+    )
+    return stored, n, is_stub
+
+
+def _fetch_summary_and_body(url: str, timeout: int = 15) -> tuple[Optional[str], Optional[str]]:
+    """Fetch one announcement page once and extract both the AI summary and
+    the full announcement body text.
+
+    Returns (summary, body) — either may be None (no AI summary on this wire,
+    or no recognised body container on the page).
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        html = resp.read().decode("utf-8", errors="replace")
+    from bs4 import BeautifulSoup  # deferred — only the ingest/scrape path needs it
+    soup = BeautifulSoup(html, "html.parser")
+    return _extract_summary(soup), _fetch_body(soup)
+
+
+def _update_summary_and_body(
+    ann_id: int,
+    summary: Optional[str],
+    body: Optional[str],
+    body_chars: Optional[int],
+    body_is_stub: Optional[bool],
+) -> None:
     pool = _get_pool()
     conn = pool.getconn()
     try:
@@ -1136,10 +1236,12 @@ def _update_summary(ann_id: int, summary: Optional[str]) -> None:
         cur.execute(
             """
             UPDATE rns_announcements
-            SET summary = %s, summary_fetched_at = NOW()
+            SET summary = %s, summary_fetched_at = NOW(),
+                body = %s, body_chars = %s, body_fetched_at = NOW(),
+                body_is_stub = %s
             WHERE id = %s
         """,
-            (summary, ann_id),
+            (summary, body, body_chars, body_is_stub, ann_id),
         )
         conn.commit()
     except Exception:
@@ -1152,15 +1254,22 @@ def _update_summary(ann_id: int, summary: Optional[str]) -> None:
 def _backfill_summaries(
     limit: int = 50, sleep_s: float = 1.5, tiers: tuple = ("A", "B")
 ) -> dict:
-    """Fetch investegate AI summaries for recent tier A/B rows that lack one.
+    """Fetch investegate AI summaries + full body text for recent tier A/B
+    rows that lack one. Rate-limited by sleep_s between fetches. Feeds both
+    the LLM ranker and the showcase vet with context.
 
-    Rate-limited by sleep_s between fetches. Feeds the LLM ranker with context.
+    Keyed on body_fetched_at (not summary_fetched_at): every row ingested
+    before the body-capture column existed already has summary_fetched_at
+    set, so gating on that would never backfill their (missing) body. Keying
+    on body_fetched_at catches both those rows and genuinely new ones in one
+    pass — the same single fetch fills both columns regardless of which was
+    already present.
     """
     rows = _query(
         """
         SELECT id, url
         FROM rns_announcements
-        WHERE summary_fetched_at IS NULL
+        WHERE body_fetched_at IS NULL
           AND tier = ANY(%s)
         ORDER BY published_at DESC
         LIMIT %s
@@ -1169,10 +1278,18 @@ def _backfill_summaries(
     )
 
     fetched = with_summary = missing = errors = 0
+    with_body = stub = 0
     for r in rows:
         try:
-            summary = _fetch_summary(r["url"])
-            _update_summary(r["id"], summary)
+            summary, body_raw = _fetch_summary_and_body(r["url"])
+            body_stored = body_chars = None
+            body_is_stub = None
+            if body_raw:
+                body_stored, body_chars, body_is_stub = _truncate_body(body_raw)
+                with_body += 1
+                if body_is_stub:
+                    stub += 1
+            _update_summary_and_body(r["id"], summary, body_stored, body_chars, body_is_stub)
             fetched += 1
             if summary:
                 with_summary += 1
@@ -1187,6 +1304,8 @@ def _backfill_summaries(
         "fetched": fetched,
         "with_summary": with_summary,
         "missing": missing,
+        "with_body": with_body,
+        "body_stub": stub,
         "errors": errors,
     }
     print(f"[rns] summary backfill done — {result}")

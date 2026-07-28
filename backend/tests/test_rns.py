@@ -1,7 +1,23 @@
 import sys, os
+from unittest.mock import patch, MagicMock
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rns import _classify, _parse_rows, _parse_timestamp
+from bs4 import BeautifulSoup
+
+from rns import (
+    _classify,
+    _parse_rows,
+    _parse_timestamp,
+    _extract_summary,
+    _fetch_body,
+    _truncate_body,
+    _prune_old,
+    _BODY_CAP,
+    _BODY_HEAD,
+    _BODY_TAIL,
+    _BODY_STUB_CHARS,
+)
 
 
 # ── _classify — tier A (always surface) ───────────────────────────────────────
@@ -459,3 +475,129 @@ def test_parse_rows_excludes_financewire_noise():
     assert all(r["wire"] != "FNW" for r in rows)
     assert all(r["ticker"] != "FNEWS" for r in rows)
     assert 9641654 not in [r["id"] for r in rows]
+
+
+# ── _extract_summary ──────────────────────────────────────────────────────────
+
+def test_extract_summary_returns_text():
+    soup = BeautifulSoup(
+        '<div id="collapseSummary"><p>Revenue up 10%.</p></div>', "html.parser"
+    )
+    assert _extract_summary(soup) == "Revenue up 10%."
+
+
+def test_extract_summary_drops_disclaimer():
+    soup = BeautifulSoup(
+        '<div id="collapseSummary"><p>Revenue up 10%.</p>'
+        '<p id="summary-disclaimer">AI-generated, may be inaccurate.</p></div>',
+        "html.parser",
+    )
+    assert _extract_summary(soup) == "Revenue up 10%."
+
+
+def test_extract_summary_missing_node_returns_none():
+    soup = BeautifulSoup("<div>nothing here</div>", "html.parser")
+    assert _extract_summary(soup) is None
+
+
+# ── _fetch_body ────────────────────────────────────────────────────────────────
+
+def test_fetch_body_rns_node():
+    soup = BeautifulSoup(
+        '<div class="fr-view-element"><p>Full RNS text.</p></div>', "html.parser"
+    )
+    assert _fetch_body(soup) == "Full RNS text."
+
+
+def test_fetch_body_prn_node():
+    soup = BeautifulSoup(
+        '<div class="prn-announcement"><p>Full PRN text.</p></div>', "html.parser"
+    )
+    assert _fetch_body(soup) == "Full PRN text."
+
+
+def test_fetch_body_missing_node_returns_none():
+    # Neither container present — e.g. a page-layout change (selector rot).
+    soup = BeautifulSoup('<div class="art-board">chrome only</div>', "html.parser")
+    assert _fetch_body(soup) is None
+
+
+def test_fetch_body_empty_node_returns_none():
+    soup = BeautifulSoup('<div class="fr-view-element"></div>', "html.parser")
+    assert _fetch_body(soup) is None
+
+
+def test_fetch_body_prefers_rns_over_prn_when_both_present():
+    soup = BeautifulSoup(
+        '<div class="fr-view-element">RNS text</div>'
+        '<div class="prn-announcement">PRN text</div>',
+        "html.parser",
+    )
+    assert _fetch_body(soup) == "RNS text"
+
+
+# ── _truncate_body ─────────────────────────────────────────────────────────────
+
+def test_truncate_body_under_cap_kept_whole():
+    text = "x" * 5000
+    stored, chars, is_stub = _truncate_body(text)
+    assert stored == text
+    assert chars == 5000
+    assert is_stub is False
+
+
+def test_truncate_body_stub_below_threshold():
+    text = "y" * (_BODY_STUB_CHARS - 1)
+    stored, chars, is_stub = _truncate_body(text)
+    assert is_stub is True
+    assert stored == text  # still stored whole, just flagged
+    assert chars == _BODY_STUB_CHARS - 1
+
+
+def test_truncate_body_over_cap_head_and_tail():
+    head = "H" * _BODY_HEAD
+    middle = "M" * 50_000
+    tail = "T" * _BODY_TAIL
+    text = head + middle + tail
+    stored, chars, is_stub = _truncate_body(text)
+    assert chars == len(text)
+    assert is_stub is False
+    assert stored.startswith(head)
+    assert stored.endswith(tail)
+    assert "chars omitted" in stored
+    assert len(stored) < len(text)
+    # The omitted middle must never leak into what's stored/prompted.
+    assert "M" * 100 not in stored
+
+
+def test_truncate_body_at_exactly_cap_kept_whole():
+    text = "z" * _BODY_CAP
+    stored, chars, is_stub = _truncate_body(text)
+    assert stored == text
+    assert chars == _BODY_CAP
+
+
+# ── _prune_old — body-nulling extension ────────────────────────────────────────
+
+def test_prune_old_nulls_body_on_tier_ab_after_body_days():
+    with patch("rns._get_pool") as mock_get_pool:
+        pool = MagicMock()
+        conn = MagicMock()
+        cur = MagicMock()
+        cur.rowcount = 3
+        conn.cursor.return_value = cur
+        pool.getconn.return_value = conn
+        mock_get_pool.return_value = pool
+
+        result = _prune_old(days=14, body_days=30)
+
+    assert result["body_pruned"] == 3
+    assert result["body_older_than_days"] == 30
+    # Two statements: the Tier C hard-delete, then the body NULL-out.
+    calls = cur.execute.call_args_list
+    assert len(calls) == 2
+    assert "DELETE FROM rns_announcements" in calls[0][0][0]
+    second_sql = calls[1][0][0]
+    assert "SET body = NULL" in second_sql
+    assert "tier IN ('A', 'B')" in second_sql
+    assert calls[1][0][1] == ("30",)

@@ -3,13 +3,17 @@
 Takes rows that passed the rules-based coarse filter (tier A/B) and produces a
 structured score + thesis + action + risks. Context assembled per-row:
   - headline, category, tier, keyword_hits, rules score
-  - investegate AI summary (scraped via rns._fetch_summary)
+  - investegate AI summary + full announcement body text (scraped via
+    rns._fetch_summary_and_body) — the body is the primary source, the
+    summary a useful but sometimes lossy lead (see docs/rns-body-context-plan.md)
   - company_metadata: sector, industry, country, ftse_index
   - ttm_financials: market_cap, P/E, dividend yield, ROIC, ROE, margins,
     growth rates, debt/equity, quality_score, risk_score
   - analyst_snapshots: consensus, buy %, upside %, # analysts, fwd EPS growth
   - price_history: 1-month and 6-month price change
-  - recent RNS history for the same ticker (last 60 days)
+  - recent RNS history for the same ticker (last 120 days)
+  - prior stated guidance for the same issuer, any age (see _load_prior_guidance)
+    — lets a reiterated figure be told apart from a real upgrade
 
 Uses DeepSeek's OpenAI-compatible API. Requires DEEPSEEK_API_KEY in env.
 """
@@ -25,6 +29,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from dotenv import load_dotenv
+from psycopg2.extras import Json
 
 from admin_auth import require_admin_token
 from rns import _query, _get_pool
@@ -81,7 +86,7 @@ def _load_candidate(row_id: int) -> Optional[dict]:
         """
         SELECT a.id, a.published_at, a.wire, a.ticker, a.symbol, a.company_name,
                a.headline, a.headline_slug, a.url, a.tier, a.category,
-               a.keyword_hits, a.score, a.summary,
+               a.keyword_hits, a.score, a.summary, a.body, a.body_is_stub,
                m.sector, m.industry, m.country, m.ftse_index,
                t.market_cap,
                CASE WHEN t.price_to_earnings > 999 OR t.price_to_earnings <= 0
@@ -200,7 +205,14 @@ def _load_price_change(symbol: Optional[str]) -> dict:
 
 
 def _load_history(symbol: Optional[str], limit: int = 10) -> list[dict]:
-    """Last `limit` RNS items for this issuer, excluding routine noise."""
+    """Last `limit` RNS items for this issuer, excluding routine noise.
+
+    120 days (not 60) so a half-year reporting cadence — Q1 in May, H1 in
+    July, ~70 days apart — isn't excluded by construction. RNS ingest only
+    began 2026-06-29, so this is a no-op until the table fills past 60 days
+    deep; it becomes correct automatically as history accrues rather than
+    needing a second change later.
+    """
     if not symbol:
         return []
     return _query(
@@ -209,12 +221,39 @@ def _load_history(symbol: Optional[str], limit: int = 10) -> list[dict]:
         FROM rns_announcements
         WHERE symbol = %s
           AND tier IN ('A', 'B')
-          AND published_at >= NOW() - INTERVAL '60 days'
+          AND published_at >= NOW() - INTERVAL '120 days'
         ORDER BY published_at DESC
         LIMIT %s
     """,
         (symbol, limit),
     )
+
+
+def _load_prior_guidance(symbol: Optional[str], exclude_id: Optional[int] = None) -> Optional[dict]:
+    """Most recent prior announcement for this issuer that had an extracted
+    guidance figure (see _save_ranking / guidance_metric), regardless of age —
+    a reiterated guidance figure is only reiterated for as long as the company
+    keeps saying it, which isn't bounded by the 120-day history window above.
+
+    Returns None until an issuer has a second captured announcement; expect
+    that to be rare for months given ingest only began 2026-06-29 (see
+    docs/rns-body-context-plan.md Phase 3) and fill in as coverage grows.
+    """
+    if not symbol:
+        return None
+    rows = _query(
+        """
+        SELECT published_at, guidance_metric, guidance_value, guidance_period
+        FROM rns_announcements
+        WHERE symbol = %s
+          AND guidance_metric IS NOT NULL
+          AND id != %s
+        ORDER BY published_at DESC
+        LIMIT 1
+    """,
+        (symbol, exclude_id or 0),
+    )
+    return rows[0] if rows else None
 
 
 def _format_market_cap(mc: Optional[float]) -> str:
@@ -330,7 +369,12 @@ def _risk_score(cand: dict) -> Optional[int]:
     return max(1, min(10, round(total / components)))
 
 
-def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
+def _build_messages(
+    cand: dict,
+    history: list[dict],
+    price: dict,
+    prior_guidance: Optional[dict] = None,
+) -> list[dict]:
     """Construct the DeepSeek chat messages. Forces JSON output via prompt."""
     system = (
         "You rank UK stock announcements (RNS feed) on how likely they are to "
@@ -366,7 +410,31 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
         "taking the upgrade at face value. A quality score of n/a means the "
         "company is outside our financials coverage, NOT that quality is low — "
         "judge business quality from the announcement text itself and do not "
-        "penalise the score for the missing data. Return STRICT JSON only."
+        "penalise the score for the missing data. "
+        "When the announcement text states a company-compiled analyst "
+        "consensus figure, compare the guided figure against it and say which "
+        "side of consensus the guidance falls on — reiterated guidance "
+        "('continues to expect') against a consensus that has since moved "
+        "past it is not an upgrade even if the same number beat consensus "
+        "months ago. If 'Prior guidance from this issuer' below shows the "
+        "same figure as today's announcement, treat today's as a reiteration, "
+        "not new news, regardless of how the headline phrases it. "
+        "One announcement often carries several guidance statements covering "
+        "different periods, sometimes in the same sentence — a reiterated "
+        "near-year figure alongside a new out-year comment. Enumerate every "
+        "one of them in guidance_checks before you choose a score, scoring "
+        "each on BOTH axes: changed-or-not versus the company's own prior "
+        "guidance, and above-or-below any consensus printed for that same "
+        "period. Those are different questions and a figure can be "
+        "unchanged and below consensus at once. The most eye-catching "
+        "statement is usually the vaguest one (an out-year 'ahead of "
+        "expectations' with no figure attached); it must not mask a "
+        "near-year figure that consensus has already overtaken. "
+        "Multi-year targets reaffirmed rather than raised, when current "
+        "performance already exceeds them, can be a negative signal — the "
+        "market may have wanted an upgrade. Weigh this one lightly against "
+        "the rest of the analysis; it is a market-psychology judgement, not a "
+        "reading-comprehension one. Return STRICT JSON only."
     )
 
     hist_lines = (
@@ -486,6 +554,20 @@ def _build_messages(cand: dict, history: list[dict], price: dict) -> list[dict]:
             f"\n  Fwd EPS gr:   {_fmt_pct(fwd_eps)}  ({n_analysts or 0} analysts)"
         )
 
+    if cand.get("body_is_stub"):
+        body_text = "(body unavailable — announcement links to an external document)"
+    else:
+        body_text = cand.get("body") or "(not available)"
+
+    if prior_guidance:
+        pg_period = prior_guidance.get("guidance_period") or "?"
+        pg_metric = prior_guidance.get("guidance_metric") or "?"
+        pg_value = prior_guidance.get("guidance_value") or "?"
+        pg_date = prior_guidance["published_at"].strftime("%Y-%m-%d")
+        guidance_line = f"  {pg_date}  {pg_period} {pg_metric}: {pg_value}"
+    else:
+        guidance_line = "  (none captured yet for this issuer)"
+
     user = f"""Announcement
   Ticker:       {cand.get('ticker') or '?'}
   Company:      {cand.get('company_name') or '?'}
@@ -511,17 +593,89 @@ Financial health
 Investegate AI summary
 {cand.get('summary') or '(not available)'}
 
-Recent issuer RNS history (tier A/B only, last 60 days)
+Announcement text (verbatim, may be truncated) — this is the primary source;
+the summary above is a useful lead but can omit or misread material detail
+  {body_text}
+
+Prior guidance from this issuer (most recent captured; may be from any date)
+{guidance_line}
+
+Recent issuer RNS history (tier A/B only, last 120 days)
 {hist_lines}
 
-Produce a JSON object with these fields exactly:
-  score        integer 0-100; price-impact likelihood × magnitude
-  confidence   one of: "high", "medium", "low"
-  thesis       one sentence: why this matters (or why it doesn't)
-  action       one of: "watch", "research", "ignore"
-  risks        one sentence: what would invalidate the thesis
-  sentiment    one of: "positive", "negative", "neutral" — the direction of
-               this news for existing shareholders, independent of size/impact
+Produce a JSON object with these fields exactly, IN THIS ORDER — fill in
+guidance_checks first and let it constrain the score, do not pick a score
+and then justify it:
+  guidance_checks  array, one entry for EVERY forward-looking guidance
+                   statement in the announcement text — every period, not
+                   just the most prominent or the most recently mentioned
+                   one. A single paragraph often carries two (e.g. a
+                   reiterated near-year figure and a new out-year comment);
+                   both get an entry. Empty array if the announcement makes
+                   no forward statement. Each entry:
+                     metric          e.g. "Adjusted Operating Profit"
+                     period          e.g. "FY2026"
+                     guided_value    as printed, e.g. "> £40m" or
+                                     "to exceed current market expectations"
+                     consensus_value the company-compiled consensus for that
+                                     SAME period if the announcement prints
+                                     one, else null — match on period, do not
+                                     borrow another year's figure
+                     vs_prior        one of: "raised", "reiterated",
+                                     "lowered", "new", "unknown"
+                     vs_consensus    one of: "above", "in_line", "below",
+                                     "no_consensus_stated"
+                   These two are INDEPENDENT and must both be filled in. A
+                   figure can be reiterated and below consensus at the same
+                   time (the company's expectation is unchanged, but
+                   consensus has moved past it since) — that combination is
+                   the single most important thing this field exists to
+                   catch, so never let one of the two answers stand in for
+                   the other.
+                     vs_prior is about the company's own EXPECTATION, not
+                   the digits: if the announcement says it is upgrading,
+                   raising or narrowing-upward its outlook, that is
+                   "raised" even when the printed figure is a pre-existing
+                   multi-year range being restated and no new number is
+                   given. Take the company at its word on direction. Use
+                   "new" for first-time guidance and "unknown" when there
+                   is nothing to compare against.
+                     vs_consensus is ONLY about a consensus figure printed
+                   in this announcement. "no_consensus_stated" is the
+                   common case and carries no information either way — most
+                   announcements print no consensus footnote. It is never
+                   evidence that guidance fails to beat expectations.
+  score            integer 0-100; price-impact likelihood × magnitude.
+                   Weigh every guidance_checks entry, not just the most
+                   favourable one. In particular:
+                   - reiterated + below consensus is a NEGATIVE, however
+                     positively the announcement phrases it, and it caps how
+                     positive the whole item can be even when another entry
+                     is above consensus;
+                   - raised + no_consensus_stated is still a genuine
+                     catalyst — do not mark an upgrade down merely because
+                     no consensus figure was printed;
+                   - reiterated + no_consensus_stated is neutral: no new
+                     information, so no catalyst.
+  confidence       one of: "high", "medium", "low"
+  thesis           one sentence: why this matters (or why it doesn't)
+  action           one of: "watch", "research", "ignore"
+  risks            one sentence: what would invalidate the thesis
+  sentiment        one of: "positive", "negative", "neutral" — the direction
+                   of this news for existing shareholders, independent of
+                   size/impact
+  guidance_metric  one entry from guidance_checks, echoed here (e.g.
+                   "FY2026 Adjusted Operating Profit"), or null if
+                   guidance_checks is empty. This is the one figure carried
+                   forward and shown against the issuer's NEXT announcement,
+                   so it must be comparable: pick the entry with a hard
+                   number covering the nearest period. Only fall back to a
+                   qualitative entry ("ahead of expectations", "in line") if
+                   no entry has a number at all — such a value is useless
+                   for the later comparison.
+  guidance_value   that entry's figure/range/threshold as text (e.g.
+                   "> £40m"), or null
+  guidance_period  that entry's period (e.g. "FY2026"), or null
 
 Return JSON only — no preamble, no code fence."""
 
@@ -564,12 +718,67 @@ def _call_deepseek(messages: list[dict]) -> dict:
     return json.loads(content)
 
 
+# The two guidance axes, kept as explicit whitelists. Anything the model
+# invents outside these lands as "unknown"/"no_consensus_stated" rather than
+# being stored verbatim — showcase's gate matches on exact values, so an
+# unrecognised label must fail safe (not disqualifying) rather than silently
+# never matching.
+_VS_PRIOR = ("raised", "reiterated", "lowered", "new", "unknown")
+_VS_CONSENSUS = ("above", "in_line", "below", "no_consensus_stated")
+
+
+def _clean_guidance_checks(raw) -> Optional[list]:
+    """Normalise the model's guidance_checks array before it is stored.
+
+    Returns None (SQL NULL) when the model emitted nothing usable, so
+    "no guidance in this announcement" and "the model didn't answer" are not
+    conflated with an empty-but-present array.
+    """
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        vs_prior = str(entry.get("vs_prior") or "").lower().strip()
+        vs_consensus = str(entry.get("vs_consensus") or "").lower().strip()
+        out.append(
+            {
+                "metric": (str(entry.get("metric") or "").strip()[:200] or None),
+                "period": (str(entry.get("period") or "").strip()[:50] or None),
+                "guided_value": (
+                    str(entry.get("guided_value") or "").strip()[:200] or None
+                ),
+                "consensus_value": (
+                    str(entry.get("consensus_value") or "").strip()[:200] or None
+                ),
+                "vs_prior": vs_prior if vs_prior in _VS_PRIOR else "unknown",
+                "vs_consensus": (
+                    vs_consensus
+                    if vs_consensus in _VS_CONSENSUS
+                    else "no_consensus_stated"
+                ),
+            }
+        )
+    return out or None
+
+
 def _save_ranking(ann_id: int, result: dict, model: str) -> None:
     # Sentiment is constrained to the three known values — anything else the
     # model invents is stored as NULL so _sentiment falls back to its scan.
     sentiment = (result.get("sentiment") or "").lower().strip()
     if sentiment not in ("positive", "negative", "neutral"):
         sentiment = None
+    guidance_checks = _clean_guidance_checks(result.get("guidance_checks"))
+    # Optional — most announcements state no explicit forward guidance figure.
+    guidance_metric = (result.get("guidance_metric") or "").strip()[:200] or None
+    guidance_value = (result.get("guidance_value") or "").strip()[:200] or None
+    guidance_period = (result.get("guidance_period") or "").strip()[:50] or None
+    # A metric without a value (or vice versa) isn't a usable data point for
+    # the next announcement's comparison — drop the pair rather than store a
+    # half-filled row that _load_prior_guidance would surface as garbage.
+    if not (guidance_metric and guidance_value):
+        guidance_metric = guidance_value = guidance_period = None
     pool = _get_pool()
     conn = pool.getconn()
     try:
@@ -584,7 +793,11 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 llm_risks        = %s,
                 llm_sentiment    = %s,
                 llm_model        = %s,
-                llm_processed_at = NOW()
+                llm_processed_at = NOW(),
+                guidance_metric  = %s,
+                guidance_value   = %s,
+                guidance_period  = %s,
+                guidance_checks  = %s
             WHERE id = %s
         """,
             (
@@ -595,6 +808,10 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 (result.get("risks") or "")[:500] or None,
                 sentiment,
                 model,
+                guidance_metric,
+                guidance_value,
+                guidance_period,
+                Json(guidance_checks) if guidance_checks is not None else None,
                 ann_id,
             ),
         )
@@ -620,7 +837,8 @@ def _rank_one(row_id: int) -> dict:
         raise ValueError(f"row {row_id} not found")
     history = _load_history(cand.get("symbol"))
     price = _load_price_change(cand.get("symbol"))
-    messages = _build_messages(cand, history, price)
+    prior_guidance = _load_prior_guidance(cand.get("symbol"), exclude_id=row_id)
+    messages = _build_messages(cand, history, price, prior_guidance)
     result = _call_deepseek(messages)
     # ":thinking" suffix makes the reasoning-mode cutover visible in llm_model
     # so score distributions can be compared across the switch.

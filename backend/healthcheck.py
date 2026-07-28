@@ -26,6 +26,9 @@ What it checks
     - RNS morning batch when today's pre-send A/B batch finished LLM ranking —
                        guards the early digest send (WARN as it nears 07:12,
                        FAIL if the batch ranks after the send would have fired)
+    - RNS body capture share of recent tier A/B rows with a non-stub
+                       announcement body (guards against silent selector rot
+                       — see docs/rns-body-context-plan.md)
     - Financials       MIN/MAX(financials_updated) on company_metadata (rotation)
   Service liveness (HTTP):
     - Backend API      GET {API_BASE_URL}/api/filters
@@ -407,6 +410,34 @@ def run_db_checks(query_one=None) -> None:
         )
         return status, (f"{n} stories ranked by {done:%H:%M:%S} UK "
                         f"(~{lag}m past 07:00){extra}")
+
+    @check("rns.body_capture")
+    def _rns_body_capture():
+        # Selector rot (docs/rns-body-context-plan.md Risks): the classes
+        # around the announcement body are obfuscated CSS on investegate's
+        # end and not contractual (fr-view-element / prn-announcement look
+        # stable but aren't guaranteed), so a page-layout change could
+        # silently zero out every future body capture while
+        # summary_fetched_at — and the rest of the pipeline — keeps looking
+        # healthy. WARN below ~80% so that regression has a visible signal
+        # instead of quietly reverting to pre-body-capture behaviour (the
+        # ranker/vet back to reading only the third-party AI summary).
+        row = query_one("""
+            SELECT COUNT(*) FILTER (WHERE body_fetched_at IS NOT NULL) AS attempted,
+                   COUNT(*) FILTER (WHERE body_fetched_at IS NOT NULL
+                                       AND body_is_stub IS NOT TRUE
+                                       AND body_chars IS NOT NULL) AS ok
+              FROM rns_announcements
+             WHERE tier IN ('A', 'B')
+               AND published_at >= NOW() - INTERVAL '3 days'
+        """)
+        attempted = (row or {}).get("attempted") or 0
+        if attempted == 0:
+            return PASS, "no tier A/B rows in the last 3 days"
+        ok = row["ok"] or 0
+        share = ok / attempted
+        status = WARN if share < 0.80 else PASS
+        return status, f"{ok}/{attempted} recent A/B rows have a non-stub body ({share:.0%})"
 
     @check("financials.rotation")
     def _financials():
