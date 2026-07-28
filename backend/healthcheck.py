@@ -328,34 +328,73 @@ def run_db_checks(query_one=None) -> None:
         # UK today), i.e. everything that could be in that morning's email.
         # Legitimately late-published stories (08:00+) are excluded on purpose:
         # they don't exist at send time, so they must not drag the metric late.
-        row = query_one(
-            "SELECT (NOW() AT TIME ZONE 'Europe/London') AS now_uk, "
-            "COUNT(*) AS n, "
-            "COUNT(*) FILTER (WHERE llm_processed_at IS NULL) AS unscored, "
-            "(MAX(llm_processed_at) AT TIME ZONE 'Europe/London') AS done_uk "
-            "FROM rns_announcements "
-            "WHERE tier IN ('A','B') "
-            "AND (published_at AT TIME ZONE 'Europe/London')::date "
-            "    = (NOW() AT TIME ZONE 'Europe/London')::date "
-            "AND (published_at AT TIME ZONE 'Europe/London')::time "
-            "    BETWEEN '06:30' AND '07:10'"
-        )
+        #
+        # Publication time alone is not enough to define that scope. A story can
+        # be published at 07:00, classified Tier C, and only become a ranking
+        # candidate hours later when a classifier fix re-tiers it — as happened
+        # on 2026-07-28, when fd253f3 landed at 09:30 and two results headlines
+        # (ULVR, GAW) were patched in at ~09:40. Measured on publication time
+        # that reads as "batch ranked at 10:02, 182m late" and fails the check,
+        # when in fact 51 of 53 were ranked by 07:12 and the backfill was the
+        # correct response to a scoring miss. Judging a same-day fix as a
+        # pipeline regression trains everyone to ignore this check.
+        #
+        # So scope on summary_fetched_at — when a story actually became a
+        # ranking candidate. Anything that entered after the send could never
+        # have been in that morning's email; it is counted and reported, but not
+        # judged. NULL stays IN scope on purpose: an A/B story that never even
+        # reached the summariser is a genuine stall, not a backfill.
+        send_uk = "07:12"
+        row = query_one(f"""
+            WITH batch AS (
+                SELECT llm_processed_at,
+                       (summary_fetched_at AT TIME ZONE 'Europe/London')::time
+                           AS entered_uk
+                  FROM rns_announcements
+                 WHERE tier IN ('A','B')
+                   AND (published_at AT TIME ZONE 'Europe/London')::date
+                       = (NOW() AT TIME ZONE 'Europe/London')::date
+                   AND (published_at AT TIME ZONE 'Europe/London')::time
+                       BETWEEN '06:30' AND '07:10'
+            ), scoped AS (
+                SELECT llm_processed_at,
+                       (entered_uk IS NULL OR entered_uk <= TIME '{send_uk}')
+                           AS in_time
+                  FROM batch
+            )
+            SELECT (NOW() AT TIME ZONE 'Europe/London') AS now_uk,
+                   COUNT(*) FILTER (WHERE in_time) AS n,
+                   COUNT(*) FILTER (WHERE in_time
+                                      AND llm_processed_at IS NULL) AS unscored,
+                   (MAX(llm_processed_at) FILTER (WHERE in_time)
+                        AT TIME ZONE 'Europe/London') AS done_uk,
+                   COUNT(*) FILTER (WHERE NOT in_time) AS backfilled
+              FROM scoped
+        """)
         if not row or row["now_uk"] is None:
             return PASS, "no data"
         now_uk = row["now_uk"]
         n = row["n"] or 0
+        backfilled = row["backfilled"] or 0
+        # Always surfaced, never judged: a backfill is worth seeing (it means a
+        # story was missed at send time and later fixed) but it is not evidence
+        # that the morning pipeline is slow.
+        extra = (f", {backfilled} backfilled after {send_uk} (not judged)"
+                 if backfilled else "")
         if n == 0:
             return PASS, (f"no pre-send batch today "
-                          f"({now_uk:%a %H:%M} UK — weekend/holiday or pre-open)")
+                          f"({now_uk:%a %H:%M} UK — weekend/holiday or pre-open)"
+                          f"{extra}")
         # Only judge lateness once the burst has had time to finish; before
         # 07:20 an unranked story is still in flight, not a regression.
         settled = now_uk.time() >= dtime(7, 20)
         unscored = row["unscored"] or 0
         if unscored:
             if not settled:
-                return PASS, f"{n} stories, {unscored} still ranking ({now_uk:%H:%M} UK)"
+                return PASS, (f"{n} stories, {unscored} still ranking "
+                              f"({now_uk:%H:%M} UK){extra}")
             return FAIL, (f"{unscored}/{n} morning stories unscored at "
-                          f"{now_uk:%H:%M} UK — pipeline stalled")
+                          f"{now_uk:%H:%M} UK — pipeline stalled{extra}")
         done = row["done_uk"]
         lag = (done.hour * 60 + done.minute) - 7 * 60
         # Digest sends ~07:11-07:12; the batch must be ranked before then.
@@ -366,7 +405,8 @@ def run_db_checks(query_one=None) -> None:
             warn_at=7 * 3600 + 10 * 60,   # 07:10
             fail_at=7 * 3600 + 15 * 60,   # 07:15
         )
-        return status, f"{n} stories ranked by {done:%H:%M:%S} UK (~{lag}m past 07:00)"
+        return status, (f"{n} stories ranked by {done:%H:%M:%S} UK "
+                        f"(~{lag}m past 07:00){extra}")
 
     @check("financials.rotation")
     def _financials():

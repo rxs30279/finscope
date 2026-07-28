@@ -73,7 +73,10 @@ def _naive(h, m, s=0):
 def _batch_stub(row):
     def query_one(sql):
         if "'06:30'" in " ".join(sql.split()):
-            return row
+            # backfilled defaults to 0 so the cases that predate same-day
+            # backfill handling stay written as they were; the tests that
+            # exercise it pass their own value.
+            return {"backfilled": 0, **row}
         return None
     return query_one
 
@@ -133,3 +136,50 @@ def test_morning_batch_stalled_fails(monkeypatch):
     status, detail = _run_batch(_batch_stub(row))
     assert status == healthcheck.FAIL
     assert "stalled" in detail
+
+
+def test_backfilled_stories_are_reported_but_not_judged(monkeypatch):
+    """The 2026-07-28 case: a classifier fix (fd253f3) re-tiered two 07:00
+    results headlines from C to A at ~09:40 and they were patched in after the
+    email had gone. Scoped on publication time that read as "ranked at 10:02,
+    182m late" and failed the check; the morning burst had in fact finished at
+    07:06. A same-day fix to a scoring miss must not look like a pipeline
+    regression, or the check stops being worth reading."""
+    monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
+    row = {"now_uk": _naive(11, 0), "n": 51, "unscored": 0,
+           "done_uk": _naive(7, 6, 51), "backfilled": 2}
+    status, detail = _run_batch(_batch_stub(row))
+    assert status == healthcheck.PASS
+    assert "51 stories" in detail
+    assert "2 backfilled" in detail          # surfaced, not hidden
+
+
+def test_backfill_is_surfaced_even_with_no_pre_send_batch(monkeypatch):
+    """A day whose entire A/B set arrived via backfill still reports it, rather
+    than reading as a silent 'nothing happened today'."""
+    monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
+    row = {"now_uk": _naive(11, 0), "n": 0, "unscored": 0,
+           "done_uk": None, "backfilled": 3}
+    status, detail = _run_batch(_batch_stub(row))
+    assert status == healthcheck.PASS
+    assert "3 backfilled" in detail
+
+
+def test_morning_batch_scopes_on_candidacy_not_publication(monkeypatch):
+    """Locks in the fix: the window must be defined by when a story became a
+    ranking candidate (summary_fetched_at), not by when it was published.
+    Reverting to a publication-time scope silently restores the false FAIL."""
+    monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
+    seen = []
+
+    def query_one(sql):
+        text = " ".join(sql.split())
+        if "'06:30'" in text:
+            seen.append(text)
+            return {"now_uk": _naive(9, 0), "n": 10, "unscored": 0,
+                    "done_uk": _naive(7, 6), "backfilled": 0}
+        return None
+
+    _run_batch(query_one)
+    assert seen, "morning_batch query never ran"
+    assert "summary_fetched_at" in seen[0]
