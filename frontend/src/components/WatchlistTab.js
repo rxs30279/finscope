@@ -678,6 +678,7 @@ const SCORE_TABLE_COLS = SCORE_COLS.map((c, i) => ({
   ...c,
   align: "center",
   width: "4%",
+  minWidth: 56,
   padding: "8px 10px",
   cellPadding: "9px 10px",
   divider: i === 0,
@@ -689,15 +690,16 @@ const SCORE_TABLE_COLS = SCORE_COLS.map((c, i) => ({
 // the price/trend block left of the divider; the four score pills and the news
 // chip only need what their fixed-size content occupies.
 // The news column's left padding is the gap between the RSK pill and the news
-// chip. Named because the header cell and the body cell are written separately
-// (the body <td> is hand-rolled, not part of the COLS map) and silently drifted
-// apart once already.
-const NEWS_HEAD_PAD = "8px 14px 8px 76px";
-const NEWS_CELL_PAD = "9px 14px 9px 76px";
-// How far into the news column the orange "showing this share" marker sits, so it
-// leads the chip rather than crowding the RSK pill. Keep it under the left padding
-// above or it will overlap the chip.
-const NEWS_MARK_LEFT = 62;
+// chip (the "N RNS · N press" badge). Named because the header cell and the
+// body cell are written separately (the body <td> is hand-rolled, not part of
+// the COLS map) and silently drifted apart once already.
+const NEWS_HEAD_PAD = "8px 14px 8px 54px";
+const NEWS_CELL_PAD = "9px 14px 9px 54px";
+// How far into the news column the orange "showing this share" marker sits.
+// Kept close to the RSK pill (not the chip) — the gap that matters is between
+// the marker and the chip it's pointing at, which is NEWS_HEAD_PAD's left
+// padding minus this value. Keep it under that padding or it will overlap the chip.
+const NEWS_MARK_LEFT = 20;
 
 const COLS = [
   {
@@ -708,37 +710,71 @@ const COLS = [
     // a dead gap that pushes every other column to the right.
     align: "left",
     width: "15%",
+    minWidth: 150,
   },
-  { key: "price", label: "Price", align: "right", width: "7%" },
-  { key: "day", label: "Day", align: "right", width: "7%" },
-  { key: "run", label: "Run", align: "right", width: "7%" },
+  { key: "price", label: "Price", align: "right", width: "7%", minWidth: 65 },
+  { key: "day", label: "Day", align: "right", width: "7%", minWidth: 70 },
+  { key: "run", label: "Run", align: "right", width: "7%", minWidth: 55 },
   // No sort: the sparkline has no single number to order by — 52W Range next to
   // it covers "where is this trading".
-  { key: "trend", label: "Trend", align: "left", width: "11%", noSort: true },
-  { key: "range", label: "52W Range", align: "left", width: "11%" },
+  { key: "trend", label: "Trend", align: "left", width: "11%", noSort: true, minWidth: 90 },
+  // Bar + percentage label need room of their own — below this the label was
+  // overflowing the column and overlapping Target buy's "set £" input.
+  { key: "range", label: "52W Range", align: "left", width: "11%", minWidth: 110 },
   // Extra right padding here and extra left padding on MOM below open up the
-  // faint divider that separates the price block from the factor block.
+  // faint divider that separates the price block from the factor block. The
+  // header label is centered over the column rather than right-aligned like the
+  // "set £" cell below it — a right-aligned nowrap label overflows/gets covered
+  // by the MOM column once the header is compressed below the label's natural
+  // width; centered it clips evenly on both sides instead. The "set £" cell
+  // itself stays right-aligned (hardcoded on its <td>, independent of this).
   {
     key: "target",
     label: "Target buy",
-    align: "right",
-    width: "7%",
-    padding: "8px 24px 8px 10px",
+    align: "center",
+    // Was 7% — on a wide screen that gave the column far more room than its
+    // "set £" input needs, and since the input is right-aligned, the excess
+    // showed up as dead space on its left, reading as a big gap after 52W Range.
+    // minWidth (below) still keeps it usable on narrow screens.
+    width: "5%",
+    // Sized to the *sorted* header state ("Target buy ▼" ≈ 83px) plus this
+    // column's own padding — 140 was well past what either state needs and
+    // was itself the dead space between 52W Range and the input.
+    minWidth: 118,
+    // Header padding is deliberately asymmetric (more on the left) so the
+    // centered label sits a little right of the column's true center — the
+    // 10px/24px split used below (matched to the "set £" cell) put it too far
+    // left.
+    padding: "8px 16px 8px 20px",
     cellPadding: "9px 24px 9px 10px",
   },
   ...SCORE_TABLE_COLS,
-  // Deep left padding sets the news chip well clear of the RSK pill, and the wider
-  // column pulls everything to its left further left.
+  // Left padding is the gap between the RSK pill and the news chip — kept small
+  // (see NEWS_HEAD_PAD) so the rest of the column's width goes to the chip. Its
+  // minWidth is deliberately just the chip's own floor, not a full-column figure:
+  // News is the rightmost column, so it should absorb whatever width the table
+  // has left over (its "18%" grows freely on a wide screen) rather than forcing
+  // the whole table wider the way an inflated minWidth here would.
   {
     key: "signals",
     label: "News",
     align: "left",
     noSort: true,
     width: "18%",
+    minWidth: 124,
     padding: NEWS_HEAD_PAD,
     cellPadding: NEWS_CELL_PAD,
   },
 ];
+
+// Table shrinks to its container at these percentage widths, but several columns
+// carry fixed-pixel content (the 52W range bar + label, the target £ input) that
+// overlaps or collapses once squeezed past its own natural size. A min-width
+// forces the table to scroll horizontally instead of squashing those columns
+// below what they need — the existing wrapper below already has overflow:auto.
+// News is intentionally given only a small floor here (see its minWidth above),
+// so it flexes with whatever width is left rather than adding its own share.
+const TABLE_MIN_WIDTH = COLS.reduce((sum, c) => sum + (c.minWidth || 0), 0);
 
 // Faint vertical rule marking a group boundary between columns.
 const DIVIDER = "1px solid rgba(148,163,184,0.18)";
@@ -1329,8 +1365,21 @@ export default function WatchlistTab({
                 // widths deciding the spacing.
                 tableLayout: "fixed",
                 width: "100%",
+                minWidth: TABLE_MIN_WIDTH,
               }}
             >
+              {/* table-layout:fixed only distributes width by these %/px figures
+                  when they're declared per-column via <col> — a minWidth set on
+                  the <th>/<td> style is ignored by the fixed algorithm. Without
+                  this, the table-level minWidth above just reserves the right
+                  total width and still hands it out by raw percentage, so a
+                  narrow column (e.g. Target buy at 7%) gets squeezed under its
+                  own floor while others sit comfortably. */}
+              <colgroup>
+                {COLS.map((c) => (
+                  <col key={c.key} style={{ width: c.width, minWidth: c.minWidth }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr>
                   {COLS.map((c) => {
