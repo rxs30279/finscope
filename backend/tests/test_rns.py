@@ -203,6 +203,23 @@ def test_classify_results_for_half_year_ended_is_interim():
     assert r["tier"] == "A"
     assert r["category"] == "interim_results"
 
+def test_classify_first_half_results_is_interim():
+    # Unilever ULVR, 2026-07-28: "First Half Results" has no "half-year"/"half year"
+    # token at all — bare "half" attached to "results" was dropped to Tier C and
+    # never scored before the fallback grew a bare-half alternative.
+    r = _classify("2026 First Half Results", "2026-first-half-results")
+    assert r["tier"] == "A"
+    assert r["category"] == "interim_results"
+
+def test_classify_weeks_period_ended_is_final_results():
+    # Games Workshop GAW, 2026-07-28: 52/53-week retail fiscal year — "year ended"
+    # never appears in the headline, so the fallback missed it and it was dropped
+    # to Tier C and never scored.
+    r = _classify("Results for the 52 week period ended 31 May 2026",
+                  "results-for-the-52-week-period-ended-31-may-2026")
+    assert r["tier"] == "A"
+    assert r["category"] == "final_results"
+
 def test_classify_results_for_six_months_ended_is_interim():
     r = _classify("Results for the six months ended 30 June 2026",
                   "results-for-the-six-months-ended-30-june-2026")

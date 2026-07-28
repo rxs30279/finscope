@@ -649,27 +649,39 @@ _CATALYTIC_KEYWORDS = (
 #   "FY Results"                                             — FY standalone + results
 #   "FY results for the financial year ended 31/3/2026"     — full-year prose
 #   "Financial Results for year ended 28 February 2026"     — "...year ended <date>"
+#   "Results for the 52 week period ended 31 May 2026"      — 52/53-week retail fiscal year
 # Enumerating every year × separator variant is fragile and needs a yearly bump,
 # so match the shapes directly. \bfy\b keeps the word boundary so it never fires
 # inside "satisfy"/"notify"/"comfy". The "year ended" form is the canonical full-year
 # results phrasing; the half-year/six-months variants are caught above as interim_results
 # first (so they never reach this fallback) and the "notice" guard keeps schedulers out.
+# The "weeks ended" form covers UK retailers (Games Workshop, Next, M&S, …) that report
+# on a 52/53-week fiscal calendar instead of a calendar year — "year ended" never
+# appears in their headline at all (Games Workshop GAW, 2026-07-28, was dropped to
+# Tier C and never scored because of this).
 _FY_RESULTS_RE = re.compile(
     r"\bfy\d{0,4}\b.*\bresults?\b"
     r"|\bresults?\b.*\bfy\d{0,4}\b"
     r"|\byear ended\b.*\bresults?\b"
     r"|\bresults?\b.*\byear ended\b"
+    r"|\bweeks?\s+(?:period\s+)?ended\b.*\bresults?\b"
+    r"|\bresults?\b.*\bweeks?\s+(?:period\s+)?ended\b"
 )
 
 # Interim/half-year results take just as many shapes the enumerated interim_results
-# slugs miss — "Half-year Financial Report", "Interim Report", "Half Yearly Report".
-# Match a half-year/six-months/interim marker paired with a results/report/statement
-# word. Checked BEFORE _FY_RESULTS_RE in the fallback because "half year ended" also
-# contains "year ended", so the full-year regex would otherwise mislabel it. "interim"
-# is safe here only because a results/report/statement word is required — "Interim
-# Dividend" (→ dividend_routine) is already categorised above and never reaches this.
+# slugs miss — "Half-year Financial Report", "Interim Report", "Half Yearly Report",
+# "First Half Results" (Unilever ULVR, 2026-07-28 — dropped to Tier C and never
+# scored because "half" here isn't attached to "year" at all).
+# Match a half-year/six-months/interim/bare-half marker paired with a results/report/
+# statement word. Checked BEFORE _FY_RESULTS_RE in the fallback because "half year
+# ended" also contains "year ended", so the full-year regex would otherwise mislabel
+# it. "interim" is safe here only because a results/report/statement word is required
+# — "Interim Dividend" (→ dividend_routine) is already categorised above and never
+# reaches this. Bare "half" is safe for the same reason: paired with results/report/
+# statement, real false-positive candidates ("half of directors resign, statement
+# follows") aren't real RNS headline phrasing.
 _INTERIM_RESULTS_RE = re.compile(
-    r"\b(?:half[- ]?year(?:ly)?|six[- ]?months?|interim)\b.*\b(?:results?|report|statement)\b"
+    r"\b(?:half[- ]?year(?:ly)?|six[- ]?months?|interim|half)\b.*\b(?:results?|report|statement)\b"
 )
 
 # Contract wins phrased so the enumerated contract_win slugs miss them: the "award"
