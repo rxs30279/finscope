@@ -68,6 +68,12 @@ html:has(.am-landing) {
     scroll-behavior: auto;
   }
 }
+/* `nav` must be a snap target too, not just the sections below it: without
+   it, scroll position 0 (page load, nav visible) isn't a valid snap point —
+   the nearest one is .am-hero's top, below the nav — so the browser re-snaps
+   past the nav on load/resize, and on mobile you get pulled back down every
+   time you scroll up to it. */
+.am-landing nav,
 .am-landing .am-hero,
 .am-landing .am-caps,
 .am-landing .am-cta,
