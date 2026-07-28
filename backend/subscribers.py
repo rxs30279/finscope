@@ -38,6 +38,19 @@ router = APIRouter()
 # email-validator dependency, and the send path rejects malformed addresses.
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
+# Who the app will actually send to. One definition, shared by the send list
+# and both counters, so "who we mail", "who fills the cap" and "who we show on
+# the counter" can never drift apart.
+#
+# bounced_at is stamped by the delivery-events pipeline on a PERMANENT bounce
+# only (ses_events._maybe_record_bounce), so this excludes addresses the
+# receiving server has told us do not exist. Transient bounces never set it.
+# We no longer lean on the provider's suppression list alone: that stops the
+# message at the vendor, but our own list would still count a dead address as
+# a recipient forever, and "the ESP silently swallows it" is not a list
+# hygiene practice we can describe or evidence.
+_MAILABLE = "NOT unsubscribed AND bounced_at IS NULL"
+
 
 # ── Token signing ─────────────────────────────────────────────────────────────
 
@@ -86,10 +99,10 @@ def signup(body: SignupBody):
     # previously-unsubscribed) address is rejected once the list is full.
     cap = _max_subscribers()
     try:
-        already_unsubscribed = _is_unsubscribed(email)
+        state = _subscriber_state(email)
     except RuntimeError as e:
         raise HTTPException(502, f"Subscriber lookup failed: {e}")
-    if already_unsubscribed is False:  # existing row, currently active
+    if state == "mailable":  # existing row, already receiving the digest
         return {"ok": True, "status": "subscribed"}
     try:
         count = active_count()
@@ -106,6 +119,14 @@ def signup(body: SignupBody):
     # create-then-PATCH-on-409 dance for. RETURNING tells us which happened:
     # xmax = 0 identifies a freshly inserted row, so a returning subscriber is
     # reported as "reactivated" exactly as before.
+    #
+    # A signup CLEARS bounced_at: someone typing the address into the form is
+    # asserting it works, and the alternative is a form that reports success
+    # while the address stays permanently unmailable. Retrying a genuinely dead
+    # mailbox is bounded — it re-bounces once and is flagged again on the next
+    # drain — and SES's account-level suppression list rejects it internally,
+    # so a repeated re-signup can't turn into repeated SMTP failures against
+    # the receiving server.
     try:
         with connection() as conn:
             cur = conn.cursor()
@@ -115,7 +136,10 @@ def signup(body: SignupBody):
                 VALUES (%s, FALSE, 'signup')
                 ON CONFLICT (email) DO UPDATE
                     SET unsubscribed = FALSE,
+                        bounced_at = NULL,
+                        bounce_reason = NULL,
                         resubscribed_at = CASE WHEN subscribers.unsubscribed
+                                                 OR subscribers.bounced_at IS NOT NULL
                                                THEN NOW()
                                                ELSE subscribers.resubscribed_at END
                 RETURNING (xmax = 0) AS inserted
@@ -352,46 +376,60 @@ def build_unsubscribe_url(email: str) -> str:
 
 
 def active_count() -> int:
-    """COUNT of active (not-unsubscribed) subscribers.
+    """COUNT of mailable subscribers (see `_MAILABLE`).
 
     Used wherever only the number is needed (the capacity gate, the scarcity
     counter) so those paths don't pull the whole list over the wire just to
     call len() on it. list_active_contacts() stays the one used by the digest
     sender, which genuinely needs every row.
+
+    A bounced address therefore frees its spot: it can never receive the
+    digest again, so holding a slot against the cap for it would shrink the
+    real list every time a mailbox died.
     """
     try:
-        rows = query("SELECT COUNT(*) AS n FROM subscribers WHERE NOT unsubscribed")
+        rows = query(f"SELECT COUNT(*) AS n FROM subscribers WHERE {_MAILABLE}")
     except Exception as e:
         raise RuntimeError(f"subscribers count failed: {e}") from e
     return int(rows[0]["n"]) if rows else 0
 
 
-def _is_unsubscribed(email: str) -> bool | None:
-    """The address's current `unsubscribed` flag, or None if it has no row.
+def _subscriber_state(email: str) -> str | None:
+    """"mailable" | "unsubscribed" | "bounced", or None if it has no row.
 
-    Used by signup() to tell "already active" from "new or returning" without
-    loading the whole active list to scan for membership.
-    """
-    try:
-        rows = query("SELECT unsubscribed FROM subscribers WHERE email = %s", (email,))
-    except Exception as e:
-        raise RuntimeError(f"subscribers lookup failed: {e}") from e
-    return bool(rows[0]["unsubscribed"]) if rows else None
-
-
-def list_active_contacts() -> list[dict]:
-    """Return every subscriber that has NOT unsubscribed, oldest first.
-    Used by email_rns_digest.py to populate the recipient list.
-
-    Keeps the `[{"email": ...}]` shape the Resend version returned so callers
-    are unaffected by the move, and keeps raising RuntimeError on failure —
-    signup(), subscriber_count() and unsubscribe_self() all catch that
-    specific type and turn it into a 502.
+    Used by signup() to tell "already on the list and receiving mail" from
+    "new, returning, or previously bounced" without loading the whole active
+    list to scan for membership. The bounced case matters: those rows are still
+    `unsubscribed = FALSE`, so treating this as a boolean would report an
+    address as already subscribed while it silently receives nothing.
     """
     try:
         rows = query(
-            "SELECT email FROM subscribers "
-            "WHERE NOT unsubscribed ORDER BY created_at"
+            "SELECT unsubscribed, bounced_at FROM subscribers WHERE email = %s",
+            (email,),
+        )
+    except Exception as e:
+        raise RuntimeError(f"subscribers lookup failed: {e}") from e
+    if not rows:
+        return None
+    if rows[0]["unsubscribed"]:
+        return "unsubscribed"
+    return "bounced" if rows[0]["bounced_at"] else "mailable"
+
+
+def list_active_contacts() -> list[dict]:
+    """Return every mailable subscriber, oldest first. Used by
+    email_rns_digest.py to populate the recipient list.
+
+    Mailable means not unsubscribed AND not permanently bounced — see
+    `_MAILABLE`. Keeps the `[{"email": ...}]` shape the Resend version returned
+    so callers are unaffected by the move, and keeps raising RuntimeError on
+    failure — signup(), subscriber_count() and unsubscribe_self() all catch
+    that specific type and turn it into a 502.
+    """
+    try:
+        rows = query(
+            f"SELECT email FROM subscribers WHERE {_MAILABLE} ORDER BY created_at"
         )
     except Exception as e:
         raise RuntimeError(f"subscribers query failed: {e}") from e

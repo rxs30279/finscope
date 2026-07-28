@@ -186,10 +186,14 @@ def _insert(row: dict) -> None:
 def _record_bounce(recipient: str, occurred_at, reason: str) -> None:
     """Stamp subscribers.bounced_at on the FIRST hard bounce for an address.
 
-    A record only -- migration 019's own semantics say bounced_at does not
-    gate sends, the provider's suppression list does. `bounced_at IS NULL`
-    means later bounces of an already-flagged address add nothing, so the
-    column always reflects the first failure, not the most recent.
+    This REMOVES the address from the send list: subscribers._MAILABLE
+    excludes any row with bounced_at set, so the digest stops mailing it from
+    the next send onwards. (Until 2026-07-28 this was a record only, and
+    suppression was left entirely to the provider.) `bounced_at IS NULL` means
+    later bounces of an already-flagged address add nothing, so the column
+    always reflects the first failure, not the most recent.
+
+    Only signup() clears it, on an explicit re-opt-in from the address owner.
     """
     with connection() as conn:
         cur = conn.cursor()

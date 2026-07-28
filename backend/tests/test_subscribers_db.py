@@ -55,6 +55,9 @@ class _FakeCursor:
             else:
                 self.state["active"].append(email)
                 inserted = True            # xmax = 0
+            # Mirrors `SET bounced_at = NULL` — an explicit signup re-opens a
+            # previously dead address.
+            self.state["bounced"].discard(email)
             self.state["signups"].append(email)
             self._result = (inserted,)
         elif text.startswith("UPDATE subscribers"):
@@ -79,7 +82,10 @@ def fake_db(monkeypatch):
     """
     import contextlib
 
-    state = {"active": [], "unsubscribed": [], "signups": []}
+    # "active" mirrors `unsubscribed = FALSE` and so INCLUDES bounced rows —
+    # the same trap the production code hit: a bounced subscriber is not
+    # unsubscribed, it is merely unmailable. Mailable = active - bounced.
+    state = {"active": [], "unsubscribed": [], "bounced": set(), "signups": []}
 
     class _Conn:
         def cursor(self):
@@ -92,20 +98,26 @@ def fake_db(monkeypatch):
     def _connection():
         yield _Conn()
 
+    def _mailable():
+        return [e for e in state["active"] if e not in state["bounced"]]
+
     def _query(sql, params=None):
         text = " ".join(sql.split())
         if text.startswith("SELECT email FROM subscribers"):
             assert "NOT unsubscribed" in text, text
-            return [{"email": e} for e in state["active"]]
+            assert "bounced_at IS NULL" in text, text
+            return [{"email": e} for e in _mailable()]
         if text.startswith("SELECT COUNT(*)"):
             assert "NOT unsubscribed" in text, text
-            return [{"n": len(state["active"])}]
-        if text.startswith("SELECT unsubscribed FROM subscribers WHERE email"):
+            assert "bounced_at IS NULL" in text, text
+            return [{"n": len(_mailable())}]
+        if text.startswith("SELECT unsubscribed, bounced_at FROM subscribers WHERE email"):
             email = params[0]
             if email in state["active"]:
-                return [{"unsubscribed": False}]
+                return [{"unsubscribed": False,
+                         "bounced_at": "2026-07-28" if email in state["bounced"] else None}]
             if email in state["unsubscribed"]:
-                return [{"unsubscribed": True}]
+                return [{"unsubscribed": True, "bounced_at": None}]
             return []
         raise AssertionError(f"unexpected SQL: {text}")
 
@@ -168,6 +180,58 @@ def test_signup_rejects_malformed_address(wired):
     with pytest.raises(HTTPException) as exc:
         subscribers.signup(subscribers.SignupBody(email="not-an-email"))
     assert exc.value.status_code == 400
+
+
+# ── Bounce suppression ────────────────────────────────────────────────────────
+
+def test_bounced_address_is_dropped_from_the_send_list(wired):
+    """A permanent bounce removes the address from the recipient list without
+    unsubscribing it — the events pipeline stamps bounced_at, and the digest
+    must stop mailing a mailbox the receiving server says does not exist."""
+    wired["active"].extend(["live@example.com", "dead@example.com"])
+    wired["bounced"].add("dead@example.com")
+
+    assert subscribers.list_active_contacts() == [{"email": "live@example.com"}]
+
+
+def test_bounced_address_does_not_occupy_a_capacity_spot(wired, monkeypatch):
+    """It can never receive the digest again, so holding a slot against the cap
+    for it would shrink the real list every time a mailbox died."""
+    monkeypatch.setenv("MAX_SUBSCRIBERS", "2")
+    wired["active"].extend(["a@b.com", "dead@example.com"])
+    wired["bounced"].add("dead@example.com")
+
+    assert subscribers.active_count() == 1
+    # The freed spot is genuinely usable, not just cosmetically counted.
+    assert subscribers.signup(
+        subscribers.SignupBody(email="new@example.com")
+    )["status"] == "subscribed"
+
+
+def test_signup_reopens_a_bounced_address(wired):
+    """A bounced row is still `unsubscribed = FALSE`, so an early "you're
+    already subscribed" return would report success while the address stays
+    permanently unmailable. Typing it into the form asserts it works again."""
+    wired["active"].append("dead@example.com")
+    wired["bounced"].add("dead@example.com")
+
+    result = subscribers.signup(subscribers.SignupBody(email="dead@example.com"))
+
+    assert result["ok"] is True
+    assert wired["signups"] == ["dead@example.com"]   # it really wrote
+    assert subscribers.list_active_contacts() == [{"email": "dead@example.com"}]
+
+    insert_sql = next(s for s in wired["executed_sql"] if s.startswith("INSERT INTO subscribers"))
+    assert "bounced_at = NULL" in insert_sql
+    assert "bounce_reason = NULL" in insert_sql
+
+
+def test_signup_still_short_circuits_for_a_healthy_address(wired):
+    """Re-opening a bounce must not cost every ordinary duplicate signup a
+    write — the idempotent path stays read-only."""
+    wired["active"].append("a@b.com")
+    subscribers.signup(subscribers.SignupBody(email="a@b.com"))
+    assert wired["signups"] == []
 
 
 # ── Capacity gate ─────────────────────────────────────────────────────────────

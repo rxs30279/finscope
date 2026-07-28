@@ -18,8 +18,13 @@
 -- like a fresh opt-in when a complaint is investigated.
 --
 -- bounced_at / bounce_reason are written by the events pipeline, NOT by the
--- digest sender. They record what the provider told us; they do not by
--- themselves stop a send — the provider's own suppression list does that.
+-- digest sender. They record what the provider told us.
+--
+-- AMENDED 2026-07-28 (comment only, schema unchanged): bounced_at now DOES
+-- stop a send. subscribers._MAILABLE excludes any row with it set, so a
+-- permanent bounce drops the address from the send list rather than relying
+-- on the provider's suppression list to swallow each attempt. Only an
+-- explicit re-signup from the address owner clears it.
 --
 -- Idempotent. Apply with:
 --   python backend/run_migration.py migrations/019_subscribers.sql
