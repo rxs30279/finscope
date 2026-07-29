@@ -8,28 +8,43 @@ import TrendingList from "./TrendingList";
 import TrendingProfile from "./TrendingProfile";
 import NewsTab from "@/components/NewsTab";
 import PageHeader from "@/components/layout/PageHeader";
+import type { Trending } from "@/lib/trending";
 
 interface Props {
   onSelect: (symbol: string) => void;
+  // Server-rendered lists from the /trending page. Omitted by any other caller,
+  // which keeps the browser-fetch path below as the default.
+  initialData?: Trending | null;
 }
 
-export default function TrendingTab({ onSelect }: Props) {
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [sel, setSel] = useState<string | null>(null);
+// The stock the desktop profile panel opens on: top riser, else top faller.
+const firstSymbol = (d: Trending | null | undefined): string | null =>
+  d?.risers?.[0]?.symbol || d?.fallers?.[0]?.symbol || null;
+
+export default function TrendingTab({ onSelect, initialData }: Props) {
+  const [data, setData] = useState<Trending | null>(initialData ?? null);
+  const [loading, setLoading] = useState(!initialData);
+  // Seeded here, not just in the fetch below — with SSR data the fetch never
+  // runs, and an unseeded `sel` leaves the desktop profile panel empty.
+  const [sel, setSel] = useState<string | null>(() => firstSymbol(initialData));
   const isMobile = useIsMobile();
 
   useEffect(() => {
+    // SSR gave us the lists already — don't re-fetch what's on screen.
+    if (initialData) return;
+    let cancelled = false;
     setLoading(true);
     fetch(`${API}/trending`)
       .then((r) => r.json())
       .then((d) => {
+        if (cancelled) return;
         setData(d);
-        setSel((cur) => cur || d.risers?.[0]?.symbol || d.fallers?.[0]?.symbol || null);
+        setSel((cur) => cur || firstSymbol(d));
         setLoading(false);
       })
-      .catch(() => setLoading(false));
-  }, []);
+      .catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [initialData]);
 
   if (loading) return <div style={S.loading}>Loading trending stocks…</div>;
 
