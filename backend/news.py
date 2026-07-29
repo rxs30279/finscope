@@ -415,7 +415,7 @@ def _fundamentals_block(f: dict | None) -> str:
     add("Quality score (0-10, higher = better)", f.get("quality_score"))
     add("Value score (0-10, higher = cheaper)", f.get("value_score"))
     add("Risk score (1-10, higher = riskier)", f.get("risk_score"))
-    add("Momentum score (1-10, higher = stronger 12-1m)", f.get("momentum_score"))
+    add("Momentum score (1-10, higher = stronger 12-3m)", f.get("momentum_score"))
     add("Piotroski F-score (0-9, higher = better)", f.get("piotroski_score"))
     add("Altman Z (>3 safe, <1.8 distress)", num(f.get("altman_z")))
     # Valuation

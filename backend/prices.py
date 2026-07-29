@@ -278,7 +278,7 @@ def _update_activity(fetched, missed):
 def _attach_momentum(results):
     """Add momentum_score (1-10) to each screener result row.
 
-    Uses 12-1 month momentum: return from 252 trading days ago to 63 trading
+    Uses 12-3 month momentum: return from 252 trading days ago to 63 trading
     days ago (excludes recent 3 months to avoid short-term reversal), divided
     by the realized daily volatility over the same 252-day window. Without the
     vol-scaling, high-volatility names crowd both extreme deciles on chance
