@@ -545,6 +545,13 @@ def trending(response: Response, min_streak: int = 3, limit: int = 40):
 
     # Last ~40 closes per active symbol, oldest-first within each symbol
     # (ORDER BY rn DESC puts the largest rn — oldest date — first).
+    #
+    # The date bound is what makes this fast: without it Postgres numbers all
+    # ~960k rows of price_history (~1,280/symbol) just to keep the newest 40,
+    # which measured 19s on prod vs 159ms bounded — identical output. Anchor to
+    # the latest *stored* date, not CURRENT_DATE, so a missed cron or a long
+    # weekend can't erode the window. 120 calendar days is ~85 trading days,
+    # about 2x the 41 closes a 40-day streak needs.
     rows = query(
         """
         WITH numbered AS (
@@ -552,11 +559,13 @@ def trending(response: Response, min_streak: int = 3, limit: int = 40):
                    ROW_NUMBER() OVER (PARTITION BY p.symbol ORDER BY p.date DESC) AS rn
             FROM price_history p
             JOIN company_metadata m ON m.symbol = p.symbol AND m.is_active
+            WHERE p.date >= %s - INTERVAL '120 days'
         )
         SELECT symbol, close FROM numbered
         WHERE rn <= 40
         ORDER BY symbol, rn DESC
-        """
+        """,
+        (latest_date,),
     )
 
     closes_map = {}
