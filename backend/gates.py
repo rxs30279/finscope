@@ -1,0 +1,477 @@
+"""The gate registry — one ordered list of named, testable Python predicates
+that decide whether a ranked RNS candidate may be flagged to the public
+High Impact showcase. See docs/rns-gate-block-plan.md.
+
+Each gate reads fields the LLM ranker already wrote (guidance_checks,
+earnings_quality, llm_sentiment/llm_thesis/category) and returns one of three
+states — never a bare bool, because "this gate found nothing wrong" and "this
+gate could not be evaluated" are different facts and collapsing them is what
+made the guidance gate's ~91% no-consensus rate invisible before this existed:
+
+    pass   — adjudicated, nothing wrong
+    block  — adjudicated, disqualifying
+    n/a    — could not adjudicate (wrong sector, field absent, unparseable,
+             missing period, or the gate itself raised)
+
+Gate logic is NOT reimplemented here — _sentiment / _disqualifying_guidance /
+_worsening_loss_rate stay exactly as showcase.py's own tests exercise them.
+This module only classifies WHY a non-block outcome happened, and wraps the
+whole thing in try/except so a bug in a gate degrades to n/a rather than
+propagating: dropping a tradeable announcement is the high-severity error in
+this system, never a false green light.
+
+evaluate_all() runs every gate regardless of outcome, for the /gates page.
+blocking_reason() stops at the first ARMED block, for flag_high_impact_candidates.
+"""
+
+import sys, os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Callable, Literal, Optional
+
+from fastapi import APIRouter, Depends
+from psycopg2.extras import Json
+
+from admin_auth import require_admin_token
+
+router = APIRouter(prefix="/api/gates", tags=["gates"])
+
+GateState = Literal["pass", "block", "n/a"]
+
+
+@dataclass(frozen=True)
+class GateResult:
+    state: GateState
+    reason: Optional[str] = None      # why n/a, or which rule fired on a block
+    evidence: Optional[dict] = None   # the entry/figures the verdict rests on
+
+
+@dataclass(frozen=True)
+class Gate:
+    name: str                         # stable slug — stored, never renamed
+    description: str
+    mode: Literal["armed", "shadow"]
+    fn: Callable[[dict], GateResult]
+
+    def evaluate(self, cand: dict) -> GateResult:
+        try:
+            return self.fn(cand)
+        except Exception as e:
+            # Over-blocking is the high-severity error here — a gate that
+            # raises must fail OPEN (n/a), never propagate and never block.
+            return GateResult(
+                state="n/a", reason="gate_error",
+                evidence={"error": f"{type(e).__name__}: {e}"},
+            )
+
+
+# ── Gate: sentiment ───────────────────────────────────────────────────────────
+# Never n/a — _sentiment always resolves to positive/negative/neutral (it falls
+# back to a keyword scan, then defaults neutral). Anything but positive blocks.
+def _gate_sentiment(cand: dict) -> GateResult:
+    from showcase import _sentiment
+
+    sent = _sentiment(cand)
+    if sent != "positive":
+        return GateResult(state="block", reason=sent, evidence={"sentiment": sent})
+    return GateResult(state="pass", evidence={"sentiment": sent})
+
+
+# ── Gate: guidance ─────────────────────────────────────────────────────────────
+# See showcase._disqualifying_guidance for the LUCE case this exists to catch.
+def _gate_guidance(cand: dict) -> GateResult:
+    from showcase import _disqualifying_guidance
+
+    checks = cand.get("guidance_checks")
+    if not isinstance(checks, list) or not any(isinstance(e, dict) for e in checks):
+        return GateResult(state="n/a", reason="field_absent")
+
+    hit = _disqualifying_guidance(cand)
+    if hit:
+        return GateResult(
+            state="block",
+            reason=f"{hit.get('vs_prior')}_vs_consensus_{hit.get('vs_consensus')}",
+            evidence=hit,
+        )
+
+    # Adjudicable means at least one entry printed a consensus figure this
+    # gate could compare against — the common case (no consensus footnote at
+    # all) is the ~91% amber rate the plan measured, not a pass.
+    adjudicable = any(
+        isinstance(e, dict) and e.get("vs_consensus") not in (None, "no_consensus_stated")
+        for e in checks
+    )
+    if adjudicable:
+        return GateResult(state="pass", evidence={"n_entries": len(checks)})
+    return GateResult(state="n/a", reason="no_consensus_stated")
+
+
+# ── Gate: earnings_quality (bank loan-loss rate) ───────────────────────────────
+# See showcase._worsening_loss_rate for the BARC case this exists to catch.
+def _gate_earnings_quality(cand: dict) -> GateResult:
+    from showcase import _worsening_loss_rate, _parse_bps
+    from quality import classify_risk_model
+
+    # unknown_is_trust=False: company_metadata is a LEFT JOIN here too, so an
+    # absent sector/industry means out-of-universe, not a closed-end fund —
+    # same reasoning as showcase._worsening_loss_rate itself.
+    if classify_risk_model(cand, unknown_is_trust=False) != "bank":
+        return GateResult(state="n/a", reason="not_a_bank")
+
+    entries = cand.get("earnings_quality")
+    if not isinstance(entries, list) or not entries:
+        return GateResult(state="n/a", reason="field_absent")
+
+    hit = _worsening_loss_rate(cand)
+    if hit:
+        return GateResult(state="block", reason="loan_loss_rate_rise", evidence=hit)
+
+    # None disqualified — but distinguish "read every cost_or_charge line and
+    # none had risen" (pass) from "nothing here was actually readable" (n/a),
+    # using the exact fields _worsening_loss_rate itself requires to adjudicate
+    # a line: a 'cost_or_charge' kind, a non-blank period, and both figures
+    # parseable as bps.
+    reason = "field_absent"
+    for e in entries:
+        if not isinstance(e, dict) or e.get("kind") != "cost_or_charge":
+            continue
+        if reason == "field_absent":
+            reason = "unparseable_value"  # at least one candidate line exists
+        if not str(e.get("period") or "").strip():
+            reason = "missing_period"
+            continue
+        if _parse_bps(e.get("value")) is None or _parse_bps(e.get("prior_value")) is None:
+            continue
+        return GateResult(state="pass", evidence={"n_entries": len(entries)})
+    return GateResult(state="n/a", reason=reason)
+
+
+GATES: tuple[Gate, ...] = (
+    Gate("sentiment", "Announcement direction must read positive.", "armed", _gate_sentiment),
+    Gate("guidance", "Guidance not raised against a printed consensus it fails to clear.", "armed", _gate_guidance),
+    Gate("earnings_quality", "Bank loan-loss rate must not be rising.", "armed", _gate_earnings_quality),
+)
+
+
+def evaluate_all(cand: dict) -> list[tuple[Gate, GateResult]]:
+    """Run every gate regardless of outcome — the /gates page needs the full
+    row, not just the first failure."""
+    return [(g, g.evaluate(cand)) for g in GATES]
+
+
+def blocking_reason(cand: dict) -> Optional[tuple[Gate, GateResult]]:
+    """First ARMED gate that blocks this candidate, else None. Stops at the
+    first block (same short-circuit order as the pre-registry code — sentiment
+    before guidance before earnings_quality — so a disqualified row still costs
+    no LLM vet call)."""
+    for g in GATES:
+        if g.mode != "armed":
+            continue
+        r = g.evaluate(cand)
+        if r.state == "block":
+            return g, r
+    return None
+
+
+# ── DB helpers ────────────────────────────────────────────────────────────────
+def _q(sql, params=None) -> list[dict]:
+    from main import query
+    return query(sql, params)
+
+
+def _exec(sql, params=None) -> int:
+    from main import get_pool
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        return cur.rowcount
+    finally:
+        pool.putconn(conn)
+
+
+# ── Recording ─────────────────────────────────────────────────────────────────
+# "Evaluate wide, block narrow" (plan section 2.4): gates over guidance_checks
+# and earnings_quality are pure functions over stored JSONB with no LLM cost, so
+# this runs over EVERY ranked Tier A/B row — no score floor, no leverage/margin/
+# market-cap floor. Those only gate the public flag (flag_high_impact_candidates
+# still applies them via its own SELECT). A score floor here would only shrink
+# the calibration sample: on the one day measured, a score>=75 cohort saw 2 of
+# 19 adjudicable rows, a tenth of what the wide pool sees.
+_EVAL_SQL = """
+    SELECT r.id, r.symbol, r.category, r.llm_score,
+           r.llm_sentiment, r.llm_thesis, r.keyword_hits,
+           r.guidance_checks, r.earnings_quality,
+           m.sector, m.industry
+    FROM rns_announcements r
+    LEFT JOIN company_metadata m ON m.symbol = r.symbol
+    WHERE r.symbol IS NOT NULL
+      AND r.llm_processed_at IS NOT NULL
+      AND r.tier IN ('A', 'B')
+      AND r.published_at >= NOW() - (%s || ' hours')::interval
+"""
+
+
+def record_gate_evaluations(hours: int = 48) -> dict:
+    """Run every gate over every ranked Tier A/B row from the last `hours` and
+    upsert one row per (rns_id, gate) into rns_gate_evaluations. Idempotent —
+    a re-run (or the morning cron re-covering an overlapping window) just
+    refreshes the same rows. Returns a counts dict for cron logs."""
+    rows = _q(_EVAL_SQL, (hours,))
+    written = 0
+    for row in rows:
+        for gate, result in evaluate_all(row):
+            written += _exec(
+                """
+                INSERT INTO rns_gate_evaluations
+                    (rns_id, gate, state, reason, evidence, mode, evaluated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (rns_id, gate) DO UPDATE SET
+                    state = EXCLUDED.state, reason = EXCLUDED.reason,
+                    evidence = EXCLUDED.evidence, mode = EXCLUDED.mode,
+                    evaluated_at = EXCLUDED.evaluated_at
+                """,
+                (
+                    row["id"], gate.name, result.state, result.reason,
+                    Json(result.evidence) if result.evidence is not None else None,
+                    gate.mode, datetime.now(timezone.utc),
+                ),
+            )
+    return {"candidates": len(rows), "gate_rows_written": written}
+
+
+# ── Returns — a separate consumer of rns_score_perf.py's conventions ──────────
+# Entry = the OPEN on the announcement day itself (RNS drops ~07:00, before the
+# 08:00 LSE open); horizon = trading days from entry to close (1d = the entry
+# day's own close, i.e. open->close intraday; 1w = the 5th trading day's
+# close); excess = raw return minus an equal-weighted AIM/Main benchmark.
+# rns_score_perf.py stays read-only and untouched — this is a fresh, smaller
+# implementation sized for a matrix of tens-to-hundreds of rows per request,
+# not its multi-year workbook. The benchmark here is a direct two-date
+# equal-weighted average (not a compounded daily index) — equivalent for a
+# single-period return and far cheaper at this call scale.
+def _seg(ftse_index) -> str:
+    return "AIM" if (ftse_index or "").upper().find("AIM") >= 0 else "Main"
+
+
+def _benchmark_return_cache():
+    cache: dict = {}
+
+    def get(seg: str, entry_date, exit_date) -> Optional[float]:
+        key = (seg, entry_date, exit_date)
+        if key in cache:
+            return cache[key]
+        rows = _q(
+            """
+            SELECT AVG(p2.close / NULLIF(p1.close, 0) - 1) AS ret
+            FROM price_history p1
+            JOIN price_history p2 ON p2.symbol = p1.symbol AND p2.date = %s
+            JOIN company_metadata m ON m.symbol = p1.symbol AND m.is_active
+            WHERE p1.date = %s
+              AND (CASE WHEN COALESCE(m.ftse_index,'') ILIKE '%%AIM%%'
+                        THEN 'AIM' ELSE 'Main' END) = %s
+            """,
+            (exit_date, entry_date, seg),
+        )
+        val = float(rows[0]["ret"]) if rows and rows[0]["ret"] is not None else None
+        cache[key] = val
+        return val
+
+    return get
+
+
+# A horizon that can't fill because the symbol has stopped updating (>30
+# calendar days since the announcement with still no bar) reads 'terminated'
+# rather than 'open' — a lighter version of rns_score_perf's stale-price check,
+# adequate at this page's freshness (days, not years).
+_TERMINATED_AFTER_DAYS = 30
+
+
+def _row_returns(symbol: str, published_at, ftse_index: Optional[str], bench_get) -> dict:
+    prices = _q(
+        """
+        SELECT date, open, close FROM price_history
+        WHERE symbol = %s
+          AND date BETWEEN %s::date - INTERVAL '5 days' AND %s::date + INTERVAL '16 days'
+        ORDER BY date
+        """,
+        (symbol, published_at, published_at),
+    )
+    out = {
+        "gap": None,
+        "pct_1d": None, "excess_1d": None, "status_1d": "open",
+        "pct_1w": None, "excess_1w": None, "status_1w": "open",
+    }
+    pub_date = published_at.date() if hasattr(published_at, "date") else published_at
+    age_days = (datetime.now(timezone.utc).date() - pub_date).days
+    stale = "terminated" if age_days > _TERMINATED_AFTER_DAYS else "open"
+    out["status_1d"] = out["status_1w"] = stale
+    if not prices:
+        return out
+
+    after = [p for p in prices if p["date"] >= pub_date]
+    before = [p for p in prices if p["date"] < pub_date]
+    if not after or after[0]["open"] is None:
+        return out
+
+    entry = after[0]
+    entry_open = float(entry["open"])
+    pre_close = float(before[-1]["close"]) if before and before[-1]["close"] is not None else None
+    if pre_close:
+        out["gap"] = round((entry_open / pre_close - 1) * 100, 2)
+
+    seg = _seg(ftse_index)
+    for hname, idx in (("1d", 0), ("1w", 4)):
+        if idx >= len(after) or after[idx]["close"] is None:
+            continue  # stays 'open'/'terminated' as set above
+        exit_row = after[idx]
+        exit_close = float(exit_row["close"])
+        raw = exit_close / entry_open - 1
+        br = bench_get(seg, entry["date"], exit_row["date"])
+        out[f"pct_{hname}"] = round(raw * 100, 2)
+        out[f"excess_{hname}"] = round((raw - br) * 100, 2) if br is not None else None
+        out[f"status_{hname}"] = "matured"
+    return out
+
+
+# ── /gates page endpoint ────────────────────────────────────────────────────────
+_MATRIX_SQL = """
+    SELECT r.id AS rns_id, r.symbol, r.company_name, r.headline, r.category,
+           r.published_at, r.llm_score, r.llm_sentiment,
+           m.sector, m.industry, m.ftse_index,
+           t.market_cap
+    FROM rns_announcements r
+    LEFT JOIN company_metadata m ON m.symbol = r.symbol
+    LEFT JOIN LATERAL (
+        SELECT market_cap FROM ttm_financials
+        WHERE company_symbol = r.symbol
+        ORDER BY period_end_date DESC NULLS LAST LIMIT 1
+    ) t ON TRUE
+    WHERE {where}
+    ORDER BY r.published_at DESC
+"""
+
+_LATEST_SESSION_CLAUSE = """
+    r.published_at::date = (
+        SELECT MAX(published_at::date) FROM rns_announcements
+        WHERE symbol IS NOT NULL AND llm_processed_at IS NOT NULL
+          AND tier IN ('A', 'B') AND published_at >= NOW() - INTERVAL '14 days'
+    )
+"""
+
+
+@router.get("", dependencies=[Depends(require_admin_token)])
+def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool = False):
+    """The gate matrix: one row per candidate (newest first), one column per
+    gate, plus 1d/1w returns and a per-gate header (fire rate, amber rate,
+    blocked-vs-passed excess). Private — see /gates in the frontend.
+
+    window: latest (most recent ranked session) | 7d | 30d
+    cohort: all (every ranked Tier A/B row) | in_universe (has ttm_financials)
+            | category (in_universe + a High Impact category — default; every
+            gate has what it needs below this line, see the plan doc)
+    show_all: include rows where every gate came back n/a (default False —
+              most rows on a quiet day carry nothing for any gate to judge,
+              and a page that's mostly blank teaches you to stop opening it)
+    """
+    from showcase import HIGH_IMPACT_CATEGORIES
+
+    where = ["r.symbol IS NOT NULL", "r.llm_processed_at IS NOT NULL", "r.tier IN ('A','B')"]
+    if window == "7d":
+        where.append("r.published_at >= NOW() - INTERVAL '7 days'")
+    elif window == "30d":
+        where.append("r.published_at >= NOW() - INTERVAL '30 days'")
+    else:
+        window = "latest"
+        where.append(_LATEST_SESSION_CLAUSE)
+
+    rows = _q(_MATRIX_SQL.format(where=" AND ".join(where)))
+
+    if cohort in ("in_universe", "category"):
+        rows = [r for r in rows if r.get("market_cap") is not None]
+    if cohort == "category":
+        rows = [r for r in rows if r.get("category") in HIGH_IMPACT_CATEGORIES]
+    else:
+        cohort = cohort if cohort == "in_universe" else "all"
+
+    # Private, low-traffic page — but a 30d/"all" pull with no cohort narrowing
+    # could still be a few hundred rows, each costing its own price_history
+    # query for the returns column, so bound it.
+    rows = rows[:500]
+
+    rns_ids = [r["rns_id"] for r in rows]
+    evals = _q(
+        "SELECT rns_id, gate, state, reason, evidence, mode "
+        "FROM rns_gate_evaluations WHERE rns_id = ANY(%s)",
+        (rns_ids,),
+    ) if rns_ids else []
+    by_row: dict[int, dict] = {}
+    for e in evals:
+        by_row.setdefault(e["rns_id"], {})[e["gate"]] = {
+            "state": e["state"], "reason": e["reason"],
+            "evidence": e["evidence"], "mode": e["mode"],
+        }
+
+    # Fire rate / amber rate are measured over the whole cohort for this
+    # window, BEFORE the "adjudicated only" display filter below — a gate's
+    # health is about what it saw, not what a reader chose to look at.
+    header: dict[str, dict] = {}
+    for g in GATES:
+        row_gates = [by_row.get(r["rns_id"], {}).get(g.name, {}) for r in rows]
+        states = [rg.get("state") for rg in row_gates]
+        n = len(states)
+        na_reasons = Counter(rg.get("reason") for rg in row_gates if rg.get("state") == "n/a" and rg.get("reason"))
+        dominant = na_reasons.most_common(1)
+        header[g.name] = {
+            "mode": g.mode,
+            "n": n,
+            "fire_rate": round(states.count("block") / n, 3) if n else None,
+            "amber_rate": round(states.count("n/a") / n, 3) if n else None,
+            "dominant_na_reason": dominant[0][0] if dominant else None,
+        }
+
+    if not show_all:
+        rows = [
+            r for r in rows
+            if any(by_row.get(r["rns_id"], {}).get(g.name, {}).get("state") in ("pass", "block") for g in GATES)
+        ]
+
+    bench_get = _benchmark_return_cache()
+    out_rows = []
+    for r in rows:
+        out_rows.append({
+            "rns_id": r["rns_id"], "symbol": r["symbol"],
+            "company_name": r["company_name"], "headline": r["headline"],
+            "category": r["category"], "published_at": r["published_at"],
+            "llm_score": r["llm_score"], "llm_sentiment": r["llm_sentiment"],
+            "in_universe": r.get("market_cap") is not None,
+            "gates": by_row.get(r["rns_id"], {}),
+            "returns": _row_returns(r["symbol"], r["published_at"], r["ftse_index"], bench_get),
+        })
+
+    # Blocked-vs-passed mean 1d excess, over the displayed rows (where returns
+    # were actually computed) — a gate whose blocked rows outperform its
+    # passed rows is doing harm, and this is the number that would show it.
+    for g in GATES:
+        blocked = [o["returns"]["excess_1d"] for o in out_rows
+                   if o["gates"].get(g.name, {}).get("state") == "block" and o["returns"]["excess_1d"] is not None]
+        passed = [o["returns"]["excess_1d"] for o in out_rows
+                  if o["gates"].get(g.name, {}).get("state") == "pass" and o["returns"]["excess_1d"] is not None]
+        header[g.name]["blocked_mean_excess_1d"] = round(sum(blocked) / len(blocked), 2) if blocked else None
+        header[g.name]["passed_mean_excess_1d"] = round(sum(passed) / len(passed), 2) if passed else None
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window": window,
+        "cohort": cohort,
+        "show_all": show_all,
+        "gates": [{"name": g.name, "description": g.description, "mode": g.mode} for g in GATES],
+        "header": header,
+        "rows": out_rows,
+    }

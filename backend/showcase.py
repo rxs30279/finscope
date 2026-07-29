@@ -644,38 +644,22 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         ),
     )
 
+    from gates import GATES, blocking_reason
+
     flagged = 0
-    skipped_sentiment = 0
-    skipped_guidance = 0
-    skipped_earnings_quality = 0
+    counts = {g.name: 0 for g in GATES}
     vetted = 0
     for c in cands:
-        if _sentiment(c) != "positive":
-            skipped_sentiment += 1
-            continue
-
-        # Checked before the vet so a disqualified row costs no LLM call.
-        bad_guidance = _disqualifying_guidance(c)
-        if bad_guidance:
-            skipped_guidance += 1
+        # Gate order is the registry's evaluation order (sentiment, guidance,
+        # earnings_quality) — same short-circuit as before the registry
+        # existed, so a disqualified row still costs no LLM vet call.
+        blocked = blocking_reason(c)
+        if blocked:
+            gate, result = blocked
+            counts[gate.name] = counts.get(gate.name, 0) + 1
             print(
-                f"[showcase] {c['symbol']} not flagged — "
-                f"{bad_guidance.get('period')} {bad_guidance.get('metric')} "
-                f"{bad_guidance.get('vs_prior')} and below consensus "
-                f"({bad_guidance.get('guided_value')} vs "
-                f"{bad_guidance.get('consensus_value')})"
-            )
-            continue
-
-        # Also before the vet, same reason: a blocked row costs no LLM call.
-        bad_quality = _worsening_loss_rate(c)
-        if bad_quality:
-            skipped_earnings_quality += 1
-            print(
-                f"[showcase] {c['symbol']} not flagged — "
-                f"{bad_quality.get('period')} {bad_quality.get('item')} "
-                f"rose to {bad_quality.get('value')} "
-                f"from {bad_quality.get('prior_value')}"
+                f"[showcase] {c['symbol']} not flagged — gate={gate.name} "
+                f"reason={result.reason} evidence={result.evidence}"
             )
             continue
 
@@ -738,9 +722,11 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
     return {
         "candidates": len(cands),
         "flagged": flagged,
-        "skipped_sentiment": skipped_sentiment,
-        "skipped_guidance": skipped_guidance,
-        "skipped_earnings_quality": skipped_earnings_quality,
+        # Legacy key names, mapped from the gate registry so callers (and
+        # test_showcase.py) don't need to know gate names changed underneath.
+        "skipped_sentiment": counts.get("sentiment", 0),
+        "skipped_guidance": counts.get("guidance", 0),
+        "skipped_earnings_quality": counts.get("earnings_quality", 0),
         "vetted": vetted,
     }
 

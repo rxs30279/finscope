@@ -78,6 +78,17 @@ def _run_pipeline() -> int:
         except Exception as e:
             print(f"[rns] showcase stage FAILED (non-fatal) — {type(e).__name__}: {e}")
 
+        # Stage 3.6: gate recording (docs/rns-gate-block-plan.md) — evaluate
+        # every gate over every ranked Tier A/B row (not just flag candidates;
+        # see gates.py's "evaluate wide, block narrow"), so /gates has a real
+        # calibration sample. Pure Python over rows already in memory-shape from
+        # stage 3 — no LLM cost. Non-fatal for the same reason as showcase above.
+        try:
+            from gates import record_gate_evaluations
+            print(f"[rns] gate recording — {record_gate_evaluations(hours=48)}")
+        except Exception as e:
+            print(f"[rns] gate recording FAILED (non-fatal) — {type(e).__name__}: {e}")
+
         # Stage 4: Prune old rows (Tier C only, keep 14 days; A/B retained indefinitely)
         pruned = _prune_old(days=14)
         print(f"[rns] prune done — {pruned}")
