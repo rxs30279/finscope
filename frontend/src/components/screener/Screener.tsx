@@ -7,6 +7,7 @@ import { companyHref } from "@/lib/company";
 import { fmt, gc } from "@/lib/format";
 import { S } from "@/lib/theme";
 import { loadScreenerState, saveScreenerState, loadScreenerColumns } from "@/lib/storage";
+import { useScrollRestore } from "@/hooks/useScrollRestore";
 import { SCREENER_TOGGLE_COLUMNS, DEFAULT_SCREENER_COLUMN_PREFS, filterScale } from "@/lib/screenerColumns";
 import { useRefresh } from "@/app/providers";
 import HybridSelect from "@/components/company/HybridSelect";
@@ -360,6 +361,19 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     return sortDir === "asc" ? av - bv : bv - av;
   }), [displayed, sortCol, sortDir]);
 
+  // Restore where the user was reading when they last left. The table scrolls in
+  // its own overflow container, not the window, so nothing else can do this for
+  // us. Setting scrollTop fires onScroll, which re-renders the virtualized window
+  // at the new offset. It applies from a rAF callback, so it lands after the
+  // whole effect phase and can't be undone by the snap-to-top below even if the
+  // two ever land in one commit — in practice they don't, since the filters that
+  // one keys off settle on mount while this waits for the fetch.
+  const forgetScroll = useScrollRestore(
+    "screener",
+    !loading && sorted.length > 0,
+    () => scrollRef.current,
+  );
+
   // Reset the scroll position to the top whenever the filtered/sorted set
   // changes. With virtualization the container's scrollHeight comes from spacer
   // rows sized to the full list; if the list shrinks under a stale scrollTop the
@@ -369,7 +383,10 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     setScrollTop(0);
-  }, [filters, scoreFilters, colFilters, tableView, sortCol, sortDir, visibleToggleCols]);
+    // ...and drop any remembered offset with it: it indexed into the list the
+    // user just replaced. Ignored during the mount-time settle — see forget().
+    forgetScroll();
+  }, [forgetScroll, filters, scoreFilters, colFilters, tableView, sortCol, sortDir, visibleToggleCols]);
 
   // Scroll the searched row into view. Placed here because it needs the row's
   // index in `sorted` to position the virtualized window: the target row may not

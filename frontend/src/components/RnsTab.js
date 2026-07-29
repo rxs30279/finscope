@@ -5,6 +5,7 @@ import { useIsMobile, useIsTablet, useMediaQuery } from "@/hooks/useMediaQuery";
 import { API } from "@/lib/api";
 import { companyHref } from "@/lib/company";
 import { loadRnsState, saveRnsState } from "@/lib/storage";
+import { useScrollRestore } from "@/hooks/useScrollRestore";
 import PageHeader from "@/components/layout/PageHeader";
 
 const CATEGORY_LABELS = {
@@ -489,6 +490,23 @@ export default function RnsTab({ refreshKey, onSelect }) {
     }
     return m ? new Date(m).toISOString() : null;
   }, [rows]);
+
+  // Restore where the user was reading. /rns scrolls the window (no inner
+  // container), and only once rows are on screen is the page tall enough for the
+  // offset to land — hence gating on `filtered`, not just `!loading`. Called
+  // before the `if (loading)` early return below so the hook order never varies.
+  const forgetScroll = useScrollRestore("rns", !loading && filtered.length > 0);
+
+  // Changing a filter rebuilds the feed under the reader, so a remembered offset
+  // into the old one points at nothing — drop it. There's no snap-to-top here as
+  // there is on the screener: the list emptying while it refetches takes the page
+  // to the top by itself. Hydrating these same filters on mount is ignored, since
+  // forget() stays a no-op until the restore has run. `search` is deliberately
+  // absent — it isn't persisted, so on return the full list is back and the
+  // offset into it is still the right answer.
+  useEffect(() => {
+    forgetScroll();
+  }, [forgetScroll, hours, minLlmScore, minMarketCap]);
 
   const S = {
     card: {

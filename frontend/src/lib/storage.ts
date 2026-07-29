@@ -275,3 +275,41 @@ export const saveRnsState = (state: RnsState): void => {
     window.sessionStorage.setItem(RNS_STATE_KEY, JSON.stringify(state));
   } catch {}
 };
+
+// Scroll offset per list page, so leaving a long list and coming back doesn't
+// dump the user at the top again. sessionStorage because a remembered position
+// is only meaningful while the list it indexes into is still the one you were
+// reading — a row offset from last week points at nothing in particular.
+export const SCROLL_KEY_PREFIX = "stock_screener_scroll_";
+
+export const loadScrollPos = (key: string): number => {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = window.sessionStorage.getItem(SCROLL_KEY_PREFIX + key);
+    const n = raw ? Number(raw) : 0;
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+};
+
+// Drop a remembered offset outright, for when the list it indexed into has been
+// replaced (a filter change) — distinct from saving 0, which the restore reads
+// back as "nothing remembered" anyway but which a future reader shouldn't have
+// to know is a sentinel.
+export const clearScrollPos = (key: string): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(SCROLL_KEY_PREFIX + key);
+  } catch {}
+};
+
+export const saveScrollPos = (key: string, px: number): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      SCROLL_KEY_PREFIX + key,
+      String(Math.max(0, Math.round(px))),
+    );
+  } catch {}
+};
