@@ -32,9 +32,12 @@ import rns_llm
 
 DAY = sys.argv[1] if len(sys.argv) > 1 else "2026-07-29"
 
-# Marker for the start of the trailing schema block. If _build_messages is
-# reworded this must be updated, or the tail measures as 0 and the script
-# silently understates the opportunity.
+# Marker for the start of the schema block. It now lives in the SYSTEM message
+# (Phase 0, shipped) but the script still looks for it in both places, so the
+# before/after comparison stays runnable and a regression that pushes it back
+# into the user message shows up as a collapsed cacheable share rather than as
+# silence. If _build_messages is reworded this must be updated, or the block
+# measures as 0 wherever it actually is.
 _SCHEMA_MARKER = "Produce a JSON object with these fields exactly"
 
 rows = query(
@@ -60,17 +63,17 @@ if not rows:
 sys_len = 0
 tot_user = tot_body = tot_tail = 0
 missing_marker = 0
+schema_in_system = False
 
 for c in rows:
     msgs = rns_llm._build_messages(dict(c), [], {})
     system, user = msgs[0]["content"], msgs[1]["content"]
     sys_len = len(system)  # stable across rows by construction
+    schema_in_system = _SCHEMA_MARKER in system
     idx = user.find(_SCHEMA_MARKER)
-    if idx < 0:
+    if idx < 0 and not schema_in_system:
         missing_marker += 1
-        tail = 0
-    else:
-        tail = len(user) - idx
+    tail = 0 if idx < 0 else len(user) - idx
     tot_user += len(user)
     tot_body += len(c["body"] or "")
     tot_tail += tail
@@ -87,20 +90,28 @@ if missing_marker:
     print(f"  !! schema marker not found in {missing_marker}/{n} prompts — "
           f"update _SCHEMA_MARKER, the tail is being undercounted\n")
 
-print(f"  system prompt (STABLE, cacheable)      {sys_len:>7,} chars")
+print(f"  system prompt (STABLE, cacheable)      {sys_len:>7,} chars"
+      f"{'   <- includes the JSON schema block' if schema_in_system else ''}")
 print(f"  user message (mean)                    {user_mean:>7,} chars")
 print(f"    per-row header/context               {header_mean:>7,} chars")
 print(f"    body (unique per row)                {body_mean:>7,} chars")
 print(f"    trailing JSON schema block           {tail_mean:>7,} chars"
-      f"   <- IDENTICAL every row")
+      f"{'   (moved to system — this is now just the pointer)' if schema_in_system else '   <- IDENTICAL every row'}")
 print(f"  {'-' * 52}")
 print(f"  total prompt (mean)                    {total_mean:>7,} chars\n")
 
 print(f"  cacheable now (system only)            {sys_len:>7,} chars"
       f"  = {100 * sys_len / total_mean:>2.0f}% of prompt")
-moved = sys_len + tail_mean
-print(f"  cacheable if schema moved to system    {moved:>7,} chars"
-      f"  = {100 * moved / total_mean:>2.0f}% of prompt")
-print(f"\n  uncacheable today: {total_mean - sys_len:,} chars/row"
-      f"  ->  {total_mean - moved:,} after the move"
-      f"  ({100 * tail_mean / (total_mean - sys_len):.0f}% less)")
+if schema_in_system:
+    # Phase 0 acceptance criterion 8: the prefix should have landed at ~8,685
+    # chars, i.e. ~36% of the prompt, up from 3,742 / 15%. If it did but the
+    # DeepSeek bill doesn't move, the caching model is wrong — record that and
+    # stop, rather than restructuring more prompt on a broken cost model.
+    print(f"  (pre-Phase-0 baseline was 3,742 chars = 15% of a 24,368-char prompt)")
+else:
+    moved = sys_len + tail_mean
+    print(f"  cacheable if schema moved to system    {moved:>7,} chars"
+          f"  = {100 * moved / total_mean:>2.0f}% of prompt")
+    print(f"\n  uncacheable today: {total_mean - sys_len:,} chars/row"
+          f"  ->  {total_mean - moved:,} after the move"
+          f"  ({100 * tail_mean / (total_mean - sys_len):.0f}% less)")

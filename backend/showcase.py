@@ -29,6 +29,7 @@ import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -400,6 +401,166 @@ def _disqualifying_guidance(cand: dict) -> Optional[dict]:
     return None
 
 
+# ── Printed-number parsers ────────────────────────────────────────────────────
+# earnings_quality stores figures exactly as the announcement printed them, so
+# the gate needs to read "£1.4bn", "c.£225m" and "62bps" back into numbers.
+# Both parsers return None on anything they don't recognise — never a guess.
+# A None propagates into "this entry can't be adjudicated", which fails open,
+# and over-blocking is the high-severity error here.
+_NUM = r"-?\d{1,3}(?:,\d{3})*(?:\.\d+)?"
+# Longest suffix first: "million" must not be consumed as "m" + "illion".
+_MAG = {
+    "trillion": 1e12, "tr": 1e12,
+    "billion": 1e9, "bn": 1e9, "b": 1e9,
+    "million": 1e6, "mn": 1e6, "m": 1e6,
+    "thousand": 1e3, "k": 1e3,
+}
+_MAG_ALT = "|".join(sorted(_MAG, key=len, reverse=True))
+
+# Rates only. A percentage is deliberately NOT converted — "increased 38%" is a
+# growth rate, not a loss rate, and reading it as 3,800bps would fire the bank
+# gate on an income line's own comparator. Banks print the loan loss rate in
+# bps precisely because it is the normalised figure, so requiring the unit
+# costs nothing and removes the whole class of unit confusion.
+_BPS_RE = re.compile(rf"({_NUM})\s*(?:bps|bp|basis\s+points?)\b", re.I)
+_MONEY_CCY_RE = re.compile(rf"[£$€]\s*({_NUM})\s*({_MAG_ALT})?\b", re.I)
+_MONEY_BARE_RE = re.compile(rf"({_NUM})\s*({_MAG_ALT})\b", re.I)
+
+
+def _parse_bps(s) -> Optional[float]:
+    """First basis-point figure in a printed string, else None.
+
+    First rather than last: the model quotes the current figure ahead of its
+    comparator ("62bps (H125: 52bps)"), so if it puts the whole clause in
+    `value` the leading number is still the one meant.
+    """
+    if not isinstance(s, str):
+        return None
+    m = _BPS_RE.search(s)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _parse_money(s) -> Optional[float]:
+    """First money figure in a printed string, in units, else None.
+
+    Handles the forms actually observed in bodies — "£1.4bn", "c.£225m",
+    ">£13.7bn", "£0.2bn" — plus a bare magnitude ("1.4bn"). A currency-marked
+    figure wins over a bare one, so "up 38% to £1.4bn" reads as 1.4bn rather
+    than as the growth rate. Returns None on "increased 38%" and on anything
+    else with neither a currency symbol nor a magnitude suffix.
+    """
+    if not isinstance(s, str):
+        return None
+    m = _MONEY_CCY_RE.search(s) or _MONEY_BARE_RE.search(s)
+    if not m:
+        return None
+    # A trailing % means the number is a rate, whatever preceded it.
+    if s[m.end():].lstrip().startswith("%"):
+        return None
+    try:
+        value = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    return value * _MAG.get((m.group(2) or "").lower(), 1.0)
+
+
+# ── Earnings-quality gate ─────────────────────────────────────────────────────
+# The BARC 2026-07-28 failure mode, which the guidance gate above cannot reach
+# by construction: guidance genuinely WAS raised, so no guidance label
+# disqualifies, while the reported numbers underneath were partly non-repeating
+# (a c.£225m disposal gain inside "USCB income increased 38%") against a loan
+# loss rate that had gone 52 -> 62bps. The stock fell 5.5% that day; scored 7
+# times the announcement came back [55, 60, 65, 75, 80, 80, 80], positive 7/7,
+# four runs clearing the flag threshold. It is not an edge case either: on
+# 2026-07-29, 68 of 75 guidance_checks entries batch-wide were
+# "no_consensus_stated", which is the only state in which the guidance gate can
+# do nothing at all.
+#
+# Gate on the loan loss RATE, not the absolute impairment charge. Any bank
+# growing its loan book grows impairments, so £1.1bn -> £1.4bn is evidence of
+# nothing on its own; the LLR is already normalised for book size, which is why
+# banks report it. That distinction is the whole reason the rule is
+# bank-branched, and it belongs here in Python where it is written once and
+# unit-tested, not in a prompt where it is re-derived every morning against a
+# 25-point score spread.
+#
+# PROVISIONAL threshold — calibrated on n=1. The only observations are BARC's
+# H1 2026 loan loss rate (52 -> 62bps, +10) and its Q2 2026 rate (44 -> 51bps,
+# +7); both are the same real deterioration, seen over different windows. The
+# threshold sits below both deliberately: the model's enumeration of
+# earnings_quality entries is not stable run to run (2 to 7 entries across 7
+# BARC runs), so a threshold set at the H1 figure would make the outcome depend
+# on WHICH period the model happened to enumerate. Revisit once more bank
+# results have landed — RNS ingest only began 2026-06-29, so the table is
+# shallow on banks and this cannot be calibrated properly yet.
+_BANK_LLR_RISE_BPS = 5
+
+
+def _worsening_loss_rate(cand: dict) -> Optional[dict]:
+    """Return the earnings_quality entry that should block flagging, else None.
+
+    Bank-only. Every ambiguous path returns None: not a bank, no array, a
+    `kind` the ranker couldn't classify ("unclear"), a missing period, or a
+    figure neither side of which parses as basis points. Dropping a tradeable
+    announcement is the high-severity error in this system, so the gate only
+    ever fires on a fully-read pair.
+    """
+    from quality import classify_risk_model
+
+    # unknown_is_trust=False for the same reason the RNS ranker passes it:
+    # company_metadata is a LEFT JOIN, so absent sector/industry means the
+    # ticker is outside our universe, not that it is a closed-end fund.
+    if classify_risk_model(cand, unknown_is_trust=False) != "bank":
+        return None
+    entries = cand.get("earnings_quality")
+    if not isinstance(entries, list):
+        return None
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        if e.get("kind") != "cost_or_charge":
+            continue
+        # Without a period there is no way to know a half-year figure isn't
+        # being compared against a quarter — the body prints both, a few
+        # hundred chars apart. str() because this reads stored JSON, which is
+        # only as well-shaped as the cleaner that wrote it, and this runs in
+        # the morning cron.
+        if not str(e.get("period") or "").strip():
+            continue
+        cur, prior = _parse_bps(e.get("value")), _parse_bps(e.get("prior_value"))
+        if cur is None or prior is None:
+            continue
+        if cur - prior >= _BANK_LLR_RISE_BPS:
+            return e
+    return None
+
+
+def _named_one_offs(cand: dict) -> list[dict]:
+    """Income lines the announcement itself credits to a named non-repeating
+    item. Reported, never gated on.
+
+    Judging materiality would need the one-off as a share of the growth, and
+    the base is not reliably printed in comparable form — "c.£225m" against
+    "increased 38%" is not a computation. A named, quoted fact is worth
+    surfacing to a reader even unquantified; it is not sound enough to block.
+    """
+    entries = cand.get("earnings_quality")
+    if not isinstance(entries, list):
+        return []
+    return [
+        e
+        for e in entries
+        if isinstance(e, dict)
+        and e.get("kind") == "income"
+        and str(e.get("one_off_named") or "").strip()
+    ]
+
+
 # ── Auto-flag ─────────────────────────────────────────────────────────────────
 def flag_high_impact_candidates(hours: int = 48) -> dict:
     """Flag rules-passing candidates from the last `hours` straight onto the
@@ -412,7 +573,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                r.tier, r.category, r.score, r.keyword_hits, r.summary,
                r.body, r.body_is_stub,
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_risks, r.llm_action,
-               r.llm_sentiment, r.guidance_checks,
+               r.llm_sentiment, r.guidance_checks, r.earnings_quality,
                m.sector, m.industry, m.country, m.ftse_index,
                t.market_cap, t.net_debt
         FROM rns_announcements r
@@ -486,6 +647,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
     flagged = 0
     skipped_sentiment = 0
     skipped_guidance = 0
+    skipped_earnings_quality = 0
     vetted = 0
     for c in cands:
         if _sentiment(c) != "positive":
@@ -504,6 +666,27 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                 f"{bad_guidance.get('consensus_value')})"
             )
             continue
+
+        # Also before the vet, same reason: a blocked row costs no LLM call.
+        bad_quality = _worsening_loss_rate(c)
+        if bad_quality:
+            skipped_earnings_quality += 1
+            print(
+                f"[showcase] {c['symbol']} not flagged — "
+                f"{bad_quality.get('period')} {bad_quality.get('item')} "
+                f"rose to {bad_quality.get('value')} "
+                f"from {bad_quality.get('prior_value')}"
+            )
+            continue
+
+        # Not a gate — see _named_one_offs. Logged so a flagged row's headline
+        # growth can be read against what the company said drove it.
+        for one_off in _named_one_offs(c):
+            print(
+                f"[showcase] {c['symbol']} one-off named in "
+                f"{one_off.get('period')} {one_off.get('item')} "
+                f"({one_off.get('value')}): {one_off.get('one_off_named')}"
+            )
 
         story_close = _story_close(c["symbol"], c["published_at"])
         try:
@@ -557,6 +740,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         "flagged": flagged,
         "skipped_sentiment": skipped_sentiment,
         "skipped_guidance": skipped_guidance,
+        "skipped_earnings_quality": skipped_earnings_quality,
         "vetted": vetted,
     }
 

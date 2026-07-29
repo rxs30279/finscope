@@ -203,7 +203,8 @@ def test_flag_keeps_positive_and_stores_vet():
          patch.object(showcase, "_exec", return_value=1) as ex:
         res = showcase.flag_high_impact_candidates(hours=48)
     assert res == {"candidates": 1, "flagged": 1, "skipped_sentiment": 0,
-                   "skipped_guidance": 0, "vetted": 1}
+                   "skipped_guidance": 0, "skipped_earnings_quality": 0,
+                   "vetted": 1}
     params = ex.call_args[0][1]
     assert params[16] == "include"          # vet_verdict
     assert isinstance(params[20], datetime)  # vet_processed_at set
@@ -365,6 +366,199 @@ def test_flag_skips_disqualifying_guidance_before_vetting():
     assert res["skipped_sentiment"] == 0
     vet.assert_not_called()   # no LLM spend on a row we've already ruled out
     ex.assert_not_called()
+
+
+# ── printed-number parsers ────────────────────────────────────────────────────
+# earnings_quality stores figures exactly as the announcement printed them, so
+# these read them back. Every string below is a form actually observed in a
+# stored body (plan Phase 2 / acceptance criterion 5). This is the piece most
+# likely to be quietly wrong and the cheapest to test.
+
+def test_parse_bps_reads_the_forms_banks_print():
+    assert showcase._parse_bps("62bps") == 62
+    assert showcase._parse_bps("52 bps") == 52
+    assert showcase._parse_bps("44bp") == 44
+    assert showcase._parse_bps("51 basis points") == 51
+    assert showcase._parse_bps("0.5bps") == 0.5
+    # The model sometimes drops the whole printed clause into `value`; the
+    # leading figure is the current one, the parenthetical is the comparator.
+    assert showcase._parse_bps("62bps (H125: 52bps)") == 62
+
+
+def test_parse_bps_refuses_percentages_and_money():
+    # "increased 38%" read as 3,800bps would fire the bank gate on an income
+    # line's own comparator. Requiring the unit costs nothing — banks print the
+    # loan loss rate in bps precisely because it is the normalised figure.
+    for s in ("increased 38%", "38%", "£1.4bn", "c.£225m", "62", "", None, 62):
+        assert showcase._parse_bps(s) is None, s
+
+
+def test_parse_money_reads_the_forms_announcements_print():
+    assert showcase._parse_money("£1.4bn") == 1.4e9
+    assert showcase._parse_money("c.£225m") == 225e6
+    assert showcase._parse_money(">£13.7bn") == 13.7e9
+    assert showcase._parse_money("£0.2bn") == 0.2e9
+    assert showcase._parse_money("£40.7m") == 40.7e6
+    assert showcase._parse_money("$1.5 million") == 1.5e6
+    assert showcase._parse_money("€2 billion") == 2e9
+    assert showcase._parse_money("£1,400") == 1400
+    assert showcase._parse_money("1.4bn") == 1.4e9
+    # A currency-marked figure wins over a bare growth rate in the same string.
+    assert showcase._parse_money("up 38% to £1.4bn") == 1.4e9
+
+
+def test_parse_money_returns_none_rather_than_guessing():
+    for s in ("increased 38%", "38%", "62bps", "significantly ahead",
+              "", None, 1.4):
+        assert showcase._parse_money(s) is None, s
+
+
+# ── earnings-quality gate ─────────────────────────────────────────────────────
+# BARC 2026-07-28: guidance genuinely raised (so the guidance gate above cannot
+# fire), headline growth partly a c.£225m disposal gain, loan loss rate
+# 52 -> 62bps. Fell 5.5% on the day; scored [55, 60, 65, 75, 80, 80, 80],
+# positive 7/7, four runs clearing the flag threshold.
+_BANK = {"sector": "Financial Services", "industry": "Banks - Diversified"}
+_BARC_LLR = {
+    "item": "Loan loss rate", "period": "H1 2026", "value": "62bps",
+    "prior_value": "52bps", "kind": "cost_or_charge", "one_off_named": None,
+}
+
+
+def test_worsening_loss_rate_catches_the_barc_llr():
+    assert showcase._worsening_loss_rate(
+        {**_BANK, "earnings_quality": [_BARC_LLR]}
+    ) == _BARC_LLR
+
+
+def test_worsening_loss_rate_scans_past_earlier_entries():
+    # The upgraded-income lines are enumerated first and are genuinely good
+    # news; letting them short-circuit the scan reproduces the failure.
+    entries = [
+        {"item": "IB income", "period": "H1 2026", "value": "increased 20%",
+         "prior_value": None, "kind": "income", "one_off_named": None},
+        {"item": "USCB income", "period": "H1 2026", "value": "increased 38%",
+         "prior_value": None, "kind": "income",
+         "one_off_named": "c.£225m gain from the sale of the AA portfolio"},
+        _BARC_LLR,
+    ]
+    assert showcase._worsening_loss_rate(
+        {**_BANK, "earnings_quality": entries}
+    ) == _BARC_LLR
+
+
+def test_worsening_loss_rate_fires_on_the_quarter_as_well_as_the_half():
+    # Enumeration is unstable — 2 to 7 entries across 7 BARC runs — so the
+    # threshold sits below BOTH observed rises (H1 +10bps, Q2 +7bps) rather
+    # than letting the outcome depend on which period the model enumerated.
+    q2 = {"item": "Loan loss rate", "period": "Q2 2026", "value": "51bps",
+          "prior_value": "44bps", "kind": "cost_or_charge"}
+    assert showcase._worsening_loss_rate(
+        {**_BANK, "earnings_quality": [q2]}
+    ) == q2
+
+
+def test_worsening_loss_rate_ignores_the_absolute_impairment_charge():
+    # Any bank growing its loan book grows impairments; £1.1bn -> £1.4bn is
+    # evidence of nothing on its own. The LLR is already normalised for book
+    # size, which is why banks report it — that's the whole point of the rule.
+    assert showcase._worsening_loss_rate({**_BANK, "earnings_quality": [
+        {"item": "Credit impairment charges", "period": "H1 2026",
+         "value": "£1.4bn", "prior_value": "£1.1bn", "kind": "cost_or_charge"},
+    ]}) is None
+
+
+def test_worsening_loss_rate_ignores_an_improving_or_flat_rate():
+    for value, prior in (("52bps", "62bps"), ("62bps", "62bps"),
+                         ("64bps", "62bps")):  # +2bps is below the threshold
+        assert showcase._worsening_loss_rate({**_BANK, "earnings_quality": [
+            {**_BARC_LLR, "value": value, "prior_value": prior},
+        ]}) is None, (value, prior)
+
+
+def test_worsening_loss_rate_is_bank_only():
+    # The rule reads a bank's loan loss rate. Nothing else reports one, and the
+    # control set is entirely non-banks — it must return None on every one.
+    for row in (
+        {"sector": "Consumer Defensive", "industry": "Household Products"},
+        {"sector": "Industrials", "industry": "Specialty Industrial Machinery"},
+        {"sector": "Financial Services", "industry": "Insurance - Life"},
+        {"sector": "Financial Services", "industry": "Asset Management"},
+        {"sector": None, "industry": None},   # out-of-universe, not a trust
+    ):
+        assert showcase._worsening_loss_rate(
+            {**row, "earnings_quality": [_BARC_LLR]}
+        ) is None, row
+
+
+def test_worsening_loss_rate_fails_open_on_every_ambiguous_path():
+    # Dropping a tradeable announcement is the high-severity error here, so an
+    # entry the gate can't fully read is an entry it ignores.
+    for entries in (
+        None,
+        [],
+        "not a list",
+        ["not a dict"],
+        # "unclear" is what _clean_earnings_quality assigns to a kind it didn't
+        # recognise — a parsing miss must never silently block a row.
+        [{**_BARC_LLR, "kind": "unclear"}],
+        [{**_BARC_LLR, "kind": "income"}],
+        [{**_BARC_LLR, "period": None}],      # can't tell a half from a quarter
+        [{**_BARC_LLR, "period": "  "}],
+        [{**_BARC_LLR, "prior_value": None}],  # nothing to compare against
+        [{**_BARC_LLR, "value": "materially higher"}],
+        [{**_BARC_LLR, "value": "£1.4bn", "prior_value": "£1.1bn"}],
+    ):
+        assert showcase._worsening_loss_rate(
+            {**_BANK, "earnings_quality": entries}
+        ) is None, entries
+
+
+def test_named_one_offs_reports_income_lines_only():
+    # Surfaced, never gated: the one-off as a share of the growth isn't
+    # computable — "c.£225m" against "increased 38%" is not a computation.
+    uscb = {"item": "USCB income", "period": "H1 2026", "value": "increased 38%",
+            "kind": "income",
+            "one_off_named": "c.£225m gain from the sale of the AA portfolio"}
+    entries = [
+        uscb,
+        {"item": "IB income", "kind": "income", "one_off_named": None},
+        # A one-off CHARGE is recorded too (it flatters the trend) but it is
+        # the charge gate's business, not this reporter's.
+        {"item": "Litigation and conduct", "kind": "cost_or_charge",
+         "one_off_named": "provision for the FCA motor finance redress scheme"},
+    ]
+    assert showcase._named_one_offs({"earnings_quality": entries}) == [uscb]
+    for bad in (None, [], "not a list", ["not a dict"]):
+        assert showcase._named_one_offs({"earnings_quality": bad}) == []
+
+
+def test_flag_skips_worsening_loss_rate_before_vetting():
+    cand = _cand(sector="Financial Services", industry="Banks - Diversified",
+                 earnings_quality=[_BARC_LLR])
+    with patch.object(showcase, "_q", return_value=[cand]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate") as vet, \
+         patch.object(showcase, "_exec") as ex:
+        res = showcase.flag_high_impact_candidates()
+    assert res["flagged"] == 0
+    assert res["skipped_earnings_quality"] == 1
+    assert res["skipped_guidance"] == 0
+    vet.assert_not_called()   # no LLM spend on a row we've already ruled out
+    ex.assert_not_called()
+
+
+def test_flag_still_flags_a_bank_with_a_clean_loss_rate():
+    # The gate must not read "bank" as "block" — it fires on the rate move.
+    cand = _cand(sector="Financial Services", industry="Banks - Diversified",
+                 earnings_quality=[{**_BARC_LLR, "prior_value": "62bps"}])
+    with patch.object(showcase, "_q", return_value=[cand]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=None), \
+         patch.object(showcase, "_exec", return_value=1):
+        res = showcase.flag_high_impact_candidates()
+    assert res["flagged"] == 1
+    assert res["skipped_earnings_quality"] == 0
 
 
 # ── record_followups ──────────────────────────────────────────────────────────

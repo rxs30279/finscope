@@ -384,6 +384,95 @@ change here that could silently degrade something already working:
 
 ---
 
+## Appendix D — implementation record (2026-07-29)
+
+Phases 0–4 built in one commit, as the plan intended (Phase 0 is only free
+while the schema block is being rewritten anyway).
+
+- **Phase 0** — `_JSON_SCHEMA_BLOCK` moved into the system message,
+  `_SCHEMA_POINTER` restates the ordering constraint at the tail of the user
+  message. `rns_prompt_shape.py` final reading: cacheable prefix **13,184 chars
+  = 45%** of a 29,066-char prompt, against a 3,742/15% baseline. That is *above*
+  the plan's 8,685/36% prediction because the prediction assumed the schema
+  block stayed 4,943 chars — it is 9,680 with `earnings_quality` in it. The
+  number that matters is uncacheable bytes per row: **20,626 → 15,882, −23%**.
+  The billing half of criterion 8 needs a day of real DeepSeek invoices; do not
+  infer it.
+- **Phase 1** — `earnings_quality` added to the schema ahead of `score`;
+  `_clean_earnings_quality` mirrors `_clean_guidance_checks` (unknown `kind` →
+  `"unclear"`, which no gate matches; entries with no `item` dropped; None
+  rather than `[]` when nothing usable came back). Migration `026` applied to
+  prod 2026-07-29 — column and partial index both verified present.
+- **Phase 2** — `_parse_bps` / `_parse_money` in `showcase.py`. `_parse_bps`
+  deliberately refuses percentages: "increased 38%" read as 3,800bps would fire
+  the bank gate on an income line's own comparator.
+- **Phase 3** — `_worsening_loss_rate` gates on the loan loss RATE, bank-only,
+  `skipped_earnings_quality` in the cron dict. `_BANK_LLR_RISE_BPS = 5`, set
+  below **both** observed rises (H1 +10, Q2 +7) so the outcome doesn't depend on
+  which period the model happened to enumerate. `_named_one_offs` reports the
+  secondary signal to the cron log; it is not stored or shown on the card
+  (see below).
+- **Phase 4** — `rns_body_context_validation.py` now runs showcase's real gates
+  over the model's own output and reports blocked/not-blocked per run, entries
+  enumerated, parseable rate pairs, and whether the enumerate-before-score
+  ordering held. The criteria are read off those lines, not off the score.
+
+### Two defects the validation found, neither anticipated by the plan
+
+**1. `max_tokens` was too small, and failed silently.** `earnings_quality`
+roughly doubled the JSON answer against a cap (4000) sized for a ~400-token
+one. The response is cut mid-string, `json.loads` raises, and
+`_rank_pending`'s per-row isolation turns that into a row that is never
+scored, never flagged and never in the digest — landing on exactly the
+long-bodied large caps this field exists to judge. Measured failure rates:
+**19/56 calls at 4000**, 1/7 at 6000, 0/28 at 8000. Raised to 8000, and
+`_log_cache_usage` now prints completion/reasoning tokens with an explicit
+`finish_reason == "length"` warning, so the next occurrence is a one-line
+diagnosis instead of a re-run of this investigation. Note this failure path
+pre-dates the plan; the field only made it frequent enough to see.
+
+**2. The model would not enumerate the loan loss rate.** The first BARC run
+blocked **0/7** — not a threshold problem, an input problem: the model
+enumerated the impairment charge in £bn on every sample and the LLR in bps on
+none, and `_worsening_loss_rate` ignores the absolute charge by design. Two
+independent 7-sample runs at 8000 tokens (so not truncation) both gave 0
+parseable rate pairs. Fixed with a `RATES COUNT AS LINES` clause in the field
+description: **0/7 → 7/7 blocked, rate pairs 0,0,0,0,0,0,0 → 1,2,2,2,1,1,1.**
+
+That clause then over-corrected — enumeration went exhaustive on long bodies
+(BOY 2-5 entries → 5-22, INCH 2-8 → 5-13) and cost an INCH sample to the 8000
+cap. Bounded with a ranked keep-list — named one-offs first, then rates with a
+comparator, then the largest lines — which holds every row at ≤8 entries with
+**0 truncations in 56 calls** and BARC still blocking 7/7.
+
+### `vs_prior` is ~90% stable, not deterministic
+
+Not a defect, but a property of the design that was not known when the plan was
+written, and it qualifies the plan's claim that the structured field is steady
+where the score is not. Across 29 LUCE samples on the final prompt the guidance
+gate blocked **26 (90%)**; the three misses were `vs_prior` landing on
+`unknown` or `new` instead of `reiterated`. The consensus side never wavered —
+`>£40m` against `£40.7m` was extracted in every single sample. It cuts both
+ways: JNEO, a control row, was blocked in 1 of 7 runs when its PBT line came
+back `reiterated/in_line` rather than the `new/in_line` the other six gave.
+
+So the field is far steadier than `llm_score` (42-point spread on the same
+rows) but it is not a deterministic input, and a gate on it inherits a ~10%
+label error in both directions. If that needs closing later, the targeted move
+is to disqualify **any** `vs_prior` when the announcement printed a consensus
+the guide fails to clear — that catches all three observed misses and stays
+safe for ULVR, whose entries are all `no_consensus_stated`. Deliberately NOT
+done here: it widens a gate the plan kept narrow, and it belongs in its own
+before/after.
+
+Built but **not** delivered, flagged rather than quietly dropped: the plan's
+Phase 3 secondary signal says `one_off_named` should be surfaced "on the
+showcase card". It is currently only logged. Putting it on the card needs a
+column on `high_impact_rns`, an API field and a frontend change — none of which
+appear in the acceptance criteria, and all of which are a wider surface than a
+non-gating annotation justifies on the same commit as the gate. Left as a
+follow-up decision.
+
 ## Appendix A — why the score was left alone again
 
 BARC's 7-run spread was **25 points** (55–80) at temperature 0.2, against

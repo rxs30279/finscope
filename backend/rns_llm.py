@@ -369,6 +369,159 @@ def _risk_score(cand: dict) -> Optional[int]:
     return max(1, min(10, round(total / components)))
 
 
+# The output schema. Byte-identical on every row, so it lives in the SYSTEM
+# message where DeepSeek's prefix cache can actually reach it — see
+# docs/rns-earnings-quality-plan.md Phase 0. Sitting at the tail of the user
+# message (its home until 2026-07-29) it followed ~14k chars of per-row body and
+# was therefore billed at the cache-miss rate on every single call: the stable
+# prefix was 3,742 of a 24,368-char prompt, 15%. Moved here it is ~36%.
+#
+# The cost of the move is distance from the point of use, and this project's
+# whole experience is that the model holds an instruction poorly across a long
+# body. So the ordering constraint — the one load-bearing instruction, because
+# enumerate-then-score is what stops the model rationalising a number it has
+# already picked — is ALSO restated at the tail of the user message
+# (_SCHEMA_POINTER). Do not "tidy" that duplication away.
+_JSON_SCHEMA_BLOCK = """
+
+Produce a JSON object with these fields exactly, IN THIS ORDER — fill in
+guidance_checks and earnings_quality first and let them constrain the score,
+do not pick a score and then justify it:
+  guidance_checks  array, one entry for EVERY forward-looking guidance
+                   statement in the announcement text — every period, not
+                   just the most prominent or the most recently mentioned
+                   one. A single paragraph often carries two (e.g. a
+                   reiterated near-year figure and a new out-year comment);
+                   both get an entry. Empty array if the announcement makes
+                   no forward statement. Each entry:
+                     metric          e.g. "Adjusted Operating Profit"
+                     period          e.g. "FY2026"
+                     guided_value    as printed, e.g. "> £40m" or
+                                     "to exceed current market expectations"
+                     consensus_value the company-compiled consensus for that
+                                     SAME period if the announcement prints
+                                     one, else null — match on period, do not
+                                     borrow another year's figure
+                     vs_prior        one of: "raised", "reiterated",
+                                     "lowered", "new", "unknown"
+                     vs_consensus    one of: "above", "in_line", "below",
+                                     "no_consensus_stated"
+                   These two are INDEPENDENT and must both be filled in. A
+                   figure can be reiterated and below consensus at the same
+                   time (the company's expectation is unchanged, but
+                   consensus has moved past it since) — that combination is
+                   the single most important thing this field exists to
+                   catch, so never let one of the two answers stand in for
+                   the other.
+                     vs_prior is about the company's own EXPECTATION, not
+                   the digits: if the announcement says it is upgrading,
+                   raising or narrowing-upward its outlook, that is
+                   "raised" even when the printed figure is a pre-existing
+                   multi-year range being restated and no new number is
+                   given. Take the company at its word on direction. Use
+                   "new" for first-time guidance and "unknown" when there
+                   is nothing to compare against.
+                     vs_consensus is ONLY about a consensus figure printed
+                   in this announcement. "no_consensus_stated" is the
+                   common case and carries no information either way — most
+                   announcements print no consensus footnote. It is never
+                   evidence that guidance fails to beat expectations.
+  earnings_quality array, one entry for EVERY material income or charge line
+                   the announcement itself quantifies — what the reported
+                   result is MADE OF, as distinct from the forward guidance
+                   above. Empty array if it quantifies none.
+                     RATES COUNT AS LINES. Where the announcement prints a
+                   normalised rate next to an absolute figure — a bank's loan
+                   loss rate or cost of risk in bps, an impairment ratio, a
+                   margin — that rate gets its OWN entry with its own
+                   prior_value, in ADDITION to the entry for the absolute
+                   amount. Never emit only the absolute one. A charge in £bn
+                   grows with the size of the book, so it says little on its
+                   own; the rate is the figure that shows whether anything
+                   actually deteriorated, which is why the company reports it.
+                     KEEP IT TO THE MATERIAL LINES — at most about 8 entries.
+                   Material means the line moves the result or changes how the
+                   result should be read, not merely that a number appears in
+                   the text. Do not pad the array with every quantified figure
+                   in the announcement. Where you have to choose, keep, in this
+                   order: (a) any line carrying a named one-off, (b) any
+                   normalised rate that has a prior comparator, (c) the largest
+                   income and charge lines. Drop routine detail before you drop
+                   any of those.
+                   Each entry:
+                     item          the line as printed, e.g. "Credit
+                                   impairment charges", "Loan loss rate
+                                   (LLR)", "USCB income"
+                     period        which period this figure covers, e.g.
+                                   "H1 2026" or "Q2 2026". Mandatory. The same
+                                   metric is routinely printed for both a half
+                                   and a quarter within a few lines of each
+                                   other, so a figure without its period is
+                                   worse than useless — never merge two
+                                   periods into one entry.
+                     value         as printed, e.g. "£1.4bn", "62bps",
+                                   "increased 38%"
+                     prior_value   the comparator the announcement prints for
+                                   the SAME line and SAME period a year
+                                   earlier, as printed (e.g. "£1.1bn",
+                                   "52bps"), else null
+                     kind          "income" or "cost_or_charge"
+                     one_off_named the non-repeating contributor the
+                                   announcement ITSELF names for this line,
+                                   quoted as printed (e.g. "c.£225m gain from
+                                   the sale of the AA co-branded cards
+                                   portfolio"), else null. Copy the company's
+                                   own words; do not judge for yourself
+                                   whether an item recurs, and never infer a
+                                   one-off the announcement does not name.
+                                   Direction-neutral: a one-off charge that
+                                   flatters the underlying trend gets an entry
+                                   exactly as a one-off gain does.
+  score            integer 0-100; price-impact likelihood × magnitude.
+                   Weigh every guidance_checks entry, not just the most
+                   favourable one. In particular:
+                   - reiterated + below consensus is a NEGATIVE, however
+                     positively the announcement phrases it, and it caps how
+                     positive the whole item can be even when another entry
+                     is above consensus;
+                   - raised + no_consensus_stated is still a genuine
+                     catalyst — do not mark an upgrade down merely because
+                     no consensus figure was printed;
+                   - reiterated + no_consensus_stated is neutral: no new
+                     information, so no catalyst.
+                   Weigh earnings_quality too: income growth carrying a named
+                   one-off contributor is worth less than its headline rate,
+                   and a charge or loss RATE rising year on year is a negative
+                   however positively the announcement is phrased.
+  confidence       one of: "high", "medium", "low"
+  thesis           one sentence: why this matters (or why it doesn't)
+  action           one of: "watch", "research", "ignore"
+  risks            one sentence: what would invalidate the thesis
+  sentiment        one of: "positive", "negative", "neutral" — the direction
+                   of this news for existing shareholders, independent of
+                   size/impact
+  guidance_metric  one entry from guidance_checks, echoed here (e.g.
+                   "FY2026 Adjusted Operating Profit"), or null if
+                   guidance_checks is empty. This is the one figure carried
+                   forward and shown against the issuer's NEXT announcement,
+                   so it must be comparable: pick the entry with a hard
+                   number covering the nearest period. Only fall back to a
+                   qualitative entry ("ahead of expectations", "in line") if
+                   no entry has a number at all — such a value is useless
+                   for the later comparison.
+  guidance_value   that entry's figure/range/threshold as text (e.g.
+                   "> £40m"), or null
+  guidance_period  that entry's period (e.g. "FY2026"), or null
+
+Return JSON only — no preamble, no code fence."""
+
+# Tail of the user message. Restates only the ordering constraint, so the
+# instruction that must survive ~14k chars of body is the last thing read.
+_SCHEMA_POINTER = """Produce the JSON object exactly as specified in the system instructions.
+Fill in guidance_checks and earnings_quality FIRST and let them constrain the
+score — do not pick a score and then justify it."""
+
+
 def _build_messages(
     cand: dict,
     history: list[dict],
@@ -434,7 +587,17 @@ def _build_messages(
         "performance already exceeds them, can be a negative signal — the "
         "market may have wanted an upgrade. Weigh this one lightly against "
         "the rest of the analysis; it is a market-psychology judgement, not a "
-        "reading-comprehension one. Return STRICT JSON only."
+        "reading-comprehension one. "
+        "Judge the composition of the reported numbers, not only the outlook. "
+        "Headline growth the announcement itself attributes in part to a "
+        "disposal gain, an acquisition or another named non-repeating item is "
+        "worth less than the headline rate implies, and a charge or loss RATE "
+        "that has risen year on year is a deterioration however positively the "
+        "announcement frames the result. Enumerate those lines in "
+        "earnings_quality before you choose a score, copying the company's own "
+        "words rather than deciding for yourself what recurs. "
+        "Return STRICT JSON only."
+        + _JSON_SCHEMA_BLOCK
     )
 
     hist_lines = (
@@ -603,81 +766,7 @@ Prior guidance from this issuer (most recent captured; may be from any date)
 Recent issuer RNS history (tier A/B only, last 120 days)
 {hist_lines}
 
-Produce a JSON object with these fields exactly, IN THIS ORDER — fill in
-guidance_checks first and let it constrain the score, do not pick a score
-and then justify it:
-  guidance_checks  array, one entry for EVERY forward-looking guidance
-                   statement in the announcement text — every period, not
-                   just the most prominent or the most recently mentioned
-                   one. A single paragraph often carries two (e.g. a
-                   reiterated near-year figure and a new out-year comment);
-                   both get an entry. Empty array if the announcement makes
-                   no forward statement. Each entry:
-                     metric          e.g. "Adjusted Operating Profit"
-                     period          e.g. "FY2026"
-                     guided_value    as printed, e.g. "> £40m" or
-                                     "to exceed current market expectations"
-                     consensus_value the company-compiled consensus for that
-                                     SAME period if the announcement prints
-                                     one, else null — match on period, do not
-                                     borrow another year's figure
-                     vs_prior        one of: "raised", "reiterated",
-                                     "lowered", "new", "unknown"
-                     vs_consensus    one of: "above", "in_line", "below",
-                                     "no_consensus_stated"
-                   These two are INDEPENDENT and must both be filled in. A
-                   figure can be reiterated and below consensus at the same
-                   time (the company's expectation is unchanged, but
-                   consensus has moved past it since) — that combination is
-                   the single most important thing this field exists to
-                   catch, so never let one of the two answers stand in for
-                   the other.
-                     vs_prior is about the company's own EXPECTATION, not
-                   the digits: if the announcement says it is upgrading,
-                   raising or narrowing-upward its outlook, that is
-                   "raised" even when the printed figure is a pre-existing
-                   multi-year range being restated and no new number is
-                   given. Take the company at its word on direction. Use
-                   "new" for first-time guidance and "unknown" when there
-                   is nothing to compare against.
-                     vs_consensus is ONLY about a consensus figure printed
-                   in this announcement. "no_consensus_stated" is the
-                   common case and carries no information either way — most
-                   announcements print no consensus footnote. It is never
-                   evidence that guidance fails to beat expectations.
-  score            integer 0-100; price-impact likelihood × magnitude.
-                   Weigh every guidance_checks entry, not just the most
-                   favourable one. In particular:
-                   - reiterated + below consensus is a NEGATIVE, however
-                     positively the announcement phrases it, and it caps how
-                     positive the whole item can be even when another entry
-                     is above consensus;
-                   - raised + no_consensus_stated is still a genuine
-                     catalyst — do not mark an upgrade down merely because
-                     no consensus figure was printed;
-                   - reiterated + no_consensus_stated is neutral: no new
-                     information, so no catalyst.
-  confidence       one of: "high", "medium", "low"
-  thesis           one sentence: why this matters (or why it doesn't)
-  action           one of: "watch", "research", "ignore"
-  risks            one sentence: what would invalidate the thesis
-  sentiment        one of: "positive", "negative", "neutral" — the direction
-                   of this news for existing shareholders, independent of
-                   size/impact
-  guidance_metric  one entry from guidance_checks, echoed here (e.g.
-                   "FY2026 Adjusted Operating Profit"), or null if
-                   guidance_checks is empty. This is the one figure carried
-                   forward and shown against the issuer's NEXT announcement,
-                   so it must be comparable: pick the entry with a hard
-                   number covering the nearest period. Only fall back to a
-                   qualitative entry ("ahead of expectations", "in line") if
-                   no entry has a number at all — such a value is useless
-                   for the later comparison.
-  guidance_value   that entry's figure/range/threshold as text (e.g.
-                   "> £40m"), or null
-  guidance_period  that entry's period (e.g. "FY2026"), or null
-
-Return JSON only — no preamble, no code fence."""
+{_SCHEMA_POINTER}"""
 
     return [
         {"role": "system", "content": system},
@@ -697,25 +786,61 @@ def _log_cache_usage(tag: str, resp) -> None:
     usage = getattr(resp, "usage", None)
     hit = getattr(usage, "prompt_cache_hit_tokens", None)
     miss = getattr(usage, "prompt_cache_miss_tokens", None)
+    # Completion tokens are logged alongside the cache counters because the
+    # completion budget is the side that actually broke: earnings_quality grew
+    # the answer past a max_tokens sized for the old one, and with only cache
+    # counters in the log the failure looked like the model emitting bad JSON.
+    # The split matters too — reasoning shares the budget with the answer.
+    out = getattr(usage, "completion_tokens", None)
+    reasoning = getattr(
+        getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None
+    )
     print(f"[{tag}] cache hit={hit if hit is not None else 'n/a'} "
-          f"miss={miss if miss is not None else 'n/a'} tokens")
+          f"miss={miss if miss is not None else 'n/a'} tokens; "
+          f"completion={out if out is not None else 'n/a'} "
+          f"(reasoning {reasoning if reasoning is not None else 'n/a'})")
 
 
 def _call_deepseek(messages: list[dict]) -> dict:
     client = _get_client()
     # Reasoning tokens share the completion budget, so the cap must leave room
-    # for the chain of thought as well as the ~400-token JSON answer.
+    # for the chain of thought as well as the JSON answer.
+    #
+    # Raised 4000 -> 8000 when earnings_quality shipped, in two measured steps,
+    # and this is not optional headroom. The old cap was sized for a ~400-token
+    # answer; an announcement with several income and charge lines now emits
+    # 700-1,200 tokens of JSON on top of reasoning that itself ran 2,500 tokens
+    # on a typical BARC call. At 4000, BARC 9689888 failed 7 of 7 validation
+    # runs and 19 of 56 calls across the target set died. At 6000 it still
+    # burned the whole budget on 1 of 7. The failure mode is silent and
+    # expensive: the response is cut mid-string, json.loads raises, and
+    # _rank_pending's per-row isolation turns that into a row that is never
+    # scored, never flagged and never in the digest — on exactly the big-body
+    # large caps this field exists to judge.
+    #
+    # A cap is not a target. Raising it costs nothing on calls that were
+    # already finishing, and every call it rescues was previously 100% wasted
+    # spend and latency. Watch the completion counts in the log rather than
+    # assuming 8000 holds forever.
     resp = client.chat.completions.create(
         model=_DEEPSEEK_MODEL,
         messages=messages,
         response_format={"type": "json_object"},
         temperature=0.2,
-        max_tokens=4000,
+        max_tokens=8000,
         extra_body=_THINKING_ON,
     )
     _log_cache_usage("rns_llm", resp)
-    content = resp.choices[0].message.content
-    return json.loads(content)
+    choice = resp.choices[0]
+    # Truncation is otherwise indistinguishable from the model emitting bad
+    # JSON, and the two want opposite fixes. Log it loudly so the next time the
+    # answer outgrows the budget it is a one-line diagnosis, not a re-run of
+    # the investigation above.
+    if getattr(choice, "finish_reason", None) == "length":
+        print(f"[rns_llm] !! response hit max_tokens — JSON will be truncated "
+              f"(completion tokens: "
+              f"{getattr(getattr(resp, 'usage', None), 'completion_tokens', 'n/a')})")
+    return json.loads(choice.message.content)
 
 
 # The two guidance axes, kept as explicit whitelists. Anything the model
@@ -763,6 +888,53 @@ def _clean_guidance_checks(raw) -> Optional[list]:
     return out or None
 
 
+# The two composition kinds, same whitelist discipline as _VS_PRIOR above.
+# Anything else lands as "unclear", which showcase's earnings-quality gate
+# never matches — an unrecognised label must fail open, because dropping a
+# tradeable announcement is the high-severity error in this system.
+_EQ_KIND = ("income", "cost_or_charge")
+
+
+def _clean_earnings_quality(raw) -> Optional[list]:
+    """Normalise the model's earnings_quality array before it is stored.
+
+    Same contract as _clean_guidance_checks: None (SQL NULL) when nothing
+    usable came back, so "this announcement quantifies no income or charge
+    lines" is distinguishable from "the model didn't answer".
+
+    Entries with no `item` are dropped — there is nothing to adjudicate and
+    nothing readable to log. Everything else is kept verbatim as printed:
+    parsing the numbers is showcase's job, deliberately, so that a parse
+    failure there is visible against a stored quote rather than hidden behind
+    a value this function guessed at.
+    """
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        item = str(entry.get("item") or "").strip()[:200]
+        if not item:
+            continue
+        kind = str(entry.get("kind") or "").lower().strip()
+        out.append(
+            {
+                "item": item,
+                "period": (str(entry.get("period") or "").strip()[:50] or None),
+                "value": (str(entry.get("value") or "").strip()[:200] or None),
+                "prior_value": (
+                    str(entry.get("prior_value") or "").strip()[:200] or None
+                ),
+                "kind": kind if kind in _EQ_KIND else "unclear",
+                "one_off_named": (
+                    str(entry.get("one_off_named") or "").strip()[:300] or None
+                ),
+            }
+        )
+    return out or None
+
+
 def _save_ranking(ann_id: int, result: dict, model: str) -> None:
     # Sentiment is constrained to the three known values — anything else the
     # model invents is stored as NULL so _sentiment falls back to its scan.
@@ -770,6 +942,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
     if sentiment not in ("positive", "negative", "neutral"):
         sentiment = None
     guidance_checks = _clean_guidance_checks(result.get("guidance_checks"))
+    earnings_quality = _clean_earnings_quality(result.get("earnings_quality"))
     # Optional — most announcements state no explicit forward guidance figure.
     guidance_metric = (result.get("guidance_metric") or "").strip()[:200] or None
     guidance_value = (result.get("guidance_value") or "").strip()[:200] or None
@@ -797,7 +970,8 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 guidance_metric  = %s,
                 guidance_value   = %s,
                 guidance_period  = %s,
-                guidance_checks  = %s
+                guidance_checks  = %s,
+                earnings_quality = %s
             WHERE id = %s
         """,
             (
@@ -812,6 +986,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 guidance_value,
                 guidance_period,
                 Json(guidance_checks) if guidance_checks is not None else None,
+                Json(earnings_quality) if earnings_quality is not None else None,
                 ann_id,
             ),
         )
