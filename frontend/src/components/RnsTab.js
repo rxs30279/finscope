@@ -264,22 +264,44 @@ export default function RnsTab({ refreshKey, onSelect }) {
   // Auto-poll: fire 90s after each 15-min UTC boundary (synced to the backend cron,
   // staggered to give the pipeline time to finish). Then every 15 min. Pauses when the tab is hidden; re-syncs and optionally
   // fires immediately when the tab becomes visible again after >15 min away.
+  //
+  // It also parks itself after IDLE_MS without interaction. document.hidden only
+  // covers tab-switch and minimise — a tab left open and forgotten, or one
+  // sitting fully behind another window (browsers still report that "visible"),
+  // would otherwise keep pulling the whole window every 15 min with nobody
+  // reading it. Idle is the right signal rather than window blur, because a feed
+  // parked on a second monitor while you work elsewhere IS being watched.
   useEffect(() => {
     const INTERVAL = 15 * 60 * 1000;
     const STAGGER = 30 * 1000; // wait 30s after the boundary for the cron to finish
+    const IDLE_MS = 60 * 60 * 1000;
     const poll = () => setManualRefresh((n) => n + 1);
     let timeout = null;
     let interval = null;
     let hiddenAt = null;
+    let lastActivity = Date.now();
+    let idle = false;
 
     const stop = () => { clearTimeout(timeout); clearInterval(interval); };
 
+    const tick = () => {
+      if (Date.now() - lastActivity > IDLE_MS) {
+        idle = true;
+        stop();
+        return;
+      }
+      poll();
+    };
+
     const schedule = () => {
       stop();
+      idle = false;
       const msUntilNext = INTERVAL - (Date.now() % INTERVAL) + STAGGER;
       timeout = setTimeout(() => {
-        poll();
-        interval = setInterval(poll, INTERVAL);
+        tick();
+        // Guard: tick() may have just parked us, and stop() can't clear an
+        // interval that doesn't exist yet — starting one here would undo it.
+        if (!idle) interval = setInterval(tick, INTERVAL);
       }, msUntilNext);
     };
 
@@ -288,14 +310,30 @@ export default function RnsTab({ refreshKey, onSelect }) {
         hiddenAt = Date.now();
         stop();
       } else {
+        lastActivity = Date.now();
         if (hiddenAt && Date.now() - hiddenAt > INTERVAL) poll();
         schedule();
       }
     };
 
+    const onActivity = () => {
+      lastActivity = Date.now();
+      if (!idle || document.hidden) return;
+      // Back after an idle park — what's on screen is >1h stale, so refresh now
+      // rather than making the user wait for the next boundary.
+      poll();
+      schedule();
+    };
+
+    const ACTIVITY = ["pointerdown", "keydown", "scroll", "focus"];
     document.addEventListener("visibilitychange", onVisibility);
+    ACTIVITY.forEach((e) => window.addEventListener(e, onActivity, { passive: true }));
     if (!document.hidden) schedule();
-    return () => { stop(); document.removeEventListener("visibilitychange", onVisibility); };
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+      ACTIVITY.forEach((e) => window.removeEventListener(e, onActivity));
+    };
   }, []);
 
   useEffect(() => {

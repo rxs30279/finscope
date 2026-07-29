@@ -3,6 +3,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
@@ -59,6 +60,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Responses were going out uncompressed — /rns/latest at the 1-week window is
+# ~1.2 MB of highly repetitive JSON, and the Vercel edge never caches /api
+# (external rewrite → always MISS), so every poll paid full freight. Level 6
+# rather than the default 9: near-identical ratio on JSON for a fraction of the
+# CPU, which also caps the waste on /research/images/* (already-compressed PNG /
+# JPEG / WebP that gzip can't shrink but the middleware still runs over).
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
 app.include_router(market_router)
 app.include_router(prices_router)
 app.include_router(analysts_router)
