@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useIsMobile, useIsTablet, useMediaQuery } from "@/hooks/useMediaQuery";
 import { API } from "@/lib/api";
 import { companyHref } from "@/lib/company";
+import { loadRnsState, saveRnsState } from "@/lib/storage";
 import PageHeader from "@/components/layout/PageHeader";
 
 const CATEGORY_LABELS = {
@@ -230,6 +231,33 @@ function ActionPill({ action }) {
 const LARGE_CAP_FLOOR = 4e9;
 const MID_CAP_FLOOR = 350e6;
 
+// Hoisted out of the JSX so the sessionStorage restore can validate against the
+// same lists the dropdowns offer. Without that check a stale or hand-edited
+// value would go straight into the query string, and the backend caps `hours` at
+// 168 (Query(..., le=168)) — anything above it 422s and the feed renders empty.
+const WINDOW_OPTIONS = [
+  { value: 6, label: "6 hours" },
+  { value: 12, label: "12 hours" },
+  { value: 24, label: "24 hours" },
+  { value: 48, label: "48 hours" },
+  { value: 72, label: "72 hours" },
+  { value: 168, label: "1 week" },
+];
+
+const CAP_OPTIONS = [
+  { value: 0, label: "Any" },
+  { value: 10e6, label: "£10M+" },
+  { value: 50e6, label: "£50M+" },
+  { value: 100e6, label: "£100M+" },
+  { value: 250e6, label: "£250M+" },
+  { value: 1e9, label: "£1B+" },
+  { value: 5e9, label: "£5B+" },
+  { value: 10e9, label: "£10B+" },
+];
+
+const _isOneOf = (options, v) =>
+  typeof v === "number" && options.some((o) => o.value === v);
+
 export default function RnsTab({ refreshKey, onSelect }) {
   // Use the stacked single-column layout on phones AND tablet-width screens
   // (e.g. a Surface Pro in portrait, ~912px). The full desktop table has too
@@ -260,6 +288,35 @@ export default function RnsTab({ refreshKey, onSelect }) {
   const [search, setSearch] = useState("");
   // Bumped by the manual refresh button or the auto-poll to force a re-fetch.
   const [manualRefresh, setManualRefresh] = useState(0);
+  // Gates both the sessionStorage write-back and the first fetch until the saved
+  // filters have been restored. Reading sessionStorage in the useState
+  // initializers instead would diverge from the server-rendered HTML (/rns is a
+  // static prerender) and trip a hydration mismatch — the same reason
+  // WatchlistProvider defers its localStorage read to an effect.
+  const [hydrated, setHydrated] = useState(false);
+
+  // Restore the previous filter set for this tab, then allow saves. Each value
+  // is validated against the options actually on offer so a stale key from an
+  // older build can't wedge the feed (see _isOneOf).
+  useEffect(() => {
+    const s = loadRnsState();
+    if (_isOneOf(WINDOW_OPTIONS, s.hours)) setHours(s.hours);
+    if (_isOneOf(CAP_OPTIONS, s.minMarketCap)) setMinMarketCap(s.minMarketCap);
+    if (
+      typeof s.minLlmScore === "number" &&
+      Number.isFinite(s.minLlmScore) &&
+      s.minLlmScore >= 0 &&
+      s.minLlmScore <= 100
+    ) {
+      setMinLlmScore(s.minLlmScore);
+    }
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveRnsState({ hours, minLlmScore, minMarketCap });
+  }, [hydrated, hours, minLlmScore, minMarketCap]);
 
   // Auto-poll: fire 90s after each 15-min UTC boundary (synced to the backend cron,
   // staggered to give the pipeline time to finish). Then every 15 min. Pauses when the tab is hidden; re-syncs and optionally
@@ -337,6 +394,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
   }, []);
 
   useEffect(() => {
+    // Wait for the restore, otherwise every visit fetches the 24h default and
+    // then immediately re-fetches the saved window — two full payloads.
+    if (!hydrated) return;
     setLoading(true);
     const bust = manualRefresh > 0 ? `&_t=${Date.now()}` : "";
     const limit = hours * 20; // ~20 announcements/hour headroom
@@ -366,7 +426,7 @@ export default function RnsTab({ refreshKey, onSelect }) {
           .catch(() => {});
       })
       .catch(() => setLoading(false));
-  }, [refreshKey, hours, manualRefresh]);
+  }, [refreshKey, hours, manualRefresh, hydrated]);
 
   const filtered = useMemo(() => {
     let r = rows;
@@ -866,8 +926,12 @@ export default function RnsTab({ refreshKey, onSelect }) {
           }}
         >
           <span style={{ color: "#60a5fa", fontWeight: 700 }}>Weekend:</span>{" "}
-          the LSE publishes no RNS on Saturdays or Sundays. Showing older
-          announcements — the window has been widened past Friday's close.
+          the LSE publishes no RNS on Saturdays or Sundays.{" "}
+          {/* A window restored from sessionStorage overrides the widened weekend
+              default, so only claim the widening when it actually applies. */}
+          {hours >= 72
+            ? "Showing older announcements — the window has been widened past Friday's close."
+            : "Widen the window past Friday's close to see the most recent announcements."}
         </div>
       )}
 
@@ -883,12 +947,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
               onChange={(e) => setHours(Number(e.target.value))}
               style={{ background: "#0a0a0a", color: "#e5e5e5", border: "1px solid #2a2a2a", padding: "4px 8px", fontFamily: "monospace", fontSize: 11, borderRadius: 2 }}
             >
-              <option value={6}>6 hours</option>
-              <option value={12}>12 hours</option>
-              <option value={24}>24 hours</option>
-              <option value={48}>48 hours</option>
-              <option value={72}>72 hours</option>
-              <option value={168}>1 week</option>
+              {WINDOW_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
             </select>
           </div>
         );
@@ -902,14 +963,9 @@ export default function RnsTab({ refreshKey, onSelect }) {
               onChange={(e) => setMinMarketCap(Number(e.target.value))}
               style={{ background: "#0a0a0a", color: "#e5e5e5", border: "1px solid #2a2a2a", padding: "4px 8px", fontFamily: "monospace", fontSize: 11, borderRadius: 2 }}
             >
-              <option value={0}>Any</option>
-              <option value={10e6}>£10M+</option>
-              <option value={50e6}>£50M+</option>
-              <option value={100e6}>£100M+</option>
-              <option value={250e6}>£250M+</option>
-              <option value={1e9}>£1B+</option>
-              <option value={5e9}>£5B+</option>
-              <option value={10e9}>£10B+</option>
+              {CAP_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
             </select>
           </div>
         );

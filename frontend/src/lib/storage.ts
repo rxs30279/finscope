@@ -237,3 +237,41 @@ export const saveScreenerColumns = (prefs: ScreenerColumnPrefs): void => {
     window.localStorage.setItem(SCREENER_COLUMNS_KEY, JSON.stringify(prefs));
   } catch {}
 };
+
+// RNS feed filter state (window / AI-score floor / market-cap floor). Persisted
+// so a chosen set survives leaving /rns — e.g. to open a company — and coming
+// back, the same unmount-resets-to-defaults problem SCREENER_STATE_KEY solves.
+//
+// sessionStorage rather than localStorage, unlike everything above: these are
+// "what am I watching right now" controls on a live news feed, so they should
+// follow the tab and be gone by the next visit. A 1-week / AI-0 window silently
+// restored a fortnight later would misrepresent how much news there is.
+//
+// The free-text search box is deliberately not included — it's an ad-hoc lookup
+// rather than a setting, and restoring it would filter the feed down to one
+// ticker on return.
+export const RNS_STATE_KEY = "stock_screener_rns_state_v1";
+
+export interface RnsState {
+  hours: number;
+  minLlmScore: number;
+  minMarketCap: number;
+}
+
+export const loadRnsState = (): Partial<RnsState> => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(RNS_STATE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveRnsState = (state: RnsState): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(RNS_STATE_KEY, JSON.stringify(state));
+  } catch {}
+};
