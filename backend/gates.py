@@ -345,7 +345,8 @@ _MATRIX_SQL = """
     SELECT r.id AS rns_id, r.symbol, r.company_name, r.headline, r.url, r.category,
            r.published_at, r.llm_score, r.llm_sentiment,
            m.sector, m.industry, m.ftse_index,
-           t.market_cap
+           t.market_cap,
+           h.vet_verdict, h.vet_rationale
     FROM rns_announcements r
     LEFT JOIN company_metadata m ON m.symbol = r.symbol
     LEFT JOIN LATERAL (
@@ -353,6 +354,10 @@ _MATRIX_SQL = """
         WHERE company_symbol = r.symbol
         ORDER BY period_end_date DESC NULLS LAST LIMIT 1
     ) t ON TRUE
+    -- Display-only: the vet only ever runs on rows that already cleared every
+    -- gate AND the public flag's own floors (score/leverage/margin/market-cap),
+    -- so this is null for the vast majority of the wider /gates cohort.
+    LEFT JOIN high_impact_rns h ON h.rns_id = r.id
     WHERE {where}
     ORDER BY r.published_at DESC
 """
@@ -451,6 +456,7 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
             "category": r["category"], "published_at": r["published_at"],
             "llm_score": r["llm_score"], "llm_sentiment": r["llm_sentiment"],
             "in_universe": r.get("market_cap") is not None,
+            "vet_verdict": r.get("vet_verdict"), "vet_rationale": r.get("vet_rationale"),
             "gates": by_row.get(r["rns_id"], {}),
             "returns": _row_returns(r["symbol"], r["published_at"], r["ftse_index"], bench_get),
         })

@@ -43,6 +43,8 @@ interface MatrixRow {
   llm_score: number | null;
   llm_sentiment: string | null;
   in_universe: boolean;
+  vet_verdict: "include" | "caution" | "exclude" | null;
+  vet_rationale: string | null;
   gates: Record<string, GateCell>;
   returns: RowReturns;
 }
@@ -72,6 +74,13 @@ const GATE_LABEL: Record<string, string> = {
   sentiment: "sent",
   guidance: "guid",
   earnings_quality: "bank",
+};
+
+// Same palette as HighImpactRnsTab's VET_STYLE — keep in sync.
+const VET_STYLE: Record<string, { color: string; bg: string }> = {
+  include: { color: "#10b981", bg: "#0d2318" },
+  caution: { color: "#f59e0b", bg: "#2a1c00" },
+  exclude: { color: "#ef4444", bg: "#2a0d0d" },
 };
 
 function pct(x: number | null, digits = 1): string {
@@ -130,6 +139,33 @@ function GateMarker({ cell }: { cell: GateCell | undefined }) {
   if (cell.state === "block") return <span style={{ ...base, color: colors.red }} title={title}>{shadow ? "◐" : "●"}</span>;
   if (cell.state === "pass") return <span style={{ ...base, color: colors.green }} title={title}>▲</span>;
   return <span style={{ ...base, color: colors.textDim }} title={title}>○</span>;
+}
+
+// Display-only — the vet only ever runs on rows that already cleared every
+// gate AND the public flag's own floors, so most rows show a dim dash here.
+function VetPill({ verdict, rationale }: { verdict: MatrixRow["vet_verdict"]; rationale: string | null }) {
+  if (!verdict) return <span style={{ color: colors.textDim }}>·</span>;
+  const style = VET_STYLE[verdict];
+  return (
+    <span
+      title={rationale ?? verdict}
+      style={{
+        fontSize: 9,
+        fontWeight: 700,
+        color: style.color,
+        background: style.bg,
+        border: `1px solid ${style.color}55`,
+        borderRadius: 2,
+        padding: "1px 5px",
+        letterSpacing: 0.3,
+        whiteSpace: "nowrap",
+        textTransform: "capitalize",
+        cursor: rationale ? "help" : "default",
+      }}
+    >
+      {verdict}
+    </span>
+  );
 }
 
 function ReturnCell({ value, status }: { value: number | null; status: ReturnStatus }) {
@@ -302,6 +338,9 @@ export default function GatesClient() {
                     {GATE_LABEL[n] ?? n}
                   </Th>
                 ))}
+                <Th align="center" title="AI vet verdict — only set for rows that already cleared every gate and the public High Impact flag's own floors">
+                  vet
+                </Th>
                 <Th align="right">gap</Th>
                 <Th align="right">1d</Th>
                 <Th align="right">1w</Th>
@@ -342,6 +381,9 @@ export default function GatesClient() {
                       <GateMarker cell={row.gates[n]} />
                     </Td>
                   ))}
+                  <Td align="center">
+                    <VetPill verdict={row.vet_verdict} rationale={row.vet_rationale} />
+                  </Td>
                   <Td align="right">
                     <span style={{ color: colors.textMuted }}>
                       {row.returns.gap === null ? "—" : pctPoints(row.returns.gap)}
@@ -359,7 +401,7 @@ export default function GatesClient() {
           </table>
         )}
         <div style={{ marginTop: 14, color: colors.textDim, fontSize: 11, fontFamily: "monospace" }}>
-          ● block &nbsp; ○ n/a &nbsp; ▲ pass &nbsp; ◐ block (shadow — did not block) &nbsp; oou = out of universe
+          ● block &nbsp; ○ n/a &nbsp; ▲ pass &nbsp; ◐ block (shadow — did not block) &nbsp; oou = out of universe &nbsp; vet = AI vet verdict (display-only, not a gate)
         </div>
       </div>
     </div>

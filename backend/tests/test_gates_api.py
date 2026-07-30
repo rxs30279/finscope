@@ -102,3 +102,23 @@ def test_cohort_all_keeps_everything(client):
     body = r.json()
     assert [row["rns_id"] for row in body["rows"]] == [1]
     assert body["rows"][0]["in_universe"] is False
+
+
+def test_vet_verdict_passed_through_when_present_null_otherwise(client):
+    # Display-only: row 1 already went through the vet (LEFT JOIN high_impact_rns
+    # hit); row 2 never cleared the public flag's floors, so it's null.
+    rows = [
+        {**_matrix_row(1), "vet_verdict": "caution", "vet_rationale": "Guidance reiterated, not raised."},
+        _matrix_row(2),
+    ]
+    evals = [
+        {"rns_id": i, "gate": "sentiment", "state": "pass", "reason": None, "evidence": None, "mode": "armed"}
+        for i in (1, 2)
+    ]
+    with patch.object(gates, "_q", side_effect=_fake_q(rows, evals)):
+        r = client.get("/api/gates?show_all=true")
+    by_id = {row["rns_id"]: row for row in r.json()["rows"]}
+    assert by_id[1]["vet_verdict"] == "caution"
+    assert by_id[1]["vet_rationale"] == "Guidance reiterated, not raised."
+    assert by_id[2]["vet_verdict"] is None
+    assert by_id[2]["vet_rationale"] is None
