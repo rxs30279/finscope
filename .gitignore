@@ -66,3 +66,11 @@ backend/research_images/
 # Chart output from the on-demand analysis scripts in backend/analysis — the
 # script is the source, the PNG is a re-runnable artifact of one day's data
 backend/analysis/*.png
+
+# Article drafts — the published post lives in the DB (uploaded via the admin
+# API), so the markdown source here is a scratch copy, not the source of truth
+docs/drafts/
+
+# Local-only Playwright helpers — frontend/e2e/ is production monitoring, so
+# anything suffixed .local.ts is a throwaway harness that shouldn't run in CI
+frontend/e2e/*.local.ts
