@@ -2203,6 +2203,12 @@ def heatmap(response: Response, ftse_index: Optional[str] = None, live: bool = F
     if cached and now - cached[1] < ttl:
         return cached[0]
 
+    # Anchor the window below to the latest *stored* price date rather than
+    # CURRENT_DATE, so a missed cron or a long weekend can't erode it (same
+    # reasoning as /api/trending in prices.py).
+    latest_rows = query("SELECT MAX(date) AS d FROM price_history")
+    latest_date = latest_rows[0]["d"] if latest_rows else None
+
     wheres = ["m.sector IS NOT NULL", "t.market_cap IS NOT NULL"]
     params: list = []
     if ftse_index:
@@ -2214,12 +2220,25 @@ def heatmap(response: Response, ftse_index: Optional[str] = None, live: bool = F
             wheres.append("m.ftse_index = %s")
             params.append(ftse_index)
 
+    # The date bound is what makes this fast. Without it Postgres numbers every
+    # row of price_history (~960k, ~1,280/symbol) just to keep the newest 2 per
+    # symbol — the same shape that measured 19s vs 159ms bounded on /api/trending
+    # (see prices.py). This query needs only the latest close and the one before
+    # it, so 30 calendar days is ~21 trading sessions of headroom: enough to
+    # survive the Christmas break or a thinly-traded name that skips a few days.
+    # A symbol with no second bar inside the window renders pct_change=None (the
+    # tile still sizes by market cap) rather than colouring itself from a months-
+    # old return, which is the better failure anyway.
+    bound = "WHERE p.date >= %s::date - INTERVAL '30 days'" if latest_date else ""
+    if latest_date:
+        params.insert(0, latest_date)
     sql = f"""
         WITH recent AS (
             SELECT p.symbol, p.close,
                    ROW_NUMBER() OVER (PARTITION BY p.symbol ORDER BY p.date DESC) AS rn
             FROM price_history p
             JOIN company_metadata m ON m.symbol = p.symbol AND m.is_active
+            {bound}
         )
         SELECT m.symbol, m.name, m.sector, t.market_cap, r.close, r.rn
         FROM recent r

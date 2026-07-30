@@ -1113,6 +1113,34 @@ def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -
     return result
 
 
+def _rank_pending_locked(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -> dict:
+    """_rank_pending under the pipeline lock — the entry point for POST /rank.
+
+    The cron entry points (run_rns.py, refresh_rns.py) already take this lock,
+    for the reason spelled out in run_rns.main: _rank_pending selects on
+    `llm_processed_at IS NULL` with no per-row claim, so anything ranking
+    concurrently re-ranks whatever the other run hasn't written back yet —
+    duplicate DeepSeek calls that pay twice for identical scores. The HTTP route
+    ran the same function outside the lock, which made a manual rank during the
+    07:00 batch (exactly when someone is most likely to reach for it) the one
+    case the lock was built to prevent.
+
+    Losing the race is a normal outcome, not an error: the in-flight run is
+    already ranking these rows, so there is nothing for this call to do.
+    """
+    # Lazy: refresh_rns imports this module at module level, so importing it up
+    # top would be circular. It owns the key so both entry points share one
+    # definition (see its comment) — don't re-declare the constant here.
+    from db import advisory_lock
+    from refresh_rns import RNS_PIPELINE_LOCK_KEY
+
+    with advisory_lock(RNS_PIPELINE_LOCK_KEY) as acquired:
+        if not acquired:
+            print("[rns_llm] pipeline run already in flight — skipping manual rank")
+            return {"candidates": 0, "ranked": 0, "errors": 0, "skipped": "locked"}
+        return _rank_pending(limit, tiers, hours)
+
+
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
 
@@ -1122,8 +1150,13 @@ def rank(
     limit: int = Query(50, ge=1, le=500),
     hours: int = Query(72, ge=1, le=168),
 ):
-    """Kick off LLM ranking for pending tier A/B rows."""
-    background_tasks.add_task(_rank_pending, limit, ("A", "B"), hours)
+    """Kick off LLM ranking for pending tier A/B rows.
+
+    The lock is taken inside the background task, not here: this handler returns
+    before the task runs, so a lock held across the response would be released
+    the moment the work started.
+    """
+    background_tasks.add_task(_rank_pending_locked, limit, ("A", "B"), hours)
     return {"status": "ranking started", "limit": limit, "hours": hours}
 
 

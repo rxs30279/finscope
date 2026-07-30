@@ -121,3 +121,79 @@ def test_lock_fails_open_when_unreachable(monkeypatch):
     monkeypatch.setattr(db.psycopg2, "connect", _boom)
     with db.advisory_lock(123) as acquired:
         assert acquired is True
+
+
+# ── The HTTP route ────────────────────────────────────────────────────────────
+# POST /api/rns/rank used to call _rank_pending directly, outside the lock the
+# crons take — so a manual rank during the 07:00 batch hit exactly the case the
+# lock exists to prevent, and paid DeepSeek twice for identical scores.
+
+def _patch_lock(monkeypatch, acquired: bool, seen: list):
+    """_rank_pending_locked imports advisory_lock lazily, so patch it on db."""
+    def _fake(key):
+        seen.append(key)
+        @contextmanager
+        def _cm():
+            yield acquired
+        return _cm()
+    monkeypatch.setattr(db, "advisory_lock", _fake)
+
+
+def test_http_rank_skips_when_lock_is_held(monkeypatch):
+    import rns_llm
+
+    ranked = []
+    monkeypatch.setattr(rns_llm, "_rank_pending", lambda *a, **k: ranked.append(a))
+
+    seen = []
+    _patch_lock(monkeypatch, False, seen)
+    result = rns_llm._rank_pending_locked(limit=5, hours=12)
+
+    assert ranked == [], "manual rank ran while a cron pipeline held the lock"
+    assert result["ranked"] == 0
+    assert result["skipped"] == "locked"
+
+
+def test_http_rank_runs_when_lock_is_free(monkeypatch):
+    import rns_llm
+
+    calls = []
+    monkeypatch.setattr(
+        rns_llm, "_rank_pending",
+        lambda limit, tiers, hours: calls.append((limit, tiers, hours)) or {"ranked": 1},
+    )
+
+    seen = []
+    _patch_lock(monkeypatch, True, seen)
+    result = rns_llm._rank_pending_locked(limit=7, hours=12)
+
+    assert calls == [(7, ("A", "B"), 12)], "args must reach _rank_pending unchanged"
+    assert result == {"ranked": 1}
+
+
+def test_http_rank_shares_the_cron_lock_key(monkeypatch):
+    """Same drift hazard as test_uses_the_shared_lock_key: a separate key here
+    would mean the route and the crons lock against nothing."""
+    import rns_llm
+
+    monkeypatch.setattr(rns_llm, "_rank_pending", lambda *a, **k: {})
+    seen = []
+    _patch_lock(monkeypatch, True, seen)
+    rns_llm._rank_pending_locked()
+
+    assert seen == [RNS_PIPELINE_LOCK_KEY]
+
+
+def test_http_rank_route_is_wired_to_the_locked_wrapper(monkeypatch):
+    """The bug was a one-word call-site difference, so pin the call site: the
+    background task must be the locked wrapper, not _rank_pending itself."""
+    import rns_llm
+
+    class _BG:
+        def __init__(self): self.tasks = []
+        def add_task(self, fn, *args): self.tasks.append((fn, args))
+
+    bg = _BG()
+    rns_llm.rank(background_tasks=bg, limit=50, hours=72)
+
+    assert [fn for fn, _ in bg.tasks] == [rns_llm._rank_pending_locked]
