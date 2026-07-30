@@ -320,13 +320,19 @@ export default function GatesClient() {
                     <span style={{ color: colors.textMuted }}>{row.headline}</span>
                     <span style={{ color: colors.textDim, fontSize: 10, marginLeft: 6 }}>{row.category ?? ""}</span>
                   </Td>
-                  <Td align="right">{row.llm_score ?? "—"}</Td>
+                  <Td align="right">
+                    <span style={{ color: colors.text }}>{row.llm_score ?? "—"}</span>
+                  </Td>
                   {gateNames.map((n) => (
                     <Td key={n} align="center">
                       <GateMarker cell={row.gates[n]} />
                     </Td>
                   ))}
-                  <Td align="right">{row.returns.gap === null ? "—" : pctPoints(row.returns.gap)}</Td>
+                  <Td align="right">
+                    <span style={{ color: colors.textMuted }}>
+                      {row.returns.gap === null ? "—" : pctPoints(row.returns.gap)}
+                    </span>
+                  </Td>
                   <Td align="right">
                     <ReturnCell value={row.returns.excess_1d} status={row.returns.status_1d} />
                   </Td>
