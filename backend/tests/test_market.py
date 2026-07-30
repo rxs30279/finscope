@@ -174,6 +174,46 @@ def test_cross_asset_items_have_value_and_change(client):
         assert "pct_change" in item
 
 
+# ── day-change helper tests ───────────────────────────────────────────────────
+def _frame(**cols):
+    """Price frame over 4 consecutive sessions; None marks a missing bar."""
+    idx = pd.to_datetime(["2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30"])
+    return pd.DataFrame(cols, index=idx)
+
+
+def test_pct_change_today_normal_series():
+    import market
+    prices = _frame(**{"^FTSE": [100.0, 101.0, 100.0, 102.0]})
+    assert market._pct_change_today(prices, "^FTSE") == pytest.approx(0.02)
+
+
+def test_pct_change_today_none_when_previous_bar_missing():
+    import market
+    # The ^FTAS July-2026 outage: Yahoo kept quoting the index but stopped printing
+    # daily bars, so the last two *valid* points straddled a 3-session gap. Pairing
+    # them rendered a multi-session return as "today's move" (+2.6% vs a real
+    # -0.06%). A gap must yield None, not a plausible-looking wrong number.
+    prices = _frame(**{"^FTAS": [100.0, None, None, 102.0]})
+    assert market._pct_change_today(prices, "^FTAS") is None
+
+
+def test_pct_change_today_none_when_todays_bar_missing():
+    import market
+    # Stale feed: the ticker stopped printing entirely. Its last two bars are
+    # adjacent, but they are not the current session — that is yesterday's move.
+    prices = _frame(**{"SHEL.L": [100.0, 101.0, 102.0, None]})
+    assert market._pct_change_today(prices, "SHEL.L") is None
+
+
+def test_basket_pct_change_skips_gappy_members():
+    import market
+    # One healthy member (+2%), one gappy member that must not contribute.
+    prices = _frame(
+        **{"AAA.L": [100.0, 101.0, 100.0, 102.0], "BBB.L": [100.0, None, None, 150.0]}
+    )
+    assert market._basket_pct_change(prices, ["AAA.L", "BBB.L"]) == pytest.approx(0.02)
+
+
 # ── gilt yield helper tests ───────────────────────────────────────────────────
 def test_value_at_or_before_exact_hit():
     import market
