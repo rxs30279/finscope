@@ -17,6 +17,22 @@ Scope decisions, both carried forward from the previous two plans:
 Three rows have now shown a 25-30pt spread on the same announcement; nothing
 here adds a dependence on that number.
 
+**A fourth, cleaner data point for that spread, found 2026-07-30.** `JNEO`
+published its 2026-07-28 trading update twice: the original at 06:00
+(`9689848`) and an amendment at 13:45 (`9691776`) whose only substantive change
+is the words "strong H1 2025" corrected to "strong H1 2026". Every figure is
+identical and the amendment says so ("All other details remain unchanged"). The
+two scored **75 and 55**. This is stronger evidence than the earlier three
+because there is no content difference to argue about — a 20-point swing on one
+word, 7h45m apart, and the 75 is the one that reached the showcase.
+
+Read it as a bound on `llm_score`, not as a fact about amendments. Pairing all
+four detectable corrections against their own originals gives mean −6.2 with
+`JDW` scoring **identically** (35/35) on near-identical text, so there is no
+systematic correction penalty — the instability is per-row, not per-type. The
+amendment-linking question that measurement opened is its own small plan:
+`docs/rns-amendment-supersedes-plan.md`.
+
 ---
 
 ## 1. Why now — three measurements
