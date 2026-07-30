@@ -31,6 +31,7 @@ from dividends import router as dividends_router
 from shorts import router as shorts_router
 from landing_story import router as landing_story_router
 from email_events import router as email_events_router, recent_summary as _email_event_summary
+from email_monitor import router as email_monitor_router
 from email_rns_digest import main as run_digest
 from sectors import to_icb, to_gics
 from admin_auth import require_admin_token
@@ -83,6 +84,7 @@ app.include_router(dividends_router)
 app.include_router(shorts_router)
 app.include_router(landing_story_router)
 app.include_router(email_events_router)
+app.include_router(email_monitor_router)
 
 # DB pool + helpers live in db.py (one process-wide pool, shared by every
 # router — see item #6 of the 2026-07-12 review). Re-exported here so existing

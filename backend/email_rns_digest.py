@@ -504,6 +504,17 @@ def _render_section(bucket: str, rows: list[dict], today_uk: date) -> str:
     return heading + body
 
 
+# SES replaces this literal string with the open-tracking pixel. SES's default
+# position is the very bottom of the body, which a clipped preview (Gmail's
+# "message truncated" cutoff on a long row list) never reaches — placed here,
+# just inside <body>, instead. _render_html returns an f-string, so writing
+# the placeholder inline would emit single braces (Python's own escaping) and
+# SES would silently ignore it; going through a module constant sidesteps
+# that trap. Exactly one placeholder per message — a second one is a SES
+# 400 BadRequestException, not just wasted.
+_OPEN_TRACKER = "{{ses:openTracker}}"
+
+
 def _render_html(rows: list[dict], total_all: int = 0, sub_footer_html: str = "") -> str:
     now_uk = datetime.now(_UK_TZ)
     date_s = now_uk.strftime("%A %d %B %Y")
@@ -549,6 +560,7 @@ def _render_html(rows: list[dict], total_all: int = 0, sub_footer_html: str = ""
 </style>
 </head>
 <body style="margin:0;padding:0;background:#fafafa;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;">
+  {_OPEN_TRACKER}
   <div class="digest-wrap" style="max-width:920px;margin:0 auto;padding:24px;">
     <div style="border-bottom:2px solid #f97316;padding-bottom:12px;margin-bottom:16px;">
       <h1 style="margin:0;font-size:18px;font-family:monospace;color:#f97316;letter-spacing:2px;text-transform:uppercase;">Alpha Move AI · RNS Morning Digest</h1>
@@ -617,13 +629,20 @@ def _render_text(rows: list[dict], total_all: int = 0,
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def _sub_footer(unsub_url: str, manage_url: str) -> str:
-    """Per-recipient footer with subscribe-management + unsubscribe links."""
+    """Per-recipient footer with subscribe-management + unsubscribe links.
+
+    `ses:no-track` exempts both links from SES click-tracking's link
+    rewriting. It's required on the unsubscribe link: `_render_text()`'s
+    unsubscribe URL and the `List-Unsubscribe` header both carry this exact
+    URL (Gmail cross-checks the visible unsubscribe path against it), and
+    click tracking would rewrite only the HTML copy, breaking that match.
+    """
     return (
         '<div style="margin-top:8px;color:#999;font-size:11px;'
         'font-family:monospace;text-align:center;">'
-        f'<a href="{html.escape(manage_url)}" style="color:#999;">Subscribe</a>'
+        f'<a href="{html.escape(manage_url)}" style="color:#999;" ses:no-track>Subscribe</a>'
         ' &middot; '
-        f'<a href="{html.escape(unsub_url)}" style="color:#999;">Unsubscribe</a>'
+        f'<a href="{html.escape(unsub_url)}" style="color:#999;" ses:no-track>Unsubscribe</a>'
         '</div>'
     )
 

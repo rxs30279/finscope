@@ -163,6 +163,32 @@ def test_flattens_event(client, inserted):
     assert row["occurred_at"] > row["email_created_at"]
 
 
+def test_click_detail_strips_pii(client, inserted):
+    """Resend's click sub-object carries ipAddress + userAgent — personal data
+    under UK GDPR that nothing in the app reads. Keep only link + timestamp."""
+    payload = {
+        "type": "email.clicked",
+        "created_at": "2026-07-30T09:14:02.000Z",
+        "data": {
+            "email_id": "abc",
+            "to": ["someone@example.com"],
+            "click": {
+                "link": "https://alphamoveai.co.uk/unsubscribe",
+                "timestamp": "2026-07-30T09:14:00.000Z",
+                "ipAddress": "203.0.113.5",
+                "userAgent": "Mozilla/5.0",
+            },
+        },
+    }
+    _post(client, payload)
+    assert inserted[0]["detail"] == {
+        "click": {
+            "link": "https://alphamoveai.co.uk/unsubscribe",
+            "timestamp": "2026-07-30T09:14:00.000Z",
+        }
+    }
+
+
 def test_keeps_bounce_detail(client, inserted):
     payload = {
         "type": "email.bounced",

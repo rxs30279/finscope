@@ -482,8 +482,17 @@ function DeliverabilityCard({
 
   return (
     <div style={{ ...card, borderColor: tone, borderLeft: `3px solid ${tone}` }}>
-      <h2 style={sectionTitle}>Deliverability</h2>
-      <div style={{ color: colors.text, fontFamily: "monospace", fontSize: 14, fontWeight: 700 }}>{headline}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h2 style={{ ...sectionTitle, margin: 0 }}>Deliverability</h2>
+        <a
+          href="/emails"
+          style={{ color: colors.textMuted, fontFamily: "monospace", fontSize: 11, textDecoration: "none" }}
+          title="Per-message delivery monitor"
+        >
+          View messages →
+        </a>
+      </div>
+      <div style={{ color: colors.text, fontFamily: "monospace", fontSize: 14, fontWeight: 700, marginTop: 14 }}>{headline}</div>
       {sub && <div style={{ color: colors.textMuted, fontFamily: "monospace", fontSize: 12, marginTop: 6 }}>{sub}</div>}
 
       {providers.length > 0 && (

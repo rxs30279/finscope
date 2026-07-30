@@ -276,6 +276,37 @@ export const saveRnsState = (state: RnsState): void => {
   } catch {}
 };
 
+// /emails admin page filter state (days window / status / provider). Same
+// sessionStorage-not-localStorage call as RNS_STATE_KEY above and the same
+// reasoning: "delayed, last 24h" restored a week later would misrepresent
+// what's currently wrong. The search box is excluded for the same reason
+// RNS_STATE_KEY excludes its search box — an ad-hoc lookup, not a setting.
+export const EMAILS_STATE_KEY = "stock_screener_emails_state_v1";
+
+export interface EmailsFilterState {
+  days: number;
+  status: string; // "" = all
+  provider: string; // "" = all
+}
+
+export const loadEmailsState = (): Partial<EmailsFilterState> => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(EMAILS_STATE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveEmailsState = (state: EmailsFilterState): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(EMAILS_STATE_KEY, JSON.stringify(state));
+  } catch {}
+};
+
 // Scroll offset per list page, so leaving a long list and coming back doesn't
 // dump the user at the top again. sessionStorage because a remembered position
 // is only meaningful while the list it indexes into is still the one you were

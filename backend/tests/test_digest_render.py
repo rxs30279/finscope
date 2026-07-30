@@ -215,6 +215,21 @@ def test_render_html_full_document():
     assert "/company/AZN" in html and "/company/XYZ" in html
 
 
+def test_render_html_contains_exactly_one_open_tracker_placeholder():
+    """Must be the literal double-brace string SES replaces with its pixel —
+    a single-brace version (the f-string escaping trap) is silently ignored,
+    and a second placeholder is a SES 400 BadRequestException."""
+    html = d._render_html([_row()], total_all=1)
+    assert html.count("{{ses:openTracker}}") == 1
+
+
+def test_sub_footer_marks_both_links_no_track():
+    footer = d._sub_footer("https://x/api/unsubscribe?email=a%40b.com&t=abc", "https://x/subscribe")
+    assert footer.count("ses:no-track") == 2
+    assert 'href="https://x/subscribe" style="color:#999;" ses:no-track>Subscribe<' in footer
+    assert 'href="https://x/api/unsubscribe?email=a%40b.com&amp;t=abc" style="color:#999;" ses:no-track>Unsubscribe<' in footer
+
+
 # ── _render_text (plain-text alternative) ──────────────────────────────────────
 
 def test_render_text_contains_ticker_headline_and_unsub_url():

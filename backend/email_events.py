@@ -25,9 +25,11 @@ Env:
                            when you create the endpoint. Without it the route
                            fails closed (503) rather than trusting the caller.
 
-Retention: ~150 rows/day at current list size. If open/click noise ever makes
-that inconvenient, prune with a dated DELETE — nothing reads rows older than the
-/status window.
+Retention: ~150 rows/day at current list size. No pruning policy exists yet —
+`/emails` (email_monitor.py) reads a user-selectable window (up to 30 days
+today), so a dated DELETE keyed to the /status window would silently remove
+data that page still serves. Any future pruning needs to key off the widest
+window either surface can request.
 """
 import base64
 import hashlib
@@ -54,6 +56,12 @@ _TOLERANCE_SECONDS = 5 * 60
 # already columns (to/subject/created_at) or noise, so `detail` stays small and
 # queryable instead of being a dump of the whole body.
 _DETAIL_KEYS = ("bounce", "failed", "click", "complaint")
+
+# Resend's click sub-object carries ipAddress + userAgent. Keep the link, drop
+# the personal data — email_events has no retention policy, so anything stored
+# here is stored indefinitely, and nothing downstream ever needs to know more
+# than which link was clicked.
+_CLICK_KEEP = ("link", "timestamp")
 
 
 # ── Signature verification (Standard Webhooks / Svix, stdlib only) ────────────
@@ -151,6 +159,8 @@ def _row(payload: dict, svix_id: str) -> dict | None:
     domain = recipient.split("@")[-1] if recipient and "@" in recipient else None
 
     detail = {k: data[k] for k in _DETAIL_KEYS if k in data}
+    if "click" in detail and isinstance(detail["click"], dict):
+        detail["click"] = {k: v for k, v in detail["click"].items() if k in _CLICK_KEEP}
 
     return {
         "event_id": svix_id,
