@@ -4,9 +4,11 @@ These exercise the render path with synthetic rows only — no DB, no Resend, no
 network. They guard the digest that the user trades off: a render regression
 (broken links, dropped rows, unescaped markup) would ship silently otherwise.
 """
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import email_rns_digest as d
+
+_TODAY = date(2026, 7, 8)  # matches _row()'s default published_at (UK date)
 
 
 def _row(**over) -> dict:
@@ -91,6 +93,16 @@ def test_fmt_uk_time_naive_assumed_utc():
     assert d._fmt_uk_time(datetime(2026, 1, 8, 6, 30)) == "06:30"
 
 
+def test_fmt_uk_time_same_day_no_date_prefix():
+    assert d._fmt_uk_time(datetime(2026, 7, 8, 6, 30, tzinfo=timezone.utc), date(2026, 7, 8)) == "07:30"
+
+
+def test_fmt_uk_time_spillover_day_gets_date_prefix():
+    # Rolling-24h window catches a row from the UK evening before "today" —
+    # bare HH:MM would misleadingly read as this morning.
+    assert d._fmt_uk_time(datetime(2026, 7, 7, 21, 30, tzinfo=timezone.utc), date(2026, 7, 8)) == "07 Jul 22:30"
+
+
 # ── _sentiment ─────────────────────────────────────────────────────────────────
 
 def test_sentiment_category_override_wins():
@@ -135,7 +147,7 @@ def test_esc_escapes_and_dashes_none():
 # ── _render_row / _render_section ──────────────────────────────────────────────
 
 def test_render_row_contains_company_headline_and_link():
-    html = d._render_row(_row())
+    html = d._render_row(_row(), _TODAY)
     assert "Tesco PLC" in html
     assert "Interim results" in html
     assert "https://example.com/rns/1" in html
@@ -144,25 +156,37 @@ def test_render_row_contains_company_headline_and_link():
 
 
 def test_render_row_out_of_universe_links_to_yahoo():
-    html = d._render_row(_row(symbol=None))
+    html = d._render_row(_row(symbol=None), _TODAY)
     assert "finance.yahoo.com/quote/TSCO.L" in html
     assert "/company/TSCO" not in html
 
 
 def test_render_row_escapes_hostile_markup_in_name():
-    html = d._render_row(_row(company_name="A & B <script>", headline="H&M deal"))
+    html = d._render_row(_row(company_name="A & B <script>", headline="H&M deal"), _TODAY)
     assert "&amp;" in html and "&lt;script&gt;" in html
     assert "<script>" not in html             # raw tag never leaks through
 
 
+def test_render_row_spillover_day_shows_date_prefix():
+    # A row published the UK evening before "today" (rolling-24h window) must
+    # carry its date, not just HH:MM, or it reads as this morning.
+    html = d._render_row(_row(published_at=datetime(2026, 7, 7, 21, 30, tzinfo=timezone.utc)), _TODAY)
+    assert "07 Jul 22:30" in html
+
+
+def test_render_row_same_day_omits_date_prefix():
+    html = d._render_row(_row(), _TODAY)
+    assert "07 Jul" not in html and "08 Jul" not in html
+
+
 def test_render_section_empty_shows_no_items():
-    html = d._render_section("large", [])
+    html = d._render_section("large", [], _TODAY)
     assert "no items" in html
 
 
 def test_render_section_lists_every_row():
     rows = [_row(id=1, company_name="Alpha PLC"), _row(id=2, company_name="Beta PLC")]
-    html = d._render_section("mid", rows)
+    html = d._render_section("mid", rows, _TODAY)
     assert "Alpha PLC" in html and "Beta PLC" in html
     assert "2 items" in html                  # count in the heading bar
 

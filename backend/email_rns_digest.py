@@ -36,7 +36,7 @@ sys.path.insert(0, _SCRIPT_DIR)
 import html
 import time
 import urllib.parse
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -339,20 +339,27 @@ def _esc(v) -> str:
     return html.escape(str(v)) if v is not None else "—"
 
 
-def _fmt_uk_time(dt: datetime) -> str:
+def _fmt_uk_time(dt: datetime, today_uk: date | None = None) -> str:
+    """HH:MM in UK local time. If `today_uk` is given and the row falls on a
+    different UK date (the rolling-24h window spills into yesterday evening),
+    prefix with the date so the digest doesn't imply everything is from today."""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(_UK_TZ).strftime("%H:%M")
+    dt_uk = dt.astimezone(_UK_TZ)
+    time_s = dt_uk.strftime("%H:%M")
+    if today_uk is not None and dt_uk.date() != today_uk:
+        return f"{dt_uk.strftime('%d %b')} {time_s}"
+    return time_s
 
 
-def _render_row(r: dict) -> str:
+def _render_row(r: dict, today_uk: date) -> str:
     """Renders BOTH the desktop table row AND the mobile card for one item.
     Each is wrapped in a class that the media query toggles between
     display:none and display:table-row / display:block."""
     action   = r.get("llm_action") or ""
     action_c = _ACTION_COLOR.get(action, "#888")
     category = _CATEGORY_LABELS.get(r.get("category"), r.get("category") or "—")
-    time_s   = _fmt_uk_time(r['published_at'])
+    time_s   = _fmt_uk_time(r['published_at'], today_uk)
 
     # ── shared snippets ──
     thesis_block = ""
@@ -449,7 +456,7 @@ def _render_row(r: dict) -> str:
     return desktop + mobile
 
 
-def _render_section(bucket: str, rows: list[dict]) -> str:
+def _render_section(bucket: str, rows: list[dict], today_uk: date) -> str:
     """Render one cap-bucket section: a heading bar followed by a table of rows
     (or a muted 'no items' note if the bucket is empty)."""
     meta = _CAP_META[bucket]
@@ -490,7 +497,7 @@ def _render_section(bucket: str, rows: list[dict]) -> str:
             </tr>
           </thead>
           <tbody>
-            {''.join(_render_row(r) for r in rows)}
+            {''.join(_render_row(r, today_uk) for r in rows)}
           </tbody>
         </table>"""
 
@@ -510,7 +517,7 @@ def _render_html(rows: list[dict], total_all: int = 0, sub_footer_html: str = ""
         buckets: dict[str, list[dict]] = {b: [] for b in _CAP_BUCKETS}
         for r in rows:
             buckets[_cap_bucket(r)].append(r)
-        body = "".join(_render_section(b, buckets[b]) for b in _CAP_BUCKETS)
+        body = "".join(_render_section(b, buckets[b], now_uk.date()) for b in _CAP_BUCKETS)
 
     n_pos = sum(1 for r in rows if _sentiment(r) == "positive")
     n_neg = sum(1 for r in rows if _sentiment(r) == "negative")
@@ -583,7 +590,7 @@ def _render_text(rows: list[dict], total_all: int = 0,
         lines.append("No significant items today.")
     else:
         for r in rows:
-            time_s = _fmt_uk_time(r["published_at"])
+            time_s = _fmt_uk_time(r["published_at"], now_uk.date())
             category = _CATEGORY_LABELS.get(r.get("category"), r.get("category") or "-")
             ai_score = r.get("llm_score")
             ai_s = str(ai_score) if ai_score is not None else "-"
