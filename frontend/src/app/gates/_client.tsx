@@ -5,6 +5,7 @@ import { API, adminHeaders } from "@/lib/api";
 import { colors } from "@/lib/theme";
 import { useIsAdmin } from "@/hooks/useAdmin";
 import PageHeader from "@/components/layout/PageHeader";
+import { companyHref } from "@/lib/company";
 
 // ── Response shape (mirrors GET /api/gates in backend/gates.py) ────────────────
 type GateState = "pass" | "block" | "n/a";
@@ -36,6 +37,7 @@ interface MatrixRow {
   symbol: string;
   company_name: string | null;
   headline: string;
+  url: string;
   category: string | null;
   published_at: string;
   llm_score: number | null;
@@ -309,7 +311,12 @@ export default function GatesClient() {
               {data.rows.map((row) => (
                 <tr key={row.rns_id} style={{ borderBottom: `1px solid ${colors.borderSubtle}` }}>
                   <Td>
-                    <span style={{ color: colors.text, fontWeight: 700 }}>{row.symbol}</span>
+                    <a
+                      href={companyHref(row.symbol)}
+                      style={{ color: colors.text, fontWeight: 700, textDecoration: "none" }}
+                    >
+                      {row.symbol}
+                    </a>
                     {!row.in_universe && (
                       <span style={{ color: colors.textDim, fontSize: 10, marginLeft: 4 }} title="out of universe">
                         oou
@@ -317,7 +324,14 @@ export default function GatesClient() {
                     )}
                   </Td>
                   <Td>
-                    <span style={{ color: colors.textMuted }}>{row.headline}</span>
+                    <a
+                      href={row.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: colors.textMuted, textDecoration: "none" }}
+                    >
+                      {row.headline}
+                    </a>
                     <span style={{ color: colors.textDim, fontSize: 10, marginLeft: 6 }}>{row.category ?? ""}</span>
                   </Td>
                   <Td align="right">

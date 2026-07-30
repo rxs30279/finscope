@@ -342,7 +342,7 @@ def _row_returns(symbol: str, published_at, ftse_index: Optional[str], bench_get
 
 # ── /gates page endpoint ────────────────────────────────────────────────────────
 _MATRIX_SQL = """
-    SELECT r.id AS rns_id, r.symbol, r.company_name, r.headline, r.category,
+    SELECT r.id AS rns_id, r.symbol, r.company_name, r.headline, r.url, r.category,
            r.published_at, r.llm_score, r.llm_sentiment,
            m.sector, m.industry, m.ftse_index,
            t.market_cap
@@ -447,7 +447,7 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
     for r in rows:
         out_rows.append({
             "rns_id": r["rns_id"], "symbol": r["symbol"],
-            "company_name": r["company_name"], "headline": r["headline"],
+            "company_name": r["company_name"], "headline": r["headline"], "url": r["url"],
             "category": r["category"], "published_at": r["published_at"],
             "llm_score": r["llm_score"], "llm_sentiment": r["llm_sentiment"],
             "in_universe": r.get("market_cap") is not None,

@@ -15,7 +15,7 @@ from main import app
 def _matrix_row(rns_id, symbol="ABC.L", category="final_results", market_cap=200_000_000):
     return {
         "rns_id": rns_id, "symbol": symbol, "company_name": "Abc plc",
-        "headline": "H1 results", "category": category,
+        "headline": "H1 results", "url": f"https://example.com/rns/{rns_id}", "category": category,
         "published_at": datetime(2026, 7, 29, 7, 0, tzinfo=timezone.utc),
         "llm_score": 78, "llm_sentiment": "positive",
         "sector": "Industrials", "industry": "x", "ftse_index": "FTSE 250",
