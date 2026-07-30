@@ -9,7 +9,8 @@ This is not a new architecture. It is the one `showcase.py:359-365` already
 argues for, finished: *"The structured field is far steadier, so the decision
 is made here in Python, deterministically and testably."* The LLM extracts
 facts; Python adjudicates them. Today two gates follow that pattern and one
-judgement (the growth-arithmetic vet) does not.
+judgement (the growth-arithmetic vet) does not — and that one is now measured
+wrong in 4 of its last 5 numeric attempts (§1, *The case that started this*).
 
 Scope decisions, both carried forward from the previous two plans:
 `HIGH_IMPACT_MIN_LLM_SCORE` **stays at 75**, and `llm_score` is **not** tuned.
@@ -43,10 +44,11 @@ of them ever reached it. And 68 of 75 `guidance_checks` entries batch-wide were
 three days; the first morning batch since `d0cf0bf` has not run. So the newest
 gate has never been observed in production either.
 
-### The case that started this
+### The case that started this — corrected 2026-07-30
 
-`SRT.L` and `CAPD.L` are both on the public showcase right now, both carrying
-`vet_verdict = exclude` at `high` confidence:
+This plan was originally motivated by `SRT.L` and `CAPD.L`, both on the public
+showcase carrying `vet_verdict = exclude` at `high` confidence, and both read as
+the vet catching something Python could not block:
 
 > **SRT.L** — "Profit before tax of £10m is flattered by a 105% increase from a
 > low base of £4.9m… net margins remain thin at 8.6%"
@@ -55,10 +57,63 @@ gate has never been observed in production either.
 > half's implied quarterly run-rate of ~$172.9m (FY2025 $345.8m / 2)… the 34.2%
 > year-on-year growth is against a weak Q2 2025 base"
 
-Both were caught by prose reasoning in `_vet_messages` (`showcase.py:264-280`),
-and prose reasoning does not gate: the vet is advisory and the row is inserted
-`'approved'` regardless (`showcase.py:719`). **The strongest detector in the
-system for this failure mode is the only one with no blocking authority.**
+**Both rationales are wrong.** On 2026-07-30 all 8 rows in `high_impact_rns`
+with `vet_verdict` in (`caution`, `exclude`) were re-checked line by line
+against `rns_announcements.body`, `ttm_financials` and `price_history`. Four
+contain a hard error — a stated conclusion contradicted by the rationale's own
+cited figures — and all four are the same error: the sequential comparison
+`_vet_messages` asks for (`showcase.py:264-273`), drawn backwards.
+
+| Row | Verdict | Defect |
+|---|---|---|
+| `CAPD.L` 9671246 | `exclude` / high | Divided FY2025 by **2** and called the result a *quarterly* run-rate. Correct divisor is 4 ($86.4m), so Q2'26 is +35.7% above it — and the announcement prints Q1'26 $101.7m → Q2'26 $117.3m, **+15.3% sequentially**, described as "another record revenue quarter" |
+| `SRT.L` 9682985 | `exclude` / high | Asserted "H2 FY2025 was likely much higher than H1 FY2025" about an announcement that publishes **no half-year split at all**. Separately, "£4.9m estimated from FY2025 PBT of £2m plus tax" is not a derivation: £4.9m is printed in the RNS summary table, and £2m is FY2025 *net income* (£2.03m) mislabelled as PBT |
+| `STAN.L` 9692325 | `caution` / med | Used H1'26's own operating income ($11.6bn) as the H2'25 comparator. Actual H2'25 is $9.65bn (FY'25 $20.55bn − H1'25 $10.91bn), so H1'26 is **+20.3%**, not "flat versus H2'25" |
+| `JNEO.L` 9689848 | `caution` / med | Derived H2'25 = £30.5m correctly, then called H1'26's £37.6m "below" it. It is **+23.2% above**. The cash claim is a YoY artefact too — the £10.7m CFDS payment fell in H2'25, and cash *rose* ~£0.6m across the half being reported (FY25 year-end £12.03m → H1'26 £12.6m) |
+
+**The inputs are not the problem.** Every figure in all four traced correctly to
+the announcement body or to `ttm_financials`. What fails is the last step, the
+comparison itself.
+
+Three rows survive the audit. `PTEC.L` performs the identical move correctly
+(€270m − €155m = €115m, −25.8% sequential) *and* has it corroborated in the text
+— "management expects Adjusted EBITDA to be lower than H1". `RNK.L` has two soft
+spots but no arithmetic error: 6% LFL NGR pinned to a statutory-revenue base
+(£795.4m, a different measure from the £834.1m NGR that grew), and a "−11.8% in
+the past month" that is −8.9% close-to-close in `price_history`. `SYNT.L` is
+qualitative with nothing numeric to check.
+
+**The split falls on the model switch.** All three sound rows are
+`deepseek-chat`, dated on or before 2026-07-14. All five flawed rows are
+`deepseek-v4-flash`, dated on or after 2026-07-16 — the day v4-flash went live.
+n=8 and the groups are a before/after rather than a controlled comparison, but
+the failure mode is uniform and it lands on the model change rather than
+anywhere else. Cheap confirmation: re-run the five v4-flash bodies through
+`rns_body_context_validation.py` under `deepseek-chat` and diff the verdicts.
+
+**What this costs today: nothing, and that is the whole point.** `vet_verdict`
+never blocks — insertion is hardcoded `'approved'` (`showcase.py:702`) and the
+vet fields are display-only, surfaced on `/gates` and on the showcase card. So
+four wrong rationales are currently a misleading label on rows that are
+otherwise fine, not a suppression. The four errors are free *because* the vet
+has no blocking authority.
+
+Two conclusions replace the original ones:
+
+1. **The vet is not "the strongest detector in the system for this failure
+   mode."** It is an unreliable one, and the two catches cited above as
+   motivation are both false positives. Had they gated, they would have dropped
+   a record quarter with FY guidance implying +19-27% growth (`CAPD.L`) and a
+   full year at +49% revenue / +105% PBT with gross cash up 473% (`SRT.L`) —
+   §4's over-blocking risk, realised twice in a fortnight.
+2. **Phase 4's design is still right, and its justification is now stronger.**
+   Moving the derivation into Python was framed as giving a good detector teeth.
+   It is better understood as removing an arithmetic step the model
+   demonstrably cannot perform from the path to a block. The prompt at
+   `showcase.py:264-273` even spells out the formula — "preceding half =
+   full-year total minus the prior-year half quoted in the announcement" — and
+   `_annual_lines` supplies only FY totals, so the model must do the subtraction
+   itself on every row. That subtraction is the thing to move.
 
 ---
 
@@ -298,13 +353,38 @@ annotator column on this page it needs none of that — it is already in
 The gate this conversation started from, and the first genuinely new one.
 
 The vet stops returning a prose verdict and starts returning **numbers**: the
-comparator period, the figure the announcement prints for it, the implied
-preceding half/quarter derived from the annual series, and the base as a share
-of its own history. Python adjudicates. **Keep a prose `rationale` field
-alongside** — the vet also catches things nobody enumerated (liquidity-
-fragmenting secondary listings, dilution, a cut buried in an upbeat headline),
-and a Python block can only adjudicate failure modes already named. The prose
-channel keeps the unknown-unknowns visible without blocking authority.
+comparator period, the figure the announcement prints for it, and the base as a
+share of its own history. **Python derives the implied preceding half/quarter
+and does every comparison** — the model supplies only figures it can copy, never
+a subtraction and never a direction word. That division of labour is not a
+stylistic preference; it is the direct lesson of the audit above, where all four
+errors sat in the arithmetic and none in the extraction.
+
+Three guardrails fall out of the four audited failures, and each maps to one:
+
+- **`CAPD.L` — the period of every figure is a required field, not a label.**
+  A quarterly figure compared against a half-year one is only possible if the
+  divisor is chosen in prose. Python holds the divisor and derives it from the
+  stated period; a figure whose period is absent or unparseable is `n/a`, never
+  compared.
+- **`SRT.L` — no published split means the sequential axis is unavailable.**
+  If neither the body nor `ttm_financials` yields an interim, the gate returns
+  `n/a`/`no_period_split` and the model is given no route to assert one. "Likely
+  much higher" must be unrepresentable, not merely discouraged.
+- **`STAN.L` and `JNEO.L` — assert the direction mechanically.** Both named the
+  right two numbers and stated the wrong relation between them. Once Python owns
+  the comparison this cannot recur by construction; while the prose `rationale`
+  survives alongside, a cheap assertion that its direction word agrees with the
+  sign of the Python-computed delta catches the same class in the advisory
+  channel and is worth having regardless of gate state.
+
+**Keep a prose `rationale` field alongside** — the vet also catches things nobody
+enumerated (liquidity-fragmenting secondary listings, dilution, a cut buried in
+an upbeat headline), and a Python block can only adjudicate failure modes already
+named. The prose channel keeps the unknown-unknowns visible without blocking
+authority. The audit is a reason to distrust its arithmetic, not a reason to
+delete it: `SYNT.L`'s one-off competitor-disruption benefit is exactly the kind
+of catch no enumerated field would have reached.
 
 **Do not solve this by feeding annual history into the ranker prompt.** That is
 per-company text on every row of the morning batch and would undo the 15% → 45%
@@ -323,6 +403,16 @@ implausibly high, an amber rate that shows the gate can actually reach its
 target rows, and blocked-row returns visibly worse than passed-row returns over
 a horizon with enough matured rows to mean something. Record the promotion and
 its evidence in this doc's implementation record.
+
+**The four audited errors are a negative control set, not evidence for the
+gate.** `CAPD.L` 9671246, `SRT.L` 9682985, `STAN.L` 9692325 and `JNEO.L`
+9689848 are rows the low-base gate **must not** fire on; if it blocks any of
+them it has reproduced the prose error in Python, which is strictly worse than
+the status quo because it would then gate. Check this before looking at fire
+rate at all — it is the one criterion available immediately, needs no return
+horizon, and no amount of favourable return data offsets failing it. `PTEC.L`
+9659657 is the positive control: same move, correct answer, and the gate should
+fire on it.
 
 ---
 
@@ -355,7 +445,19 @@ its evidence in this doc's implementation record.
 - **Pool homogeneity.** The evaluation history spans prompt changes
   (`6b73dfb`, `d0cf0bf`) and a model switch. Stamp each evaluation with the
   row's `llm_model` and prompt era, and never pool across a prompt change
-  without saying so.
+  without saying so. **This is now measured, not hypothetical**: §1's audit
+  found 0 of 3 `deepseek-chat` rationales and 4 of 5 `deepseek-v4-flash`
+  rationales carrying a hard numeric error, splitting exactly on the
+  2026-07-16 switch. Facet by `llm_model` as well as by score band, and treat a
+  metric pooled across that boundary as uninterpretable rather than noisy.
+- **Model-quality regressions are invisible to per-gate tests.** The v4-flash
+  arithmetic failures ran undetected for a fortnight because the vet is
+  advisory, nothing asserts against its output, and `/gates` displays the
+  rationale without checking it. Phase 4 removes the arithmetic from the block
+  path, but any *future* field the model fills is exposed the same way. Prefer
+  fields the model can only copy (`guided_value`, `one_off_named`) over fields
+  it must compute — migration 026's stated reason for storing values as printed
+  is the same reason, arrived at independently.
 - **A page that invites tuning.** Every threshold visible next to its outcome is
   an invitation to fit the thresholds to the sample. The promotion criteria in
   Phase 5 exist to make that a decision with a written basis rather than a
@@ -398,3 +500,10 @@ its evidence in this doc's implementation record.
    already in memory.
 7. **No gate is armed in the same commit that introduces it**, Phase 1's
    like-for-like move excepted.
+8. **The low-base gate does not fire on the audit's negative control set** —
+   `CAPD.L` 9671246, `SRT.L` 9682985, `STAN.L` 9692325, `JNEO.L` 9689848 (§1) —
+   and does fire on `PTEC.L` 9659657. Checked through
+   `rns_body_context_validation.py` over the stored bodies, and a prerequisite
+   for Phase 5 rather than a nice-to-have. Note `SRT.L` must come back
+   `n/a`/`no_period_split` specifically, not merely "not blocked": passing for
+   the wrong reason here means the guardrail is untested.
