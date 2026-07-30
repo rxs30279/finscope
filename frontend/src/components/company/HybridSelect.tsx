@@ -17,6 +17,11 @@ interface Props {
   // behaviour (input stays visible, option reads "Custom…") — used by callers
   // like the market-cap filter that don't supply a label.
   customLabel?: string;
+  // Accessible name for the dropdown and its custom-value input. These controls
+  // have no visible <label> — the current selection doubles as the label — so
+  // without this they're announced as unnamed. Falls back to `placeholder`,
+  // which is better than nothing but is often a bare unit ("£B").
+  ariaLabel?: string;
 }
 
 // Sentinel select value for "a custom value is committed and shown as a label".
@@ -33,7 +38,9 @@ export default function HybridSelect({
   inputWidth = 80,
   active = false,
   customLabel,
+  ariaLabel,
 }: Props) {
+  const a11yName = ariaLabel ?? placeholder;
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const isCustom = selectMode === "custom";
@@ -53,6 +60,7 @@ export default function HybridSelect({
   return (
     <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
       <select
+        aria-label={a11yName}
         style={{ ...S.select, ...(active ? S.selectActive : {}) }}
         value={showCommitted ? COMMITTED : selectMode}
         onChange={(e) => {
@@ -74,6 +82,7 @@ export default function HybridSelect({
       {showInput && (
         <input
           type="number"
+          aria-label={a11yName ? `${a11yName} (custom value)` : undefined}
           placeholder={placeholder}
           value={draft}
           style={{ ...S.select, width: inputWidth, padding: "8px 8px" }}

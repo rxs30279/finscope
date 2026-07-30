@@ -504,7 +504,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
         <SectorDropdown sectors={filterOpts.sectors} selected={includedSectors} excluded={excludedSectors} onToggleInclude={toggleIncludeSector} onClear={() => update("sector", "")} onToggleExclude={toggleExcludeSector} />
-        <select style={selStyle(!!filters.ftse_index)} value={filters.ftse_index} onChange={(e) => update("ftse_index", e.target.value)}>
+        <select aria-label="FTSE market" style={selStyle(!!filters.ftse_index)} value={filters.ftse_index} onChange={(e) => update("ftse_index", e.target.value)}>
           <option value="">FTSE Market</option>
           <option value="FTSE 100">FTSE 100</option>
           <option value="FTSE 250">FTSE 250</option>
@@ -514,7 +514,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           <option value="AIM">AIM (other)</option>
           <option value="Main (non-index)">Main (non-index)</option>
         </select>
-        <HybridSelect active={!!filters.min_market_cap} selectMode={selectModes.min_market_cap} onSelectChange={(mode) => handleSelectMode("min_market_cap", mode)} onCustomCommit={(v) => handleCustomCommit("min_market_cap", v, (n) => Math.round(n * 1e9))} placeholder="£B" inputWidth={70}>
+        <HybridSelect ariaLabel="Minimum market cap" active={!!filters.min_market_cap} selectMode={selectModes.min_market_cap} onSelectChange={(mode) => handleSelectMode("min_market_cap", mode)} onCustomCommit={(v) => handleCustomCommit("min_market_cap", v, (n) => Math.round(n * 1e9))} placeholder="£B" inputWidth={70}>
           <option value="">Any Market Cap</option>
           <option value="1000000000">£1B+</option>
           <option value="10000000000">£10B+</option>
@@ -547,6 +547,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           {visibleToggleCols.map((c) => (
             <HybridSelect
               key={c.key}
+              ariaLabel={c.label}
               active={!!colFilters[c.key]}
               selectMode={colFilterModes[c.key] || ""}
               onSelectChange={(mode) => handleColSelect(c.key, mode)}
@@ -561,7 +562,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
           ))}
           {/* Always-on composite score filters. */}
           {[["min_momentum", "Momentum", [["4","Mom ≥ 4"],["6","Mom ≥ 6"],["8","Mom ≥ 8"]]],["min_quality","Quality",[["4","Quality ≥ 4"],["6","Quality ≥ 6"],["8","Quality ≥ 8"]]],["min_value","Value",[["4","Value ≥ 4"],["6","Value ≥ 6"],["8","Value ≥ 8"]]],["max_risk","Risk",[["3","Risk ≤ 3"],["5","Risk ≤ 5"],["7","Risk ≤ 7"]]]].map(([k, label, opts]: any) => (
-            <select key={k} style={selStyle(!!(scoreFilters as any)[k])} value={(scoreFilters as any)[k]} onChange={(e) => updateScore(k, e.target.value)}>
+            <select key={k} aria-label={`${k === "max_risk" ? "Maximum" : "Minimum"} ${label} score`} style={selStyle(!!(scoreFilters as any)[k])} value={(scoreFilters as any)[k]} onChange={(e) => updateScore(k, e.target.value)}>
               <option value="">{label}</option>
               {opts.map(([v, l]: any) => <option key={v} value={v}>{l}</option>)}
             </select>
@@ -627,7 +628,13 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
                     <td style={{ ...S.td, fontFamily: "monospace", fontWeight: 700, color: watchlistSet.has(r.symbol) ? "#f59e0b" : "#818cf8" }}>
                       <span style={{ display: "inline-flex", alignItems: "center" }}>
                         <StarButton active={watchlistSet.has(r.symbol)} onClick={(e) => { e.stopPropagation(); onToggleWatchlist && onToggleWatchlist(r.symbol); }} />
-                        <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "inherit", textDecoration: "none" }}>
+                        {/* inline-flex + min box, not padding: the ticker link sat at
+                            34x15 and failed target-size next to the star. 24px matches
+                            the star's box so neither grows the row beyond it. minWidth
+                            matters too — 2-3 char tickers (BP, RR, NG) are only ~17px
+                            wide. The box grows rightwards into the cell's own padding,
+                            so the text stays left-aligned with the rest of the column. */}
+                        <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "inherit", textDecoration: "none", display: "inline-flex", alignItems: "center", minHeight: 24, minWidth: 24 }}>
                           {r.symbol.replace(".L", "")}
                         </Link>
                       </span>

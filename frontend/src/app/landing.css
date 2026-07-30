@@ -53,10 +53,24 @@
         .am-landing's overflow-x:hidden entirely (see above).
      2. globals.css sets `body { overflow-x: hidden }` under 943px for the
         app shell's mobile drawer, which trips the identical coupling at
-        that breakpoint. Neutralised below, scoped to this route only. */
+        that breakpoint. Neutralised below, scoped to this route only.
+
+   The snap itself is gated behind `.am-snap`, which LandingEffects adds on the
+   first user scroll/pointer/key — it MUST NOT be on at load. At load the
+   browser resolves the snap to `nav`, which is already where the page sits, so
+   it scrolls nowhere but still fires 6-9 scroll events; Chrome stops recording
+   LCP candidates at the first scroll, and those events beat the h1's paint. The
+   result was no LCP entry at all on this page — Lighthouse NO_LCP, performance
+   scored 0, and nothing reported to CrUX/Speed Insights. Gating on interaction
+   (not `load`, which fires at ~1.2s while the h1 paints at ~1.6s and would lose
+   the same race) is safe by construction: LCP is already final once the user
+   has scrolled, and snapping engages on the very gesture that wants it.
+   `scroll-behavior` stays ungated — it drives the #caps/#subscribe anchors. */
 html:has(.am-landing) {
-  scroll-snap-type: y proximity;
   scroll-behavior: smooth;
+}
+html.am-snap:has(.am-landing) {
+  scroll-snap-type: y proximity;
 }
 @media (max-width: 943px) {
   body:has(.am-landing) {

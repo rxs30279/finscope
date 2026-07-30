@@ -4,8 +4,9 @@ import { useEffect } from "react";
 
 /**
  * Client-only behaviour for the marketing landing:
- *   1. the animated candlestick background painted into #am-chart, and
- *   2. the scroll-reveal that fades `.am-reveal` elements in as they enter view.
+ *   1. the animated candlestick background painted into #am-chart,
+ *   2. the scroll-reveal that fades `.am-reveal` elements in as they enter view, and
+ *   3. arming the scroll-snap on first interaction (see landing.css `.am-snap`).
  *
  * The markup (canvas element, reveal classes) is server-rendered in page.tsx so
  * the copy is in the initial HTML for crawlers; this component only drives motion.
@@ -163,6 +164,21 @@ export default function LandingEffects() {
     } else {
       els.forEach((el) => el.classList.add("in"));
     }
+
+    // ---- Arm the scroll-snap ----
+    // Deliberately not at load: an armed snap at load costs this page its LCP
+    // entry outright (full reasoning in landing.css above the `.am-snap` rule).
+    // The first scroll/pointer/key is both late enough for LCP to be final and
+    // exactly the gesture that should be snapped.
+    const arm = () => document.documentElement.classList.add("am-snap");
+    const armEvents = ["scroll", "pointerdown", "keydown", "wheel", "touchstart"] as const;
+    armEvents.forEach((ev) =>
+      window.addEventListener(ev, arm, { once: true, passive: true, capture: true }),
+    );
+    cleanups.push(() => {
+      armEvents.forEach((ev) => window.removeEventListener(ev, arm, { capture: true }));
+      document.documentElement.classList.remove("am-snap");
+    });
 
     return () => {
       cancelAnimationFrame(raf);
