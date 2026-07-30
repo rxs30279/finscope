@@ -24,10 +24,11 @@ import hmac
 import hashlib
 import urllib.parse
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from admin_auth import require_admin_token
 from db import connection, query
 from request_utils import client_ip, SlidingWindowLimiter
 
@@ -434,3 +435,65 @@ def list_active_contacts() -> list[dict]:
     except Exception as e:
         raise RuntimeError(f"subscribers query failed: {e}") from e
     return [{"email": r["email"]} for r in rows]
+
+
+# ── Admin: audience view ──────────────────────────────────────────────────────
+#
+# Resend's Audience tab maps directly onto this table. NOTE (2026-07-30, see
+# docs/email-monitor-page-plan.md step 5): Resend's own copy is frozen at the
+# 2026-07-21 migration snapshot — 8 signups + 2 unsubscribes since then went
+# to Postgres only, because list_active_contacts() (not Resend) is the send
+# list. Never reconcile this view back to Resend's; this table is the one
+# that's current.
+#
+# `status` is derived with the same precedence as _subscriber_state() above
+# (unsubscribed wins over bounced), so "subscribed" here means exactly the
+# _MAILABLE set — one spelling of "who we mail", not a second one that could
+# drift from it.
+_AUDIENCE_STATUS_CASE = """
+    CASE WHEN unsubscribed THEN 'unsubscribed'
+         WHEN bounced_at IS NOT NULL THEN 'bounced'
+         ELSE 'subscribed' END
+"""
+
+
+@router.get("/api/subscribers/audience")
+def audience(
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+    _admin: None = Depends(require_admin_token),
+) -> dict:
+    """Admin: the full subscriber list, Resend-Audience-style.
+
+    `summary` is computed over `q` but deliberately IGNORES the `status`
+    filter, so the stat tiles stay stable and clickable — same convention as
+    GET /api/emails in email_monitor.py.
+    """
+    where = ["email ILIKE %(q)s"] if q and q.strip() else []
+    params: dict = {"q": f"%{q.strip().lower()}%"} if where else {}
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    try:
+        rows = query(
+            f"""
+            SELECT email, created_at, unsubscribed_at, resubscribed_at,
+                   bounced_at, bounce_reason,
+                   {_AUDIENCE_STATUS_CASE} AS status
+            FROM subscribers
+            {where_sql}
+            ORDER BY created_at DESC
+            """,
+            params,
+        )
+    except Exception as e:
+        raise HTTPException(502, f"Subscriber lookup failed: {e}")
+
+    summary: dict[str, int] = {"subscribed": 0, "unsubscribed": 0, "bounced": 0}
+    for r in rows:
+        summary[r["status"]] = summary.get(r["status"], 0) + 1
+
+    filtered = [r for r in rows if status is None or r["status"] == status]
+    page = filtered[offset: offset + limit]
+
+    return {"total": len(filtered), "summary": summary, "subscribers": page}

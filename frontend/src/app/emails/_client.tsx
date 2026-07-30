@@ -391,9 +391,18 @@ export default function EmailsClient() {
             : "Per-message delivery monitor — see /status for the aggregate view"
         }
         right={
-          <button onClick={() => load()} disabled={loading} style={{ ...controlBtn(false), opacity: loading ? 0.6 : 1 }}>
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
+          <>
+            <a
+              href="/audience"
+              style={{ color: colors.textMuted, fontFamily: "monospace", fontSize: 11, textDecoration: "none" }}
+              title="Subscriber list"
+            >
+              Audience →
+            </a>
+            <button onClick={() => load()} disabled={loading} style={{ ...controlBtn(false), opacity: loading ? 0.6 : 1 }}>
+              {loading ? "Refreshing…" : "Refresh"}
+            </button>
+          </>
         }
       />
 

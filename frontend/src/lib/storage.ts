@@ -307,6 +307,34 @@ export const saveEmailsState = (state: EmailsFilterState): void => {
   } catch {}
 };
 
+// /audience admin page filter state (status only — no days window, the
+// audience is the whole table, not an event stream). Same
+// sessionStorage-not-localStorage call and same search-box exclusion as
+// EMAILS_STATE_KEY above.
+export const AUDIENCE_STATE_KEY = "stock_screener_audience_state_v1";
+
+export interface AudienceFilterState {
+  status: string; // "" = all
+}
+
+export const loadAudienceState = (): Partial<AudienceFilterState> => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(AUDIENCE_STATE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveAudienceState = (state: AudienceFilterState): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(AUDIENCE_STATE_KEY, JSON.stringify(state));
+  } catch {}
+};
+
 // Scroll offset per list page, so leaving a long list and coming back doesn't
 // dump the user at the top again. sessionStorage because a remembered position
 // is only meaningful while the list it indexes into is still the one you were

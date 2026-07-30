@@ -356,3 +356,96 @@ def test_token_changes_with_the_secret(monkeypatch):
     first = subscribers._unsubscribe_token("a@b.com")
     monkeypatch.setenv("UNSUBSCRIBE_SECRET", "secret-two")
     assert subscribers._unsubscribe_token("a@b.com") != first
+
+
+# ── Admin: audience view ─────────────────────────────────────────────────────
+#
+# audience() issues one SELECT (mocked here, same pattern as
+# test_email_monitor.py's monkeypatching of email_monitor.query) and does its
+# filtering/pagination in Python, so these exercise the summary/status split
+# without a database.
+
+def _sub(email, status, bounce_reason=None):
+    return {
+        "email": email,
+        "created_at": "2026-07-01T00:00:00+00:00",
+        "unsubscribed_at": None,
+        "resubscribed_at": None,
+        "bounced_at": "2026-07-15T00:00:00+00:00" if status == "bounced" else None,
+        "bounce_reason": bounce_reason,
+        "status": status,
+    }
+
+
+def _mixed_audience():
+    return [
+        _sub("a@example.com", "subscribed"),
+        _sub("b@example.com", "unsubscribed"),
+        _sub("c@example.com", "bounced", bounce_reason="mailbox full"),
+        _sub("d@example.com", "subscribed"),
+    ]
+
+
+def test_audience_summary_ignores_status_filter_but_scopes_the_page(monkeypatch):
+    monkeypatch.setattr(subscribers, "query", lambda *a, **k: _mixed_audience())
+
+    out = subscribers.audience(status="bounced")
+    assert out["summary"] == {"subscribed": 2, "unsubscribed": 1, "bounced": 1}
+    assert out["total"] == 1
+    assert [s["email"] for s in out["subscribers"]] == ["c@example.com"]
+
+
+def test_audience_pagination(monkeypatch):
+    monkeypatch.setattr(subscribers, "query", lambda *a, **k: _mixed_audience())
+
+    out = subscribers.audience(limit=2, offset=2)
+    assert out["total"] == 4  # unfiltered by status
+    assert [s["email"] for s in out["subscribers"]] == ["c@example.com", "d@example.com"]
+
+
+def test_audience_search_filters_in_sql(monkeypatch):
+    """The status CASE and the ILIKE search both live in the SQL, not Python —
+    assert the query the endpoint actually issues rather than the DB's
+    (mocked) response, matching the SQL-assertion style in `fake_db` above."""
+    seen = {}
+
+    def fake_query(sql, params=None):
+        seen["sql"] = " ".join(sql.split())
+        seen["params"] = params
+        return _mixed_audience()
+
+    monkeypatch.setattr(subscribers, "query", fake_query)
+    subscribers.audience(q="Example.com")
+
+    assert "email ILIKE %(q)s" in seen["sql"]
+    assert seen["params"] == {"q": "%example.com%"}
+
+
+def test_audience_no_search_omits_where_clause(monkeypatch):
+    seen = {}
+
+    def fake_query(sql, params=None):
+        seen["sql"] = " ".join(sql.split())
+        return _mixed_audience()
+
+    monkeypatch.setattr(subscribers, "query", fake_query)
+    subscribers.audience()
+
+    assert "WHERE" not in seen["sql"]
+
+
+def test_audience_endpoint_requires_admin_token():
+    bare = TestClient(app)
+    assert bare.get("/api/subscribers/audience").status_code == 403
+
+
+def test_audience_endpoint_reachable_with_admin_token(monkeypatch):
+    # This file's local `client` fixture (unlike conftest's) sends no admin
+    # header, so build one directly here rather than shadow it for everyone.
+    monkeypatch.setattr(subscribers, "query", lambda *a, **k: _mixed_audience())
+    admin_client = TestClient(app, headers={"X-Admin-Token": "test-admin-token"})
+    r = admin_client.get("/api/subscribers/audience", params={"status": "subscribed"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["summary"] == {"subscribed": 2, "unsubscribed": 1, "bounced": 1}
+    assert body["total"] == 2
