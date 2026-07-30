@@ -302,7 +302,12 @@ def _quality_score(r: dict) -> Optional[int]:
 
     None when too few legs survive to be meaningful (out-of-universe tickers
     with no financials, closed-end funds) — a 0 there would read as "failed
-    every check" and wrongly trip the LOW QUALITY flag below.
+    every check" rather than "not measured", and the prompt renders None as
+    n/a with an explicit instruction not to penalise the missing data.
+
+    Printed into the prompt for context only. It no longer gates any flag:
+    five of its ten legs are self-comparisons, so it is half a trend measure —
+    see the note above quality_flag in _build_messages.
     """
     return quality_score_from_raw(r)
 
@@ -552,7 +557,7 @@ def _build_messages(
         "the company with caution, call it out in the risks, and hold the score "
         "down unless the announcement directly and materially de-levers the "
         "balance sheet. "
-        "Weigh business quality too. A low quality score (<=3/10), a net margin "
+        "Weigh business quality too. A net margin "
         "below the industry median (judge margins peer-relative — a thin margin "
         "is normal in some industries and fine when capital returns are strong; "
         "below the industry's own norm with weak returns is the red flag, "
@@ -564,6 +569,13 @@ def _build_messages(
         "company is outside our financials coverage, NOT that quality is low — "
         "judge business quality from the announcement text itself and do not "
         "penalise the score for the missing data. "
+        "The Quality figure is marked '(vs own history)' because that is what "
+        "it measures: the company against its OWN past returns and margins. A "
+        "low reading means this period sits below the company's recent best, "
+        "NOT that the business is weak — a strong company coming off a peak "
+        "year scores low on it. Never cite it as evidence of weak fundamentals. "
+        "Judge business quality from the peer-relative margin line, the "
+        "leverage line and the announcement itself. "
         "When the announcement text states a company-compiled analyst "
         "consensus figure, compare the guided figure against it and say which "
         "side of consensus the guidance falls on — reiterated guidance "
@@ -669,6 +681,24 @@ def _build_messages(
     # low-margin/high-ROCE model (reseller, distributor) is structure, not
     # fragility. Floors (0.02 fallback, 0.15 ROCE) kept in sync with the
     # showcase selection gates in showcase.py.
+    #
+    # There used to be a second, PRECEDING branch here firing
+    # "!! LOW QUALITY (weak fundamentals)" on quality_score <= 3. It was removed
+    # 2026-07-30: five of that score's ten legs compare a company against its
+    # OWN historical median (quality.py quality_legs), so it is half a *trend*
+    # measure, and a sound business having a below-peak year read as "weak
+    # fundamentals". Greggs — 19.5% ROE, 16.5% ROCE, net margin above its
+    # industry median, £46m NET CASH — scored 3/10 and was branded weak; so
+    # were Shell, JD Sports, B&M, Renishaw and Persimmon (39 names, 259 -> 220
+    # flagged of 531). Because it sat in front of the margin test as an `if`
+    # with this as its `elif`, it also SHADOWED the correct, industry-relative
+    # judgement below for exactly those names.
+    #
+    # Do not "restore" it by thresholding quality_score again, and do not push
+    # the fix down into quality.py — that score is user-facing in the screener
+    # column and filter, the company ScoreStrip, /most-shorted, showcase and
+    # news, and it is doing its documented job there. The weakness test that
+    # belongs in a *ranker* prompt is the peer-relative one below.
     nim = cand.get("net_income_margin")
     nim_median = cand.get("peer_margin_median")
     roce = cand.get("roce")
@@ -679,15 +709,18 @@ def _build_messages(
         or (nim > 0 and roce is not None and roce >= 0.15)
     )
     quality_flag = ""
-    if qs is not None and qs <= 3:
-        quality_flag = "  !! LOW QUALITY (weak fundamentals)"
-    elif not margin_ok:
+    if not margin_ok:
         quality_flag = (
             "  !! WEAK MARGINS (loss-making)" if nim < 0
             else "  !! WEAK MARGINS (below industry median)"
         )
 
-    quality_str = f"{qs}/10" if qs is not None else "n/a"
+    # Labelled with what it actually measures. The bare "3/10" invited the model
+    # to read a half-trend score as a verdict on the business — which is exactly
+    # what it did on Greggs, quoting "low quality score indicates weak
+    # fundamentals" straight back into llm_risks. Suffix only when there IS a
+    # score; "n/a (vs own history)" would be nonsense.
+    quality_str = f"{qs}/10 (vs own history)" if qs is not None else "n/a"
     risk_str = f"{rs}/10" if rs is not None else "n/a"
     risk_label = ""
     if rs is not None:
