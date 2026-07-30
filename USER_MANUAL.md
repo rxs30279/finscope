@@ -1,6 +1,6 @@
 # Alpha Move AI — UK Stock Screener — User Manual
 
-**Edition:** July 2026 (revised 7 July 2026)  
+**Edition:** July 2026 (revised 26 July 2026)  
 **Audience:** Investors new to financial analysis  
 **Purpose:** A plain-English guide to understanding what you are seeing and how to use these tools to find UK companies with the **greatest chance of upside** and the **smallest downside risk**.
 
@@ -163,7 +163,7 @@ The Fundamentals table has **three kinds of column**:
 | **Mkt Cap** | **Market Capitalisation** — the total stock market value of all shares. Calculated as: Share price × number of shares outstanding. A £10bn market cap is a large company. | Larger = more stable; smaller = more growth potential |
 | **Momentum** | A score from 1–10 measuring price trend strength. See Section 3.2. | Higher score = stronger upward trend |
 | **Quality** | A score from 0–10 measuring the consistency and level of returns. See Section 3.2. | Higher is better |
-| **Value** | The **Piotroski F-Score** (0–9), a measure of financial health and value. See Section 3.2. | 7+ is strong; below 3 is weak |
+| **Value** | A score from 0–10 measuring how cheap the share looks across several valuation lenses. See Section 3.2. | Higher = cheaper |
 | **Risk** | A composite risk score from 1–10. See Section 3.2. | Lower is safer |
 
 **Default fundamental columns** — what you see out of the box (all of these can be turned off, and 17 more turned on):
@@ -198,7 +198,7 @@ Plain-English meanings of the optional metrics not already covered above:
 - **EPS Growth / FCF Growth:** year-on-year growth in earnings per share and in free cash flow — the profit and cash equivalents of Revenue Growth.
 - **Revenue 10y / EPS 10y CAGR:** the *compound annual growth rate* over ten years — a long-run trend that smooths out single good or bad years.
 - **Current Ratio:** current assets ÷ current liabilities. Above 1 means the company can cover its short-term bills; a common liquidity check.
-- **Altman Z / Piotroski / Volatility:** the distress, financial-health and price-swing measures behind the Risk and Value scores, exposed as their own columns. Altman Z and Piotroski are explained in [§3.2](#32-the-four-scores-explained) (the Piotroski column shows the same 0–9 figure as the always-on **Value** pill); Volatility is annualised price volatility (lower = steadier).
+- **Altman Z / Piotroski / Volatility:** the distress, financial-health and price-swing measures that sit behind the Risk score, exposed as their own columns. Both are explained in [§3.2](#32-the-four-scores-explained). Note the **Piotroski** column is a separate 0–9 financial-health measure and is *not* the same figure as the always-on **Value** pill, which is a 0–10 valuation score. Volatility is annualised price volatility (lower = steadier).
 
 > **Why some cells show a dash (—).** A metric is left blank whenever it would be **misleading rather than informative** — the app hides it rather than showing a junk number you might sort or filter on by mistake:
 > - **Banks & insurers** hide free-cash-flow figures, gross margin, current ratio, ROIC/ROCE, D/E and Piotroski — a lender's balance sheet doesn't have the same "cost of goods", "current assets" or "invested capital" these assume (a bank's raw free-cash-flow number, for instance, swings wildly with deposit flows and is meaningless). Operating margin, net margin, P/S, ROE and P/B are kept.
@@ -206,6 +206,8 @@ Plain-English meanings of the optional metrics not already covered above:
 > - **Any company** hides a value that is mathematically degenerate — a negative price-to-book (from negative equity), a ratio distorted by tiny revenue, a growth figure exploded by a near-zero prior year, or the "phantom debt-free" D/E described above.
 >
 > This is deliberate data-cleaning, not missing data. A dash means "this measure doesn't sensibly apply to this company", so you're never comparing a bank's free-cash-flow margin against a manufacturer's.
+>
+> **A hidden metric does not count against the company's scores.** The Quality score credits each hidden measure at the market-typical rate for that check rather than scoring it zero ([§3.2](#32-the-four-scores-explained)), and the Value score averages only the valuation lenses that remain (showing "—" if fewer than three survive). A bank is judged on what applies to a bank.
 
 #### What is Equity?
 
@@ -225,24 +227,30 @@ These are proprietary composite scores calculated from underlying financial data
 
 **How it is calculated:**
 
-The score uses the academic concept of **12-1 month price momentum** — one of the most extensively researched phenomena in finance. The formula compares the stock's price 63 trading days ago (~3 months) to its price 252 trading days ago (~12 months):
+The score is built on **price momentum**, one of the most extensively researched phenomena in finance. Alpha Move AI uses a **12-3 month** window: the formula compares the stock's price 63 trading days ago (~3 months) to its price 252 trading days ago (~12 months), then divides by the stock's realised volatility:
 
 ```
 Momentum Return = (Price 63 days ago) ÷ (Price 252 days ago) − 1
+Momentum Signal = Momentum Return ÷ (daily volatility over the last 252 days)
 ```
 
-The most recent 3 months are deliberately excluded. Research shows that very recent returns tend to **reverse** (a short-term bounce is often followed by a pullback), while the 3–12 month window tends to **persist** (winners keep winning, losers keep losing). This phenomenon is called **price momentum**.
+The most recent 3 months are deliberately excluded. Research shows that very recent returns tend to **reverse** (a short-term bounce is often followed by a pullback), while the 3–12 month window tends to **persist** (winners keep winning, losers keep losing).
 
-All stocks are then **ranked against each other** by this return and assigned a score of 1–10. The score is a *percentile rank across the whole UK universe*, not an absolute number — a 10 means the stock is in the top tenth of momentum across the entire market, and a 1 means the bottom tenth. This ranking is computed **once a day** (after the overnight price refresh), so a stock's momentum score is fixed for the day and does **not** change depending on which filters you apply.
+The academic literature most often skips just **one** month (a 12-1 window). Skipping three is a deliberate choice to favour a slower, more stable signal that clears the reversal window with room to spare — so read this score as a variant of the published effect rather than a direct implementation of it.
 
-**Worked example:** Suppose the full universe is ~700 stocks. Each day the app computes every stock's 12-1 month return, sorts them from worst to best, and splits them into ten equal bands. A stock sitting in the 92nd percentile of that whole-market ranking lands in the top band and scores **10**; a stock near the bottom scores **1**. Its rank among the subset that happens to pass your current screen is irrelevant — the score is the same whatever you filter on.
+**Why divide by volatility?** Without it, naturally jumpy shares crowd *both* extreme bands on chance alone. The AIM cohort runs about 1.5× the volatility of the index tiers with no extra median return, so ranking on raw return alone put roughly twice its fair share of AIM names in the top band. Dividing by volatility asks a better question: not "which share moved most?" but "which share's move was largest *relative to its own normal noise*?"
+
+All stocks are then **ranked against each other** by this volatility-scaled signal and assigned a score of 1–10. The score is a *percentile rank across the whole UK universe*, not an absolute number — a 10 means the stock is in the top tenth of momentum across the entire market, and a 1 means the bottom tenth. This ranking is computed **once a day** (after the overnight price refresh), so a stock's momentum score is fixed for the day and does **not** change depending on which filters you apply.
+
+**Worked example:** Suppose the full universe is ~700 stocks. Each day the app computes every stock's volatility-scaled 12-3 month signal, sorts them from worst to best, and splits them into ten equal bands. A stock sitting in the 92nd percentile of that whole-market ranking lands in the top band and scores **10**; a stock near the bottom scores **1**. Its rank among the subset that happens to pass your current screen is irrelevant — the score is the same whatever you filter on.
 
 **What to look for:** A score of 7 or higher suggests the stock has been among the better performers. Combined with strong fundamentals, this can confirm that the market is already recognising the quality you have identified.
 
 > **Under the hood — Momentum (1–10)**
-> - **Raw signal:** `Momentum Return = close(63 trading days ago) ÷ close(252 trading days ago) − 1`. This is the return over the window from ~12 months ago to ~3 months ago, deliberately skipping the most recent 3 months (short-term reversal).
+> - **Raw signal:** `Momentum Return = close(63 trading days ago) ÷ close(252 trading days ago) − 1`. This is the return over the window from ~12 months ago to ~3 months ago, deliberately skipping the most recent 3 months (short-term reversal). Note this is a **12-3** window, not the 12-1 window most common in the literature.
+> - **Volatility scaling:** the raw return is divided by the sample standard deviation of daily returns over the same 252-day window, and it is this scaled figure that is ranked. A stock whose volatility is zero over the window (flat or suspended) carries no trend information and gets no score rather than a mid-pack one.
 > - **Data requirement:** a stock needs at least 252 trading days of price history; otherwise it gets no momentum score (blank).
-> - **Scoring:** all stocks with a raw return are sorted ascending. For a stock at position `i` (0-based) out of `n`, `score = clamp(1, 10, int(i ÷ n × 10) + 1)`. The rank is taken across the **full universe**, and is **precomputed once daily** (after the price refresh) and stored — the screener simply reads it back. The same company therefore keeps the same score regardless of which filters are active.
+> - **Scoring:** all stocks with a scaled signal are sorted ascending. For a stock at position `i` (0-based) out of `n`, `score = clamp(1, 10, int(i ÷ n × 10) + 1)`. The rank is taken across the **full universe**, and is **precomputed once daily** (after the price refresh) and stored — the screener simply reads it back. The same company therefore keeps the same score regardless of which filters are active.
 
 **Academic reference:** See Appendix A — Jegadeesh & Titman (1993).
 
@@ -254,17 +262,25 @@ All stocks are then **ranked against each other** by this return and assigned a 
 
 **How it is calculated:**
 
-The score awards up to 2 points for each of five business-quality measures. For each measure it runs **two independent checks**, each worth 1 point: one for clearing an *absolute* threshold (a genuinely good level), and one for being *at or above the median* of the stocks currently on screen (better than the typical peer). A company can therefore score a point for being good in absolute terms, a point for being better than its peers, both, or neither.
+The score awards up to 2 points for each of five business-quality measures. For each measure it runs **two independent checks**, each worth 1 point: one for clearing an *absolute* threshold (a genuinely good level), and one for being *at or above the company's own multi-year median* (is it still performing as well as it historically has?). A company can therefore score a point for being good in absolute terms, a point for being consistent with its own record, both, or neither.
 
-| Measure | +1 if absolute level is… | +1 if relative level is… | Max |
+| Measure | +1 if absolute level is… | +1 if consistency check is… | Max |
 |---|---|---|---|
-| **ROIC** | greater than 10% | at or above the universe median ROIC | 2 |
-| **ROE** | greater than 15% | at or above the universe median ROE | 2 |
-| **Gross Margin** | greater than 30% | at or above the universe median gross margin | 2 |
-| **Operating Margin** | greater than 10% | at or above the universe median operating margin | 2 |
-| **Cash / Net profitability** | FCF Margin greater than 5% | Net Margin at or above the universe median | 2 |
+| **ROIC** | greater than 10% | at or above its own historic median ROIC | 2 |
+| **ROE** | greater than 15% | at or above its own historic median ROE | 2 |
+| **Gross Margin** | greater than 30% | at or above its own historic median gross margin | 2 |
+| **Operating Margin** | greater than 10% | at or above its own historic median operating margin | 2 |
+| **Cash profitability** | FCF Margin greater than 5% | Net Margin at or above its own historic median | 2 |
 
-> **Note on the relative checks:** "Median of the universe" means the median across the stocks currently passing your screen, so the relative half of the Quality score shifts slightly depending on which filters are active. The absolute half never moves. (This is unlike Momentum, which is ranked once daily across the whole market and so does not move with your filters.)
+> **Note on the consistency checks:** each median is the company's **own** median across its available annual history (at least three years required — companies with a shorter record simply have no median to compare against). It is *not* a comparison against other stocks, and it does not move when you change your filters. This is what makes Quality a measure of *how high and how consistent* returns are, rather than a ranking against peers.
+
+**When a measure does not apply to the business.** Some metrics are meaningless for certain business models, and the app deliberately blanks them rather than showing a junk number: free cash flow for a bank is swamped by deposit flows, a closed-end fund's "revenue" is investment gains rather than trading, and neither has a sensible ROIC denominator. Those blanked checks are **not** counted as failures. Instead each one is credited at the *typical* rate for that check across the whole market, so a metric that was removed as inapplicable neither helps nor hurts the score.
+
+This matters most for financial companies. Previously a bank could only ever reach 4 out of 10 and an investment trust 2 out of 10, no matter how good they were, simply because half the checks had been blanked and were scoring zero. Financials as a whole showed a median Quality of 1 against 4–6 for every other sector — which read as "these are poor businesses" when it only ever meant "these measures were not applicable". A strong bank now scores in the 7–8 range on the checks that genuinely apply to it (ROE, operating margin, and net margin against its own history).
+
+> **Why not simply average the checks that remain?** Because that would hand any bank passing all five of its applicable checks a perfect 10 — and five checks are not the same weight of evidence as ten. Crediting the inapplicable ones at the market-typical rate keeps a 10 reserved for companies that genuinely passed all ten.
+
+**When you will see a dash instead of a score.** If fewer than three checks apply to a company, no score is shown (a "—" in the Quality column). Investment trusts land here: once the measures that do not apply to a fund are removed, only the two ROE checks remain, which is too thin to be meaningful. A dash means "not measurable", not "bad" — judge a trust on its discount to net asset value, dividend record and the underlying holdings instead.
 
 **Key terms:**
 - **ROIC (Return on Invested Capital):** Profit generated for every £1 of capital invested in the business. It is the best single measure of business quality — a high ROIC means the company has a competitive advantage (a "moat") that lets it earn outsized returns.
@@ -272,23 +288,77 @@ The score awards up to 2 points for each of five business-quality measures. For 
 - **Operating Margin:** Profit after all running costs but before interest and tax. Shows how efficiently the business is run day-to-day.
 - **FCF Margin (Free Cash Flow Margin):** The cash actually generated after all capital expenditure, as a percentage of revenue. Cash is harder to manipulate than reported profit — this is often considered the most reliable profitability measure.
 
-**Worked example:** A software company has ROIC 18%, ROE 22%, gross margin 78%, operating margin 24%, FCF margin 19%, and beats the universe median on ROIC, ROE, gross margin and net margin (but its operating margin is a touch below the median). It scores: ROIC 1+1, ROE 1+1, GM 1+1, OM 1+0, Cash/Net 1+1 = **9 out of 10** — a genuinely high-quality business.
+**Worked example (all ten checks apply):** A software company has ROIC 18%, ROE 22%, gross margin 78%, operating margin 24%, FCF margin 19%, and beats its own historic median on ROIC, ROE, gross margin and net margin (but its operating margin is a touch below its usual level). It scores: ROIC 1+1, ROE 1+1, GM 1+1, OM 1+0, Cash 1+1 = **9 out of 10** — a genuinely high-quality business.
+
+**Worked example (a bank):** ROIC, gross margin and FCF margin do not apply, so five checks are blanked and five remain. The bank has ROE 25% (above its historic median) and operating margin 18% (above its historic median), and its net margin beats its own history — so it passes all five applicable checks. Those five earn 5 points; the five blanked checks are credited at their market-typical rates, adding roughly 3 more. Final score: **8 out of 10**. Had it failed all five applicable checks it would score **3**, not 0 — low, but honestly reflecting that half the evidence is simply unavailable.
 
 **What to look for:** A score of 7+ indicates a genuinely high-quality business. These companies tend to outperform over long periods because their superior returns compound capital more effectively.
 
 > **Under the hood — Quality (0–10)**
-> Additive; each of the ten checks below adds 1 point. A measure that is missing in the data simply scores 0 for its checks (it is not penalised further).
-> - ROIC `> 0.10`; and ROIC `≥` median ROIC
-> - ROE `> 0.15`; and ROE `≥` median ROE
-> - Gross margin `> 0.30`; and gross margin `≥` median gross margin
-> - Operating margin `> 0.10`; and operating margin `≥` median operating margin
-> - FCF margin `> 0.05`; and **net** margin `≥` median net margin
+> Ten checks, each worth 1 point. Score = points earned on the checks that **apply**, plus each **inapplicable** check credited at the market-wide pass rate for that check, capped at 10.
+> - ROIC `> 0.10`; and ROIC `≥` its own historic median ROIC
+> - ROE `> 0.15`; and ROE `≥` its own historic median ROE
+> - Gross margin `> 0.30`; and gross margin `≥` its own historic median gross margin
+> - Operating margin `> 0.10`; and operating margin `≥` its own historic median operating margin
+> - FCF margin `> 0.05`; and **net** margin `≥` its own historic median net margin
 >
-> All medians are taken across the result set currently on screen. ROIC is the single most important measure of business quality — it shows whether the company earns more than its cost of capital, the signature of a durable competitive "moat".
+> Each median is that company's own median across its annual history, and requires at least 3 years of data. A check is "inapplicable" when the underlying metric was blanked as meaningless for the business model — banks and insurers lose FCF margin, gross margin and ROIC; investment trusts additionally lose operating and net margin. Fewer than 3 applicable checks returns no score at all (shown as "—") rather than a misleadingly low number.
+>
+> Note the net-margin consistency check is independent of the FCF margin check, so a bank losing its FCF figure keeps the net-margin one.
+>
+> ROIC is the single most important measure of business quality — it shows whether the company earns more than its cost of capital, the signature of a durable competitive "moat".
 
 ---
 
-#### Piotroski F-Score (0–9) — the "Value" column
+#### Value Score (0–10)
+
+**What it measures:** How cheap the share looks, judged across several independent valuation lenses rather than any single ratio. **Higher means cheaper.**
+
+**How it is calculated:**
+
+No single valuation ratio is trustworthy on its own — P/E breaks on a loss-maker, price-to-book flatters an asset-light business, and a fat dividend yield can be a warning rather than a bargain. The score therefore looks through up to **six lenses**, scores each from 0 (expensive) to 1 (cheap) on a sliding scale, averages the ones that are available, and multiplies by 10.
+
+| Lens | Counts as cheap at… | …and expensive at |
+|---|---|---|
+| **Forward P/E** | 8 or below | 25 or above |
+| **Price-to-Book** | 0.75 or below | 4.0 or above |
+| **Price-to-Sales** | 0.5 or below | 6.0 or above |
+| **PEGY** (price vs growth + yield) | 0.75 or below | 3.0 or above |
+| **Dividend Yield** | 6% or above | 0% |
+| **Free Cash Flow Yield** | 10% or above | 0% |
+
+Anything between the two ends scales smoothly, so a P/E of 16.5 scores about halfway. Because the score averages only the lenses that exist, a company is never punished for a lens it cannot have — a loss-maker with no meaningful P/E is judged on the rest.
+
+The **forward** P/E is used rather than the reported trailing one. A one-off item — a disposal gain, a deferred-tax credit — can flatter last year's earnings and make a share look cheap when it isn't; rebasing onto analyst estimates for the current year removes that trap.
+
+**When you will see a dash instead of a score.** At least **three** lenses must be available, otherwise the column shows "—". Two lenses is not a thin average, it is a coin flip: across the whole market, companies scored on just two sat at a median of 4.5 with 40% scoring 8+ *and* 45% scoring 3 or below — both extremes crowded, no reliable signal in between. Mulberry, for instance, screened 9/10 on forward P/E and price-to-sales alone. A dash means "too little to judge on", not "expensive".
+
+**Investment trusts are scored differently — on discount to NAV alone.** For a closed-end fund, price-to-book *is* the discount or premium to net asset value, which is the single canonical measure of whether it is cheap. It is scored against a band running from **0.80 (a fifth below NAV — cheap)** to **1.20 (a fifth above NAV — dear)**, symmetric about par, and the other lenses are dropped rather than averaged in: a fund's "earnings" are investment gains rather than an operating result, and its dividend yield reflects its mandate (income versus growth) rather than its cheapness — scoring on yield would simply mark every income trust cheap and every growth trust expensive.
+
+This matters because the operating-company band used to be applied to funds too, and it rated a trust trading *exactly at NAV* 9.3 out of 10. Of the 76 companies scoring a perfect 10 on value, 46 were funds sitting at roughly fair value. The top of the value list is now what it should be: the private-equity trusts on genuine 25–40% discounts.
+
+**Worked example:** A mid-cap industrial trades on a forward P/E of 11 (scoring 0.82), price-to-book of 1.4 (0.80), price-to-sales of 0.9 (0.93), PEGY of 1.6 (0.62), a 3.6% dividend yield (0.60) and a 7% free cash flow yield (0.70). Six lenses available, averaging 0.745 → **Value score 7** — cheap on most measures at once, which is a far more robust read than any one ratio.
+
+**What to look for:** 7+ suggests the market is pricing the share modestly on several measures simultaneously. Always read it beside Quality: a high Value score with a low Quality score is the classic value trap — cheap for a reason. The thresholds are **absolute rather than sector-relative**, so structurally low-multiple sectors (banks, insurers) screen cheap by design; compare within a sector, not across.
+
+> **Under the hood — Value (0–10)**
+> Each available lens maps linearly to 0–1 (1 = cheapest), clamped at both ends. Score = `round(mean(available lenses) × 10)`.
+> - Forward P/E: `≤ 8 → 1`, `≥ 25 → 0`. Forward P/E = trailing P/E × (diluted EPS ÷ current-year analyst EPS estimate), which keeps it currency-safe for USD reporters quoted in pence; falls back to trailing P/E when no usable estimate exists.
+> - Price-to-book: `≤ 0.75 → 1`, `≥ 4.0 → 0`
+> - Price-to-sales: `≤ 0.5 → 1`, `≥ 6.0 → 0`
+> - PEGY: `≤ 0.75 → 1`, `≥ 3.0 → 0`
+> - Dividend yield: `≥ 6% → 1`, `≤ 0 → 0`
+> - FCF yield (`free cash flow ÷ market cap`, both in the reporting currency so the ratio is currency-safe): `≥ 10% → 1`, `≤ 0 → 0`
+>
+> Fewer than **3** available lenses returns no score (shown as "—"). Lenses blanked as meaningless for the business model ([§3.1](#31-understanding-the-columns)) are simply absent and count toward that floor — unlike the Quality score, which imputes them, because valuation gaps are missing roughly at random (a loss-maker has no P/E) rather than systematically by business model.
+>
+> **Closed-end funds** bypass all of the above and are scored on price-to-book alone: `≤ 0.80 → 1`, `≥ 1.20 → 0`, linear between. The 3-lens floor does not apply, since that one lens is the complete answer rather than a thin sample of a fuller one.
+
+---
+
+#### Piotroski F-Score (0–9)
+
+> **Not the same as the Value score.** Piotroski measures *financial health and improvement*; the Value score above measures *how cheap the share is*. Piotroski is an optional column you can switch on in Settings → Screener, not one of the four always-on pills.
 
 **What it measures:** The fundamental financial health and improving momentum of a company. Originally designed to separate improving value stocks from deteriorating ones.
 
@@ -351,13 +421,13 @@ One distress recipe cannot fit a supermarket, a regulated water company, a bank 
 | **Bank** | Industry contains "Banks" | 30% ROE quality + 25% leverage (equity/assets) + 20% price-to-book + 25% volatility |
 | **Insurer** | Industry contains "Insurance" | 35% ROE + 25% price-to-book + 40% volatility |
 | **Other financial** | Asset managers, capital markets, credit services | 60% volatility + 40% ROE |
-| **Investment trust** | Closed-end funds (no sector/industry classification) | Volatility only |
+| **Investment trust** | Closed-end funds, identified by an "Investment Trust" industry, by the fund's **name** (most UK closed-end funds are filed by the data provider under "Asset Management" and only the name gives them away), or — for a newly listed fund — by having no sector or industry at all | Volatility only |
 
 **Why the special cases:**
 
 - **Asset-heavy:** the classic Z punishes low asset turnover, so a regulated water company or REIT reads as "distressed" no matter how stable it is. The **Z″ variant** (Altman's own non-manufacturer model) drops the turnover term, and a **debt-service** component (interest cover and net-debt/EBITDA) asks the question that actually matters for these businesses: *can it service its structurally large debt?*
 - **Banks & insurers:** deposits and policy liabilities are leverage by design — Altman wrongly flags even the safest bank as near-bankrupt. Banks are instead scored on profitability (ROE, blended with its multi-year median), capital (equity/assets — a CET1 proxy), and the market's own verdict (a bank below ~0.6× book is being priced for balance-sheet doubt), plus volatility.
-- **Investment trusts:** a closed-end fund's accounts look like a failing manufacturer's to any Altman variant, so only volatility is used.
+- **Investment trusts:** a closed-end fund's accounts look like a failing manufacturer's to any Altman variant, so only volatility is used. Recognising them by name matters more than it sounds: 108 funds were previously scored on the "other financial" recipe, which reads a fund's NAV return as though it were operating profitability and quietly credited high-volatility names (3i, Schiehallion) for it. Those now score as the funds they are.
 
 The Health tab labels which model produced the score.
 
@@ -424,8 +494,10 @@ Click **Advanced ▼** to open a panel of finer filters. A small dot (**●**) a
 |---|---|---|
 | **Min Momentum** | 6 | Focus on stocks with above-average price trends |
 | **Min Quality** | 6 | Only businesses with strong returns and margins |
-| **Min Value** | 6 | Financially healthy and improving (the Piotroski F-Score) |
+| **Min Value** | 5 | Reasonably priced across several valuation lenses (not the Piotroski F-Score — see [§3.2](#32-the-four-scores-explained)) |
 | **Max Risk** | 5 | Exclude higher-risk names |
+
+> **Scores shown as "—" are filtered out.** A dash means the score could not be computed for that company, not that it scored zero. This affects two columns: **Quality**, which is not measurable for an investment trust, and **Value**, which needs at least three valuation lenses before it will show a number ([§3.2](#32-the-four-scores-explained)). Setting *any* minimum on a score therefore removes every company showing a dash in that column. If you are specifically looking for trusts, leave Min Quality unset — their Value score still works, since funds are scored on discount to NAV — and sort on the columns that do apply to them, such as dividend yield or price-to-book.
 
 **Column filters** — one filter is generated for **each fundamental column you have switched on** (see [§3.1](#31-understanding-the-columns)). If the P/E column is showing you get a *P/E max* filter; switch on ROE and a *ROE min* filter appears; and so on for Revenue Growth, PEGY, margins, leverage and the rest. Each offers quick preset thresholds (e.g. *P/E < 15 / < 25 / < 40*) plus a **Custom…** option to type your own number. Turning a column off removes its filter, so the filters available always match the columns you can see.
 
@@ -522,7 +594,7 @@ Switch between lists using the list selector at the top of the Watchlist page.
 | **52W Range** | A marker showing where today's price sits between the 52-week low and high — near the right means close to its yearly high. |
 | **Target buy** | An **editable target price** you can set per company; the app highlights when the price is at or below your target. Click to edit. |
 | **News** | A **7-day news cluster** combining RNS (regulatory) and press articles, with a dot coloured by the most significant recent RNS tier. Click it to open that company's News tab. |
-| **Risk** | The 1–10 Risk Score (see §3.2), colour-coded, so you can spot a deteriorating balance sheet without leaving the page. |
+| **Mom / Qual / Value / Risk** | The same four score pills as the Screener (see [§3.2](#32-the-four-scores-explained)), colour-coded, so you can see momentum fading or a balance sheet deteriorating without leaving the page. A pill shows "—" where the score is not measurable for that company. |
 
 All columns are sortable.
 
@@ -959,6 +1031,7 @@ Each Tier A/B item is sent to DeepSeek with a **context pack** far richer than t
 - Company profile: sector, industry, country, FTSE index membership, market cap
 - Valuation: P/E, dividend yield, P/B, P/S
 - Financial health: ROIC, ROE, margins, revenue growth, 10-year EPS CAGR, D/E, current ratio, plus the app's own Quality and Risk scores
+- **The Quality score, labelled "(vs own history)"** — the same score the Screener shows ([§3.2](#32-the-four-scores-explained)), including its treatment of measures that do not apply to a business model, so a bank is not marked down simply for lacking a meaningful free-cash-flow figure. Half of its ten checks compare a company against its *own* past returns and margins, so a low reading means this period sits below that company's recent best, **not** that the business is weak. The model is told exactly that, and told never to cite the score as evidence of weak fundamentals. Until July 2026 a score of 3 or below injected a blunt "LOW QUALITY" warning; it was removed because it branded sound businesses having an off year — Greggs tripped it while running 19.5% return on equity, 16.5% ROCE and a net cash balance sheet. Business-model weakness is now judged solely by the peer-relative margin test below. Where the score cannot be computed at all (an investment trust, or a ticker outside our coverage) it reads n/a: absent data is never treated as evidence of weakness
 - **Leverage flags**: net debt vs EBITDA and vs market cap, with an explicit "HIGH LEVERAGE" warning injected when net debt exceeds 3× EBITDA or the market cap
 - **Peer-relative margin flags**: net margin compared against the *industry median* — computed live across every company in the same industry, and only trusted when the industry has at least 5 names (otherwise a 2% absolute floor applies). Thin margins are normal in some industries — below the industry's own norm is the red flag, loss-making doubly so. A profitable company with **ROCE ≥ 15%** is never flagged for thin margins: a low-margin, high-capital-returns model (resellers, distributors) is how the business is built, not a weakness
 - Analyst context: consensus, buy %, upside to target, forward EPS growth
@@ -1553,8 +1626,10 @@ Journal of Finance, 68(3), pp. 929–985.
 
 Demonstrates that momentum and value factors work across asset classes (stocks, bonds, currencies, commodities) and geographies. Also shows the diversification benefit of combining momentum with value.
 
-**The 12-1 Month Window:**  
+**The Skip Window — and why ours is 12-3, not 12-1:**  
 The exclusion of the most recent month from the momentum calculation was formalised by Jegadeesh & Titman. Short-term return reversal (the tendency of the best recent performers to give back gains) is distinct from the medium-term momentum effect and would corrupt the signal if included.
+
+Alpha Move AI skips **three** months rather than one. This trades a little responsiveness for a signal that clears the reversal window with margin and turns over more slowly. It is a variant of the published 12-1 result, not a reproduction of it, and the two have not been tested head-to-head on this universe — so the academic evidence cited here supports the *existence* of the momentum effect rather than this specific parameterisation of it.
 
 ---
 
