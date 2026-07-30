@@ -636,13 +636,39 @@ def _compute_fear_greed():
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 def _pct_change_today(prices, ticker):
-    """Return today's % change for a single ticker. Returns None if insufficient data."""
+    """Return today's % change for a single ticker. Returns None if insufficient data
+    or if the ticker's feed has gaps (see below)."""
     if ticker not in prices.columns:
         return None
     col = prices[ticker].dropna()
     if len(col) < 2:
         return None
+    # Yahoo sometimes stops printing daily bars for a ticker while still serving a
+    # live quote — ^FTAS (All-Share) went blank for 8 sessions in July 2026. yfinance
+    # drops those rows entirely, so iloc[-2] silently reaches back to whenever the
+    # feed last printed and a multi-session return gets rendered as "today's move"
+    # (the sidebar showed All-Share +2.6% on a day it actually moved -0.06%). Only
+    # trust the pair when it really is the last two sessions in the frame.
+    sessions = prices.index
+    if len(sessions) < 2 or col.index[-1] != sessions[-1] or col.index[-2] != sessions[-2]:
+        return None
     return float((col.iloc[-1] / col.iloc[-2]) - 1)
+
+
+def _quote_pct_change(ticker):
+    """Fallback day change straight from Yahoo's quote metadata (last price vs the
+    true previous close). Used when a ticker's daily bars are gappy but its quote is
+    still live — this is the number Yahoo's own page shows. Returns None on any error."""
+    import yfinance as yf  # deferred — only this fallback path needs it
+
+    try:
+        fi = yf.Ticker(ticker).fast_info
+        last, prev = fi.get("lastPrice"), fi.get("previousClose")
+        if last and prev:
+            return float(last / prev - 1)
+    except Exception:
+        pass
+    return None
 
 
 def _basket_pct_change(prices, tickers):
@@ -1326,8 +1352,18 @@ def sidebar(response: Response):
         # last completed session, so the % change is "since the previous close" and
         # moves through the trading day.
         prices = _get_sidebar_prices()
+        # Benchmarks fall back to the live quote when their daily bars are gappy, so
+        # a headline index still shows a figure (and the right one) through a Yahoo
+        # bar outage. Only 3 tickers, and only on a cache miss with a stale feed.
         benchmarks = [
-            {"name": name, "pct_change": _pct_change_today(prices, ticker)}
+            {
+                "name": name,
+                "pct_change": (
+                    pct
+                    if (pct := _pct_change_today(prices, ticker)) is not None
+                    else _quote_pct_change(ticker)
+                ),
+            }
             for name, ticker in BENCHMARK_TICKERS.items()
         ]
         sectors = [
