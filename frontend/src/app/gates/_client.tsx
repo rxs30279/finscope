@@ -80,6 +80,7 @@ const GATE_LABEL: Record<string, string> = {
   sentiment: "sent",
   guidance: "guid",
   earnings_quality: "bank",
+  low_base: "base",
 };
 
 // Same palette as HighImpactRnsTab's VET_STYLE — keep in sync.

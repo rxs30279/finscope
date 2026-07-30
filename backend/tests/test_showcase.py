@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+import gates
 import showcase
 
 
@@ -196,10 +197,12 @@ def test_sentiment_prefers_stored_llm_sentiment():
 
 # ── flag_high_impact_candidates ───────────────────────────────────────────────
 def test_flag_keeps_positive_and_stores_vet():
-    vet = {"verdict": "include", "confidence": "high", "rationale": "clean", "model": "deepseek-chat"}
+    vet = {"verdict": "include", "confidence": "high", "rationale": "clean",
+           "model": "deepseek-chat", "low_base": {"period": "H1"}}
     with patch.object(showcase, "_q", return_value=[_cand()]), \
          patch.object(showcase, "_story_close", return_value=123.0), \
          patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation") as record_lb, \
          patch.object(showcase, "_exec", return_value=1) as ex:
         res = showcase.flag_high_impact_candidates(hours=48)
     assert res == {"candidates": 1, "flagged": 1, "skipped_sentiment": 0,
@@ -208,6 +211,11 @@ def test_flag_keeps_positive_and_stores_vet():
     params = ex.call_args[0][1]
     assert params[16] == "include"          # vet_verdict
     assert isinstance(params[20], datetime)  # vet_processed_at set
+    # low_base gate is shadow-evaluated on the vet's own pool, separately from
+    # the high_impact_rns INSERT above — must not touch showcase._exec/params.
+    record_lb.assert_called_once()
+    assert record_lb.call_args[0][0] == _cand()["id"]
+    assert record_lb.call_args[0][1]["low_base"] == {"period": "H1"}
 
 
 def test_flag_skips_non_positive():
@@ -226,6 +234,7 @@ def test_flag_vet_failure_still_inserts_null_verdict():
     with patch.object(showcase, "_q", return_value=[_cand()]), \
          patch.object(showcase, "_story_close", return_value=1.0), \
          patch.object(showcase, "_vet_candidate", side_effect=RuntimeError("api down")), \
+         patch.object(gates, "record_low_base_evaluation") as record_lb, \
          patch.object(showcase, "_exec", return_value=1) as ex:
         res = showcase.flag_high_impact_candidates()
     assert res["flagged"] == 1
@@ -233,6 +242,8 @@ def test_flag_vet_failure_still_inserts_null_verdict():
     params = ex.call_args[0][1]
     assert params[16] is None   # vet_verdict NULL
     assert params[20] is None   # vet_processed_at NULL
+    # A failed vet still gets a (n/a/not_vetted) low_base evaluation recorded.
+    assert record_lb.call_args[0][1]["low_base"] is None
 
 
 # ── guidance gate ─────────────────────────────────────────────────────────────
@@ -555,6 +566,7 @@ def test_flag_still_flags_a_bank_with_a_clean_loss_rate():
     with patch.object(showcase, "_q", return_value=[cand]), \
          patch.object(showcase, "_story_close", return_value=1.0), \
          patch.object(showcase, "_vet_candidate", return_value=None), \
+         patch.object(gates, "record_low_base_evaluation"), \
          patch.object(showcase, "_exec", return_value=1):
         res = showcase.flag_high_impact_candidates()
     assert res["flagged"] == 1

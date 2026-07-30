@@ -150,10 +150,129 @@ def _gate_earnings_quality(cand: dict) -> GateResult:
     return GateResult(state="n/a", reason=reason)
 
 
+# ── Gate: low_base (shadow) ─────────────────────────────────────────────────
+# Phase 4 of docs/rns-gate-block-plan.md. The vet's four audited numeric
+# errors (CAPD, SRT, STAN, JNEO — plan §1) all sat in the same step: a
+# sequential comparison the model was asked to derive itself. This gate takes
+# that arithmetic out of the model's hands — showcase._parse_low_base only
+# ever copies figures verbatim (current_value, preceding_period_value,
+# prior_year_value/growth) — and does the comparison here, in Python.
+#
+# Shadow: evaluated and recorded on every vetted candidate, blocks nothing.
+# Per the plan's Phase 5, arming needs the four audited rows checked as a
+# NEGATIVE control (must not block) and PTEC.L 9659657 as the positive
+# control — that check runs through rns_body_context_validation.py over the
+# stored bodies, not unit fixtures, and is a Phase 5 prerequisite, not done
+# here.
+_LOW_BASE_HALVES = ("H1", "H2")
+_LOW_BASE_PERIODS = ("H1", "H2", "Q1", "Q2", "Q3", "Q4")
+_LOW_BASE_METRICS = ("revenue", "operating_income", "net_income")
+
+
+def _low_base_fy_figure(symbol: Optional[str], metric: str) -> Optional[float]:
+    """The most recently reported COMPLETE fiscal year's value for `metric`.
+
+    An interim announcement's prior-year comparator period (e.g. "H1 2025")
+    belongs to the fiscal year immediately before the one in progress — which
+    is, by construction, the latest year annual_financials has on file: the
+    year containing the current period hasn't closed yet, so it can't be
+    there instead.
+    """
+    from showcase import _annual_history
+
+    hist = _annual_history(symbol)  # oldest first
+    if not hist:
+        return None
+    v = hist[-1].get(metric)
+    return float(v) if v is not None else None
+
+
+def _gate_low_base(cand: dict) -> GateResult:
+    from showcase import _parse_money
+
+    lb = cand.get("low_base")
+    if not isinstance(lb, dict):
+        return GateResult(state="n/a", reason="not_vetted")
+
+    period = str(lb.get("period") or "").strip().upper()
+    if period not in _LOW_BASE_PERIODS:
+        return GateResult(state="n/a", reason="missing_period")
+
+    current = _parse_money(lb.get("current_value"))
+    if current is None:
+        return GateResult(state="n/a", reason="unparseable_value")
+
+    # Route 1 — the announcement prints the immediately preceding same-length
+    # period directly (CAPD's Q1'26 next to Q2'26). No divisor, no
+    # derivation, the safest comparison available — prefer it whenever it's
+    # there. This is the fix for the CAPD.L defect: the original vet divided
+    # an FY total by 2 and called the result a "quarterly run-rate" when the
+    # announcement already printed the true sequential quarters.
+    preceding = _parse_money(lb.get("preceding_period_value"))
+    basis = "printed_preceding_period"
+
+    if preceding is None:
+        # Route 2 — derive the preceding HALF as FY total minus the
+        # prior-year SAME half, valid only for halves: H1 + H2 = FY for the
+        # prior fiscal year, so FY - H1(prior year) = H2(prior year) = the
+        # half immediately preceding this one. There is no equivalent
+        # identity for quarters without the other three quarters, which
+        # quarterly_financials cannot supply for ~95% of the universe (plan
+        # §Phase 4 data-source audit) — so a quarter with nothing printed
+        # directly is n/a, never a divide-by-4 guess.
+        if period not in _LOW_BASE_HALVES:
+            return GateResult(state="n/a", reason="quarter_unsupported")
+
+        prior = _parse_money(lb.get("prior_year_value"))
+        if prior is None:
+            growth = lb.get("prior_year_growth_pct")
+            if isinstance(growth, (int, float)) and growth > -100:
+                prior = current / (1 + growth / 100.0)
+        if prior is None:
+            return GateResult(state="n/a", reason="no_period_split")
+
+        metric = str(lb.get("metric") or "").strip().lower()
+        if metric not in _LOW_BASE_METRICS:
+            return GateResult(state="n/a", reason="metric_unmapped")
+
+        fy_total = _low_base_fy_figure(cand.get("symbol"), metric)
+        if fy_total is None:
+            return GateResult(state="n/a", reason="no_annual_history")
+
+        preceding = fy_total - prior
+        basis = "derived_from_fy_total"
+
+    if not preceding:
+        return GateResult(state="n/a", reason="unparseable_value")
+
+    delta_pct = round((current / preceding - 1) * 100, 1)
+    evidence = {
+        "period": period, "current_value": current,
+        "preceding_value": round(preceding, 1), "delta_pct": delta_pct,
+        "basis": basis,
+    }
+
+    # Guardrail 3 (STAN/JNEO) — the model's own direction claim, checked
+    # mechanically against the sign Python just computed, field to field —
+    # never by re-reading prose. A disagreement doesn't change the gate's
+    # state (the Python figure is authoritative either way) but is worth
+    # surfacing: it is exactly the failure mode that ran undetected for a
+    # fortnight before the audit that started Phase 4.
+    computed_direction = "above" if delta_pct > 1 else "below" if delta_pct < -1 else "in_line"
+    model_direction = str(lb.get("direction") or "").strip().lower()
+    if model_direction in ("above", "below", "in_line") and model_direction != computed_direction:
+        evidence["model_direction_mismatch"] = {"model": model_direction, "computed": computed_direction}
+
+    if delta_pct < 0:
+        return GateResult(state="block", reason="below_preceding_period", evidence=evidence)
+    return GateResult(state="pass", evidence=evidence)
+
+
 GATES: tuple[Gate, ...] = (
     Gate("sentiment", "Announcement direction must read positive.", "armed", _gate_sentiment),
     Gate("guidance", "Guidance not raised against a printed consensus it fails to clear.", "armed", _gate_guidance),
     Gate("earnings_quality", "Bank loan-loss rate must not be rising.", "armed", _gate_earnings_quality),
+    Gate("low_base", "Headline growth vs the immediately preceding period, not just the prior-year comparator.", "shadow", _gate_low_base),
 )
 
 
@@ -218,32 +337,54 @@ _EVAL_SQL = """
 """
 
 
+def _upsert_evaluation(rns_id, gate: Gate, result: GateResult) -> int:
+    return _exec(
+        """
+        INSERT INTO rns_gate_evaluations
+            (rns_id, gate, state, reason, evidence, mode, evaluated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (rns_id, gate) DO UPDATE SET
+            state = EXCLUDED.state, reason = EXCLUDED.reason,
+            evidence = EXCLUDED.evidence, mode = EXCLUDED.mode,
+            evaluated_at = EXCLUDED.evaluated_at
+        """,
+        (
+            rns_id, gate.name, result.state, result.reason,
+            Json(result.evidence) if result.evidence is not None else None,
+            gate.mode, datetime.now(timezone.utc),
+        ),
+    )
+
+
 def record_gate_evaluations(hours: int = 48) -> dict:
     """Run every gate over every ranked Tier A/B row from the last `hours` and
     upsert one row per (rns_id, gate) into rns_gate_evaluations. Idempotent —
     a re-run (or the morning cron re-covering an overlapping window) just
-    refreshes the same rows. Returns a counts dict for cron logs."""
+    refreshes the same rows. Returns a counts dict for cron logs.
+
+    low_base always comes back n/a/not_vetted here — this sweep's rows never
+    carry a `low_base` key (see record_low_base_evaluation)."""
     rows = _q(_EVAL_SQL, (hours,))
     written = 0
     for row in rows:
         for gate, result in evaluate_all(row):
-            written += _exec(
-                """
-                INSERT INTO rns_gate_evaluations
-                    (rns_id, gate, state, reason, evidence, mode, evaluated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (rns_id, gate) DO UPDATE SET
-                    state = EXCLUDED.state, reason = EXCLUDED.reason,
-                    evidence = EXCLUDED.evidence, mode = EXCLUDED.mode,
-                    evaluated_at = EXCLUDED.evaluated_at
-                """,
-                (
-                    row["id"], gate.name, result.state, result.reason,
-                    Json(result.evidence) if result.evidence is not None else None,
-                    gate.mode, datetime.now(timezone.utc),
-                ),
-            )
+            written += _upsert_evaluation(row["id"], gate, result)
     return {"candidates": len(rows), "gate_rows_written": written}
+
+
+def record_low_base_evaluation(rns_id: int, cand: dict) -> int:
+    """Evaluate + upsert just the low_base gate for one freshly-vetted
+    candidate. Separate from record_gate_evaluations (the wide sweep) because
+    this gate needs the vet's structured low_base output, which only exists
+    for rows that reached the LLM vet inside
+    showcase.flag_high_impact_candidates — the plan's Phase 4 note that this
+    gate "cannot be backfilled and its evaluation pool is the vet's pool, not
+    the wide one." `cand` must carry the candidate's own fields plus a
+    `low_base` key (showcase._parse_low_base's output, or None on a vet
+    failure)."""
+    gate = next(g for g in GATES if g.name == "low_base")
+    result = gate.evaluate(cand)
+    return _upsert_evaluation(rns_id, gate, result)
 
 
 # ── Returns — a separate consumer of rns_score_perf.py's conventions ──────────

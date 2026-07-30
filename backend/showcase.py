@@ -278,6 +278,19 @@ def _vet_messages(cand: dict, annual: Optional[list[dict]] = None) -> list[dict]
         "comparison isn't clean rather than forcing it. If the base period "
         "cannot be established from the data provided, say so in the rationale "
         "and use low confidence. "
+        "Separately, fill the low_base object by COPYING figures as printed — "
+        "never calculate the preceding-period base yourself. Identify the "
+        "period of the headline figure you are assessing (H1/H2/Q1-Q4) and "
+        "which line it is (revenue/operating_income/net_income/other). Copy "
+        "the immediately preceding same-length period's figure ONLY if the "
+        "announcement prints it directly (e.g. Q1 next to Q2). Separately, "
+        "copy the prior-year same-period figure, or the YoY growth percentage "
+        "against it, ONLY if the announcement states one of those — never "
+        "convert one into the other yourself. Leave any field null rather "
+        "than estimating it. Give your own best-effort direction read "
+        "(above/below/in_line) against the correct preceding-period base, "
+        "not the prior-year figure — this is checked mechanically afterwards, "
+        "so a guess is fine. "
         "Judge whether this is a genuinely positive near-term investment case. "
         "Return STRICT JSON only."
     )
@@ -306,6 +319,19 @@ Return a JSON object with exactly these fields:
               with a real catch to check), "exclude" (likely to disappoint)
   confidence  one of: "high", "medium", "low"
   rationale   one or two sentences naming the specific catch, or why it's clean
+  low_base    an object (null fields where not stated — never estimate):
+                period                   "H1"|"H2"|"Q1"|"Q2"|"Q3"|"Q4"|null
+                metric                   "revenue"|"operating_income"|
+                                         "net_income"|"other"|null
+                current_value            the headline figure, verbatim
+                preceding_period_value   immediately preceding same-length
+                                         period's figure, ONLY if printed
+                prior_year_value         prior-year same-period figure, ONLY
+                                         if printed
+                prior_year_growth_pct    YoY growth %, ONLY if printed instead
+                                         of an absolute prior figure
+                direction                your own read: "above"|"below"|
+                                         "in_line"
 
 Return JSON only — no preamble, no code fence."""
     return [
@@ -334,7 +360,7 @@ def _vet_candidate(cand: dict, before=None) -> dict:
         messages=_vet_messages(cand, annual),
         response_format={"type": "json_object"},
         temperature=0.2,
-        max_tokens=300,
+        max_tokens=450,
         extra_body=_THINKING_OFF,
     )
     result = json.loads(resp.choices[0].message.content)
@@ -346,6 +372,30 @@ def _vet_candidate(cand: dict, before=None) -> dict:
         "confidence": (result.get("confidence") or "").lower().strip()[:10] or None,
         "rationale": (result.get("rationale") or "").strip()[:500] or None,
         "model": _DEEPSEEK_MODEL,
+        "low_base": _parse_low_base(result.get("low_base")),
+    }
+
+
+def _parse_low_base(raw) -> dict:
+    """Coerce the vet's low_base object — display/gate input only, never
+    trusted further than "the model copied this string or number". All
+    arithmetic happens in gates._gate_low_base, not here."""
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _str(key):
+        v = raw.get(key)
+        return v.strip() if isinstance(v, str) and v.strip() else None
+
+    growth = raw.get("prior_year_growth_pct")
+    return {
+        "period": _str("period"),
+        "metric": _str("metric"),
+        "current_value": _str("current_value"),
+        "preceding_period_value": _str("preceding_period_value"),
+        "prior_year_value": _str("prior_year_value"),
+        "prior_year_growth_pct": growth if isinstance(growth, (int, float)) else None,
+        "direction": _str("direction"),
     }
 
 
@@ -644,7 +694,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         ),
     )
 
-    from gates import GATES, blocking_reason
+    from gates import GATES, blocking_reason, record_low_base_evaluation
 
     flagged = 0
     counts = {g.name: 0 for g in GATES}
@@ -679,6 +729,18 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         except Exception as e:
             print(f"[showcase] vet failed for {c['symbol']} (non-fatal) — {e}")
             vet = None
+
+        # Gate-block Phase 4 (docs/rns-gate-block-plan.md) — shadow-evaluate
+        # low_base on this candidate now, while its vet output is in hand.
+        # This gate's evaluation pool is the vet's pool, not the wide Tier A/B
+        # sweep record_gate_evaluations runs in the morning cron, because it
+        # needs fields only the vet call produces. Shadow mode: recorded on
+        # /gates only, never blocks — does NOT touch the INSERT below or the
+        # public High Impact page.
+        try:
+            record_low_base_evaluation(c["id"], {**c, "low_base": (vet or {}).get("low_base")})
+        except Exception as e:
+            print(f"[showcase] low_base gate recording failed (non-fatal) — {e}")
 
         # Forward multiple: LLM extracts any stated FY profit figure from the
         # full announcement text, Python computes EV/multiple. Internally
