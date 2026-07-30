@@ -473,7 +473,9 @@ export default function EmailsClient() {
                   onClick={() => setOpenEmailId(m.email_id)}
                   style={{ borderBottom: `1px solid ${colors.borderSubtle}`, cursor: "pointer" }}
                 >
-                  <Td>{m.recipient ?? "—"}</Td>
+                  <Td>
+                    <span style={{ color: colors.text }}>{m.recipient ?? "—"}</span>
+                  </Td>
                   <Td>
                     <span style={{ color: STATUS_COLOR[m.status], fontWeight: 700 }}>{STATUS_LABEL[m.status]}</span>
                     {m.was_delayed && m.status !== "delayed" && (
