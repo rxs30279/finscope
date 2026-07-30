@@ -343,17 +343,29 @@ def _row_returns(symbol: str, published_at, ftse_index: Optional[str], bench_get
 # ── /gates page endpoint ────────────────────────────────────────────────────────
 _MATRIX_SQL = """
     SELECT r.id AS rns_id, r.symbol, r.company_name, r.headline, r.url, r.category,
-           r.published_at, r.llm_score, r.llm_sentiment,
+           r.published_at, r.llm_score, r.llm_sentiment, r.llm_action,
            m.sector, m.industry, m.ftse_index,
-           t.market_cap,
+           t.market_cap, t.net_debt, t.ebitda, t.net_income_margin, t.roce,
+           pm.margin_median,
            h.vet_verdict, h.vet_rationale
     FROM rns_announcements r
     LEFT JOIN company_metadata m ON m.symbol = r.symbol
     LEFT JOIN LATERAL (
-        SELECT market_cap FROM ttm_financials
+        SELECT market_cap, net_debt, ebitda, net_income_margin, roce FROM ttm_financials
         WHERE company_symbol = r.symbol
         ORDER BY period_end_date DESC NULLS LAST LIMIT 1
     ) t ON TRUE
+    -- Same industry-peer margin median the public flag's quality floor uses
+    -- (showcase.py flag_high_impact_candidates) — kept in sync with it.
+    LEFT JOIN LATERAL (
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY t2.net_income_margin)
+                   AS margin_median
+        FROM ttm_financials t2
+        JOIN company_metadata m2 ON m2.symbol = t2.company_symbol
+        WHERE m2.industry = m.industry
+          AND t2.net_income_margin IS NOT NULL
+        HAVING COUNT(*) >= {peer_min_group}
+    ) pm ON TRUE
     -- Display-only: the vet only ever runs on rows that already cleared every
     -- gate AND the public flag's own floors (score/leverage/margin/market-cap),
     -- so this is null for the vast majority of the wider /gates cohort.
@@ -361,6 +373,68 @@ _MATRIX_SQL = """
     WHERE {where}
     ORDER BY r.published_at DESC
 """
+
+
+# ── Public-flag floor diagnostics (display-only) ────────────────────────────────
+# Mirrors the non-gate eligibility floors in showcase.flag_high_impact_candidates
+# — score, action, category, hours-window, market cap, leverage, quality margin,
+# and the 30-day per-symbol dedupe — so a row that never reached the LLM vet (no
+# gate blocked it either) shows WHY. Only meaningful when vet_verdict is NULL;
+# a row that already has a verdict cleared all of these by definition.
+_FLOOR_LABEL = {
+    "score": "llm_score below the flag threshold",
+    "action": "llm_action not in (watch, research)",
+    "category": "category not in the High Impact category list",
+    "mkt_cap": "market cap below the £50m floor (or missing)",
+    "leverage": "net debt > 3x EBITDA (or unprofitable with debt, or debt > market cap)",
+    "margin": "net income margin below the industry-peer floor (no ROCE escape)",
+    "dedup": "same symbol already flagged in the last 30 days",
+}
+
+
+def _public_flag_fails(row: dict, recently_flagged: set) -> list[str]:
+    from showcase import (
+        HIGH_IMPACT_MIN_LLM_SCORE, HIGH_IMPACT_CATEGORIES, HIGH_IMPACT_MIN_MARKET_CAP,
+        HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA, HIGH_IMPACT_MIN_NET_MARGIN, HIGH_IMPACT_MIN_ROCE,
+    )
+
+    def _f(key):
+        v = row.get(key)
+        return float(v) if v is not None else None
+
+    fails = []
+    score = row.get("llm_score")
+    if score is None or score < HIGH_IMPACT_MIN_LLM_SCORE:
+        fails.append("score")
+    if row.get("llm_action") not in ("watch", "research"):
+        fails.append("action")
+    if row.get("category") not in HIGH_IMPACT_CATEGORIES:
+        fails.append("category")
+
+    mkt_cap = _f("market_cap")
+    if mkt_cap is None or mkt_cap < HIGH_IMPACT_MIN_MARKET_CAP:
+        fails.append("mkt_cap")
+
+    net_debt, ebitda = _f("net_debt"), _f("ebitda")
+    if net_debt is not None and (
+        (ebitda is not None and ebitda > 0 and net_debt > HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA * ebitda)
+        or (ebitda is not None and ebitda <= 0 and net_debt > 0)
+        or (mkt_cap is not None and net_debt > mkt_cap)
+    ):
+        fails.append("leverage")
+
+    margin, roce = _f("net_income_margin"), _f("roce")
+    if margin is not None:
+        peer_median = _f("margin_median")
+        floor = max(0.0, peer_median if peer_median is not None else HIGH_IMPACT_MIN_NET_MARGIN)
+        if margin < floor and not (margin > 0 and (roce or 0.0) >= HIGH_IMPACT_MIN_ROCE):
+            fails.append("margin")
+
+    if row["symbol"] in recently_flagged:
+        fails.append("dedup")
+
+    return fails
+
 
 _LATEST_SESSION_CLAUSE = """
     r.published_at::date = (
@@ -385,7 +459,7 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
               most rows on a quiet day carry nothing for any gate to judge,
               and a page that's mostly blank teaches you to stop opening it)
     """
-    from showcase import HIGH_IMPACT_CATEGORIES
+    from showcase import HIGH_IMPACT_CATEGORIES, HIGH_IMPACT_DEDUPE_DAYS, PEER_MARGIN_MIN_GROUP
 
     where = ["r.symbol IS NOT NULL", "r.llm_processed_at IS NOT NULL", "r.tier IN ('A','B')"]
     if window == "7d":
@@ -396,7 +470,7 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
         window = "latest"
         where.append(_LATEST_SESSION_CLAUSE)
 
-    rows = _q(_MATRIX_SQL.format(where=" AND ".join(where)))
+    rows = _q(_MATRIX_SQL.format(where=" AND ".join(where), peer_min_group=PEER_MARGIN_MIN_GROUP))
 
     if cohort in ("in_universe", "category"):
         rows = [r for r in rows if r.get("market_cap") is not None]
@@ -447,6 +521,19 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
             if any(by_row.get(r["rns_id"], {}).get(g.name, {}).get("state") in ("pass", "block") for g in GATES)
         ]
 
+    # Symbols with another flag in the dedupe window — same rule
+    # flag_high_impact_candidates uses (NOT EXISTS ... flagged_at >= NOW() - N
+    # days). A row's own entry doesn't count against it: only rows with a NULL
+    # vet_verdict get checked below, and a row already in high_impact_rns has one.
+    symbols = list({r["symbol"] for r in rows})
+    recently_flagged = {
+        row["symbol"] for row in _q(
+            "SELECT DISTINCT symbol FROM high_impact_rns "
+            "WHERE symbol = ANY(%s) AND flagged_at >= NOW() - (%s || ' days')::interval",
+            (symbols, HIGH_IMPACT_DEDUPE_DAYS),
+        )
+    } if symbols else set()
+
     bench_get = _benchmark_return_cache()
     out_rows = []
     for r in rows:
@@ -457,6 +544,9 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
             "llm_score": r["llm_score"], "llm_sentiment": r["llm_sentiment"],
             "in_universe": r.get("market_cap") is not None,
             "vet_verdict": r.get("vet_verdict"), "vet_rationale": r.get("vet_rationale"),
+            "public_flag_fail": (
+                [] if r.get("vet_verdict") else _public_flag_fails(r, recently_flagged)
+            ),
             "gates": by_row.get(r["rns_id"], {}),
             "returns": _row_returns(r["symbol"], r["published_at"], r["ftse_index"], bench_get),
         })
@@ -478,6 +568,7 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
         "cohort": cohort,
         "show_all": show_all,
         "gates": [{"name": g.name, "description": g.description, "mode": g.mode} for g in GATES],
+        "floor_labels": _FLOOR_LABEL,
         "header": header,
         "rows": out_rows,
     }

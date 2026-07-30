@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { API, adminHeaders } from "@/lib/api";
 import { colors } from "@/lib/theme";
 import { useIsAdmin } from "@/hooks/useAdmin";
@@ -45,6 +45,7 @@ interface MatrixRow {
   in_universe: boolean;
   vet_verdict: "include" | "caution" | "exclude" | null;
   vet_rationale: string | null;
+  public_flag_fail: string[];
   gates: Record<string, GateCell>;
   returns: RowReturns;
 }
@@ -63,12 +64,17 @@ interface MatrixResponse {
   cohort: string;
   show_all: boolean;
   gates: GateInfo[];
+  floor_labels: Record<string, string>;
   header: Record<string, GateHeaderStats>;
   rows: MatrixRow[];
 }
 
 type Window_ = "latest" | "7d" | "30d";
 type Cohort = "category" | "in_universe" | "all";
+
+// Mirrors showcase.py's HIGH_IMPACT_MIN_LLM_SCORE — used to color the score
+// cell red instead of duplicating "score" in the floor column.
+const HIGH_IMPACT_MIN_LLM_SCORE = 75;
 
 const GATE_LABEL: Record<string, string> = {
   sentiment: "sent",
@@ -82,6 +88,13 @@ const VET_STYLE: Record<string, { color: string; bg: string }> = {
   caution: { color: "#f59e0b", bg: "#2a1c00" },
   exclude: { color: "#ef4444", bg: "#2a0d0d" },
 };
+
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
+}
 
 function pct(x: number | null, digits = 1): string {
   return x === null || x === undefined ? "—" : `${(x * 100).toFixed(digits)}%`;
@@ -168,6 +181,26 @@ function VetPill({ verdict, rationale }: { verdict: MatrixRow["vet_verdict"]; ra
   );
 }
 
+// Which of the public flag's own eligibility floors (score/action/category/
+// market-cap/leverage/margin/dedupe) this row fails — why it never reached
+// the LLM vet even though no registry gate blocked it. Empty once vet_verdict
+// is set (everything already cleared by definition).
+function FloorCell({ fails, labels }: { fails: string[]; labels: Record<string, string> }) {
+  if (!fails || fails.length === 0) return <span style={{ color: colors.textDim }}>·</span>;
+  return (
+    <span style={{ fontSize: 10 }}>
+      {fails.map((f, i) => (
+        <span key={f}>
+          {i > 0 && <span style={{ color: colors.textDim }}>,</span>}
+          <span style={{ color: colors.red, cursor: "help" }} title={labels[f] ?? f}>
+            {f}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function ReturnCell({ value, status }: { value: number | null; status: ReturnStatus }) {
   if (status !== "matured") {
     return <span style={{ color: colors.textDim }}>{status}</span>;
@@ -212,6 +245,17 @@ export default function GatesClient() {
     if (!isAdmin) return;
     load();
   }, [isAdmin, load]);
+
+  // Recent day first, then score descending within each day.
+  const sortedRows = useMemo(() => {
+    if (!data) return [];
+    return [...data.rows].sort((a, b) => {
+      const dayA = a.published_at?.slice(0, 10) ?? "";
+      const dayB = b.published_at?.slice(0, 10) ?? "";
+      if (dayA !== dayB) return dayA < dayB ? 1 : -1;
+      return (b.llm_score ?? -Infinity) - (a.llm_score ?? -Infinity);
+    });
+  }, [data]);
 
   if (!isAdmin) {
     return (
@@ -330,6 +374,7 @@ export default function GatesClient() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "monospace", fontSize: 12 }}>
             <thead>
               <tr>
+                <Th align="left">date</Th>
                 <Th align="left">symbol</Th>
                 <Th align="left">headline</Th>
                 <Th align="right">score</Th>
@@ -341,14 +386,34 @@ export default function GatesClient() {
                 <Th align="center" title="AI vet verdict — only set for rows that already cleared every gate and the public High Impact flag's own floors">
                   vet
                 </Th>
+                <Th align="left" title="Which of the public High Impact flag's own eligibility floors (score/action/category/market-cap/leverage/margin/dedupe) this row fails — why it never reached the vet even though no gate blocked it">
+                  floor
+                </Th>
                 <Th align="right">gap</Th>
                 <Th align="right">1d</Th>
                 <Th align="right">1w</Th>
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row) => (
-                <tr key={row.rns_id} style={{ borderBottom: `1px solid ${colors.borderSubtle}` }}>
+              {sortedRows.map((row, i) => {
+                const prevDay = i > 0 ? sortedRows[i - 1].published_at?.slice(0, 10) : null;
+                const dayBoundary = i > 0 && row.published_at?.slice(0, 10) !== prevDay;
+                return (
+                <Fragment key={row.rns_id}>
+                  {dayBoundary && (
+                    // A dedicated spacer row, not a border/box-shadow on the <tr> —
+                    // both get eaten by borderCollapse's conflict resolution against
+                    // the adjacent row's own border, so neither ever rendered.
+                    <tr>
+                      <td colSpan={9 + gateNames.length} style={{ padding: 0 }}>
+                        <div style={{ height: 2, background: colors.border }} />
+                      </td>
+                    </tr>
+                  )}
+                  <tr style={{ borderBottom: `1px solid ${colors.borderSubtle}` }}>
+                  <Td>
+                    <span style={{ color: colors.textMuted }}>{fmtDate(row.published_at)}</span>
+                  </Td>
                   <Td>
                     <a
                       href={companyHref(row.symbol)}
@@ -374,7 +439,21 @@ export default function GatesClient() {
                     <span style={{ color: colors.textDim, fontSize: 10, marginLeft: 6 }}>{row.category ?? ""}</span>
                   </Td>
                   <Td align="right">
-                    <span style={{ color: colors.text }}>{row.llm_score ?? "—"}</span>
+                    <span
+                      style={{
+                        color:
+                          row.llm_score !== null && row.llm_score < HIGH_IMPACT_MIN_LLM_SCORE
+                            ? colors.red
+                            : colors.text,
+                      }}
+                      title={
+                        row.llm_score !== null && row.llm_score < HIGH_IMPACT_MIN_LLM_SCORE
+                          ? `below the flag threshold (${HIGH_IMPACT_MIN_LLM_SCORE})`
+                          : undefined
+                      }
+                    >
+                      {row.llm_score ?? "—"}
+                    </span>
                   </Td>
                   {gateNames.map((n) => (
                     <Td key={n} align="center">
@@ -383,6 +462,12 @@ export default function GatesClient() {
                   ))}
                   <Td align="center">
                     <VetPill verdict={row.vet_verdict} rationale={row.vet_rationale} />
+                  </Td>
+                  <Td>
+                    <FloorCell
+                      fails={row.public_flag_fail.filter((f) => f !== "score")}
+                      labels={data.floor_labels}
+                    />
                   </Td>
                   <Td align="right">
                     <span style={{ color: colors.textMuted }}>
@@ -395,13 +480,15 @@ export default function GatesClient() {
                   <Td align="right">
                     <ReturnCell value={row.returns.excess_1w} status={row.returns.status_1w} />
                   </Td>
-                </tr>
-              ))}
+                  </tr>
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         )}
         <div style={{ marginTop: 14, color: colors.textDim, fontSize: 11, fontFamily: "monospace" }}>
-          ● block &nbsp; ○ n/a &nbsp; ▲ pass &nbsp; ◐ block (shadow — did not block) &nbsp; oou = out of universe &nbsp; vet = AI vet verdict (display-only, not a gate)
+          ● block &nbsp; ○ n/a &nbsp; ▲ pass &nbsp; ◐ block (shadow — did not block) &nbsp; oou = out of universe &nbsp; vet = AI vet verdict (display-only, not a gate) &nbsp; floor = public flag eligibility floor(s) failed (hover for detail)
         </div>
       </div>
     </div>
