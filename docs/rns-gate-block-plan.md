@@ -360,6 +360,43 @@ a subtraction and never a direction word. That division of labour is not a
 stylistic preference; it is the direct lesson of the audit above, where all four
 errors sat in the arithmetic and none in the extraction.
 
+#### Where the two terms come from — we own one of them
+
+The derivation needs a full-year total and a prior-year half. **We hold the
+first and not the second**, so the model cannot be cut out of the loop entirely;
+it can only be demoted from computing to copying.
+
+| Term | Source | Coverage |
+|---|---|---|
+| Full-year total | `annual_financials`, already fetched by `_annual_history()` (`showcase.py:205`) | **713** of ~748 active symbols, 5 fiscal years deep |
+| Prior-year half/quarter | the announcement body — the model copies it | per-row; absent on some announcements, see below |
+
+**Do not reach for `quarterly_financials` — it cannot carry this.** It holds
+**34 symbols** (4.8% of the universe), 8 rows deep at most, and it is *empty for
+five of the six audited rows* — JNEO, SRT, CAPD, INCH and PTEC all have zero
+rows; only STAN has any, and that series has a hole at 2025-09-30. This is an
+upstream ceiling rather than a stalled job: the table is fed from Yahoo's
+quarterly income statement (`updater.py:699`), which returns nothing for issuers
+that report semi-annually, i.e. most of the AIM and small-cap names where this
+gate is meant to fire. Backfilling it is not an option.
+
+**Second trap in that table, if it is ever used for anything else:**
+`updater.py:714` derives `q_key = f"Q{((period_end.month-1)//3)+1} {year}"` from
+the period-end month alone, with no reference to the period's actual length. A
+six-month column from a semi-annual reporter is therefore stamped `Q2` or `Q4`
+and is indistinguishable from a true quarter by the key. Any period arithmetic
+over that table has to verify spacing between consecutive `period_end_date`s
+first — the label is not evidence of the period length.
+
+**Consequence for the extracted field:** the prior figure is not always printed,
+so a single `prior_value` is too narrow. Of the audited rows, JNEO
+(`"(H1 2025: £24.5m)"`), CAPD (`H1 2025 159.2` in its metrics table) and STAN
+(`10,906` in the statement of results) all print it outright; INCH prints only
+"up 9%" against a £4.7bn current half, so the base is £4.7bn ÷ 1.09; and SRT
+prints no half-year figures at all. The field wants **`prior_value` OR
+`prior_growth_pct`**, with Python resolving whichever is present and returning
+`n/a` when neither is — never asking the model to convert one into the other.
+
 Three guardrails fall out of the four audited failures, and each maps to one:
 
 - **`CAPD.L` — the period of every figure is a required field, not a label.**
@@ -368,9 +405,13 @@ Three guardrails fall out of the four audited failures, and each maps to one:
   stated period; a figure whose period is absent or unparseable is `n/a`, never
   compared.
 - **`SRT.L` — no published split means the sequential axis is unavailable.**
-  If neither the body nor `ttm_financials` yields an interim, the gate returns
-  `n/a`/`no_period_split` and the model is given no route to assert one. "Likely
-  much higher" must be unrepresentable, not merely discouraged.
+  If the body yields neither a prior half nor a growth rate to derive one from,
+  the gate returns `n/a`/`no_period_split` and the model is given no route to
+  assert one. "Likely much higher" must be unrepresentable, not merely
+  discouraged. Note this is the *common* case, not the edge case: SRT's is a
+  full-year update, and with `quarterly_financials` covering 4.8% of the universe
+  there is no fallback to fill the gap. Expect a high `n/a` rate here, the same
+  way the guidance gate runs ~91% amber.
 - **`STAN.L` and `JNEO.L` — assert the direction mechanically.** Both named the
   right two numbers and stated the wrong relation between them. Once Python owns
   the comparison this cannot recur by construction; while the prose `rationale`
