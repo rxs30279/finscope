@@ -105,17 +105,30 @@ def test_morning_batch_finished_early_passes(monkeypatch):
 
 
 def test_morning_batch_drift_warns(monkeypatch):
-    # Completed 07:12 — past the 07:10 warn line but before the 07:15 fail line.
+    # Completed 07:27 — past the 07:25 warn line but before the 07:30 fail line.
     monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
-    row = {"now_uk": _naive(9, 0), "n": 30, "unscored": 0, "done_uk": _naive(7, 12)}
+    row = {"now_uk": _naive(9, 0), "n": 30, "unscored": 0, "done_uk": _naive(7, 27)}
     status, _ = _run_batch(_batch_stub(row))
     assert status == healthcheck.WARN
 
 
-def test_morning_batch_late_fails(monkeypatch):
-    # Completed 07:22 — the burst slipped; a 07:12 send would have missed stories.
+def test_morning_batch_before_send_passes(monkeypatch):
+    """Completed 07:22 — comfortably inside the 07:30 send.
+
+    Regression guard for the mis-calibration fixed on 2026-07-31: this case
+    used to FAIL, because the check judged against an 07:12 send the project
+    was aiming at but had never deployed.
+    """
     monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
     row = {"now_uk": _naive(9, 0), "n": 30, "unscored": 0, "done_uk": _naive(7, 22)}
+    status, _ = _run_batch(_batch_stub(row))
+    assert status == healthcheck.PASS
+
+
+def test_morning_batch_late_fails(monkeypatch):
+    # Completed 07:56 — the 2026-07-31 batch; the 07:30 send went out without it.
+    monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
+    row = {"now_uk": _naive(9, 0), "n": 45, "unscored": 0, "done_uk": _naive(7, 56, 6)}
     status, _ = _run_batch(_batch_stub(row))
     assert status == healthcheck.FAIL
 
@@ -129,8 +142,19 @@ def test_morning_batch_in_progress_passes(monkeypatch):
     assert "still ranking" in detail
 
 
+def test_morning_batch_unscored_before_send_passes(monkeypatch):
+    # 07:25 with rows still ranking: tight, but the send has not fired yet, so
+    # they are in flight rather than missed.
+    monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
+    row = {"now_uk": _naive(7, 25), "n": 20, "unscored": 3, "done_uk": None}
+    status, detail = _run_batch(_batch_stub(row))
+    assert status == healthcheck.PASS
+    assert "still ranking" in detail
+
+
 def test_morning_batch_stalled_fails(monkeypatch):
-    # Same unscored rows but now past 07:20: the pipeline has stalled.
+    # Same unscored rows but now past the 07:30 send: the pipeline has stalled
+    # and those stories missed the email.
     monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
     row = {"now_uk": _naive(8, 30), "n": 20, "unscored": 3, "done_uk": None}
     status, detail = _run_batch(_batch_stub(row))
