@@ -80,9 +80,29 @@ def secs(a, b):
 
 # NOTE: fetched_at is overwritten to NOW() on every re-ingest upsert
 # (rns.py ON CONFLICT ... fetched_at = NOW()), so it is "last seen", not
-# "first ingested" — useless for a stage split. Only write-once columns are
-# trustworthy: summary_fetched_at (set under WHERE ... IS NULL) and
-# llm_processed_at (rank selects on IS NULL). Decompose end-to-end via those.
+# "first ingested" — useless for a stage split. llm_processed_at is the one
+# genuinely write-once column here (rank selects on IS NULL).
+#
+# summary_fetched_at is NOT write-once, despite what this comment claimed until
+# 2026-07-31. rns._update_summary_and_body sets it to NOW() unconditionally, and
+# _backfill_summaries selects on `body_fetched_at IS NULL` — a different column —
+# so any row revisited for its body has its summary timestamp rewritten with it.
+#
+# In practice that happened once, and the damage is permanent: when body capture
+# shipped (6b73dfb, 2026-07-28) the backfill swept the whole pre-existing tier
+# A/B backlog, overwriting summary_fetched_at on every row it touched. Those
+# rows now carry the sweep's clock time, not their real entry time, and the
+# originals are gone. The symptom is a ladder — measured 2026-07-31, rows
+# published 07-24 read 07:10, 07-22 read 07:15, 07-21 07:30 ... 07-13 08:45,
+# and 07-28 reads 16:10 — impossible for stories ingested minutes after a 07:00
+# publication, and a dead giveaway that the stamp is the sweep, not the ingest.
+#
+# So: TREAT summary_fetched_at AS UNRELIABLE BEFORE ~2026-07-28. Stage splits
+# and p90 figures quoted from earlier rows (including those in
+# docs/rns-earnings-quality-plan.md) are measuring the backfill. Rows from
+# 07-29 on are clean — the backlog is empty and each row is written once — and
+# a failed fetch leaves BOTH columns NULL rather than half-stamping, so the
+# pairing stays internally consistent either way.
 e2e, to_summary, summ_to_rank = [], [], []
 ranked = 0
 for r in rows:
@@ -112,7 +132,8 @@ print(f"Publication window (UTC)     : {first_pub:%H:%M:%S} -> {last_pub:%H:%M:%
 early = sum(1 for p in pub_times if p.hour < 7)  # <07:00 UTC == <08:00 BST
 print(f"Ranked (llm_processed_at set): {ranked}/{len(rows)}\n")
 
-print("Stage latencies (write-once columns only; Tier A/B are the ranked ones):")
+print("Stage latencies (Tier A/B are the ranked ones; summary_fetched_at is "
+      "unreliable before ~2026-07-28 — see the NOTE above):")
 summarize("end-to-end  pub->scored", e2e)
 summarize("  ingest+summary pub->summ", to_summary)
 summarize("  rank    summ->scored", summ_to_rank)
@@ -294,7 +315,10 @@ for name, desc in [
     ("llm_action", "watch / research / ignore suggestion."),
     ("llm_model", "Exact scoring model string (self-labels the DeepSeek version)."),
     ("published_at_utc", "When the RNS hit the wire (write-once)."),
-    ("summary_fetched_at_utc", "When our pipeline scraped the Investegate AI summary (write-once)."),
+    ("summary_fetched_at_utc", "When our pipeline scraped the Investegate AI summary. NOT "
+                               "write-once — rewritten if the row is revisited for its body, "
+                               "which the 2026-07-28 body-capture backfill did to every row "
+                               "before that date. Unreliable before ~2026-07-28."),
     ("llm_processed_at_utc", "When the LLM score was written (write-once)."),
     ("end_to_end_min", "Minutes from published_at → llm_processed_at. The key speed metric."),
     ("pub_to_summary_min", "Minutes from published_at → summary_fetched_at (ingest + summary)."),
@@ -304,10 +328,16 @@ for name, desc in [
 ex.append([])
 
 row("Methodology & caveats", style="h")
-row("Write-once columns only", "fetched_at is deliberately NOT used: the ingest upsert sets "
+row("Which timestamps are sound", "fetched_at is deliberately NOT used: the ingest upsert sets "
     "fetched_at = NOW() on every re-scan, so it records 'last seen', not 'first ingested', "
-    "and would make the stage split meaningless. published_at, summary_fetched_at and "
-    "llm_processed_at are each written once, so latencies built from them are sound.")
+    "and would make the stage split meaningless. published_at and llm_processed_at are each "
+    "written once. summary_fetched_at is not: it is rewritten whenever a row is revisited for "
+    "its body.")
+row("Dates before 2026-07-28", "The body-capture backfill (shipped 2026-07-28) swept every "
+    "pre-existing tier A/B row and overwrote summary_fetched_at with the sweep's own clock "
+    "time, so pub_to_summary_min and summary_to_rank_sec are measuring the backfill, not the "
+    "morning pipeline, on any earlier date. The originals are gone. Runs from 2026-07-29 "
+    "onward are clean.")
 row("Stages reconcile", "pub_to_summary_min + summary_to_rank_sec ≈ end_to_end_min. The rank "
     "step is fast and consistent; almost all latency is upstream (ingest + summary fetch).")
 row("The slow tail", "A few items (e.g. corrections/re-issues, and drops published outside the "
