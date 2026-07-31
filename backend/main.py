@@ -1,7 +1,9 @@
 import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import (BackgroundTasks, Depends, FastAPI, Header, HTTPException,
+                     Query, Request, Response)
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import psycopg2
@@ -13,6 +15,7 @@ import os
 import re
 import hmac
 import statistics
+import traceback
 import urllib.error
 from datetime import timezone
 from email.utils import format_datetime
@@ -32,7 +35,7 @@ from shorts import router as shorts_router
 from landing_story import router as landing_story_router
 from email_events import router as email_events_router, recent_summary as _email_event_summary
 from email_monitor import router as email_monitor_router
-from email_rns_digest import main as run_digest
+from email_rns_digest import main as run_digest, send_locked as send_digest_locked
 from sectors import to_icb, to_gics
 from admin_auth import require_admin_token
 from request_utils import client_ip
@@ -2310,8 +2313,24 @@ def whoami(request: Request):
 _DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
 
 
+def _digest_in_background(updated: bool) -> None:
+    """Run the digest send after the HTTP response has gone out.
+
+    Exceptions are logged, never raised: nothing is listening any more, and an
+    unhandled error in a BackgroundTask would surface as an opaque
+    already-sent-response error rather than anything diagnosable. The real
+    outcome lands in pipeline_runs('rns_digest') either way.
+    """
+    try:
+        stats = send_digest_locked(updated=updated)
+        print(f"[digest] background send finished — {stats}")
+    except Exception:
+        traceback.print_exc()
+
+
 @app.get("/api/digest")
 def digest(
+    background_tasks: BackgroundTasks,
     token: str = Query(default=""),
     dry_run: bool = Query(default=False),
     updated: bool = Query(default=False),
@@ -2342,7 +2361,38 @@ def digest(
     if not hmac.compare_digest(supplied, _DIGEST_TOKEN):
         raise HTTPException(403, "Invalid token")
 
-    stats = run_digest(dry_run=dry_run, updated=updated)
+    # A real send takes ~34s (4.5s of prep, then 61 Resend calls plus up to
+    # DIGEST_SEND_GAP_BUDGET_SECONDS of deliberate pacing sleep), and
+    # cron-job.org gives up at ~30s. That timeout never lost a send — the
+    # server always finished — but it alerted on every healthy run and, worse,
+    # made a genuine failure indistinguishable from the normal case. The work
+    # cannot be meaningfully sped up: the latency IS the politeness that keeps
+    # Microsoft from deferring us (see email_rns_digest._pace). So hand off and
+    # answer immediately. send_locked() guards against two triggers overlapping
+    # now that the HTTP response no longer paces the work.
+    #
+    # The send's own audit trail is unaffected: pipeline_runs('rns_digest') is
+    # still stamped, and healthcheck.py's digest.sent check plus the /status
+    # card read that, not this response. What IS lost is the sent/failed count
+    # in cron-job.org's stored response, which is why "accepted" says so.
+    if not dry_run:
+        background_tasks.add_task(_digest_in_background, updated)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "ok": True,
+                "status": "accepted",
+                "dry_run": False,
+                "updated": updated,
+                "message": ("Digest send started in the background — outcome is "
+                            "recorded in pipeline_runs('rns_digest') and on /status, "
+                            "not in this response"),
+            },
+        )
+
+    # Dry run stays synchronous: it never sends, it returns in ~5s, and the
+    # smoke suite asserts on its rendered result (smoke/test_digest_dryrun.py).
+    stats = run_digest(dry_run=True, updated=updated)
     exit_code = stats.get("exit_code", 1)
     # mode/recipients land in cron-job.org's stored response, so its execution
     # history shows whether segment mode ran and to how many addresses — a

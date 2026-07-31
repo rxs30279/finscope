@@ -978,6 +978,32 @@ def main(dry_run: bool = False, updated: bool = False) -> dict:
     return stats
 
 
+# Cross-process mutex for the send itself. Mirrors RNS_PIPELINE_LOCK_KEY; the
+# value is ASCII "DIGE" so a stray lock is identifiable in pg_locks.
+DIGEST_SEND_LOCK_KEY = 0x44494745
+
+
+def send_locked(updated: bool = False) -> dict:
+    """`main()` under an advisory lock, so two triggers can never both send.
+
+    Needed because /api/digest returns 202 and sends in the background: the HTTP
+    response no longer paces the work, so an impatient retry, a double-click on
+    the cron-job.org "run now" button, or an overlapping manual correction would
+    otherwise each start a full 61-recipient send. Losing the race is a normal
+    outcome, not an error — the digest is already being sent by someone else.
+
+    The lock is released server-side when the connection closes, so a crashed
+    worker cannot wedge tomorrow's send (see db.advisory_lock).
+    """
+    from db import advisory_lock  # local import, matching _record_send's style
+
+    with advisory_lock(DIGEST_SEND_LOCK_KEY) as acquired:
+        if not acquired:
+            print("[digest] another send is already in flight — skipping this trigger")
+            return {"exit_code": 0, "mode": "skipped_locked", "recipients": 0}
+        return main(updated=updated)
+
+
 if __name__ == "__main__":
     # `--dry-run` renders + validates the digest and prints what would be sent,
     # without contacting Resend. `--updated` marks the subject as a correction
