@@ -44,11 +44,69 @@ _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 _DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 # The v4 model names run in thinking (reasoning) mode unless told otherwise.
-# The ranker opts in — score quality beats latency in a cron. Every other call
-# site (news summariser, showcase vet, fwd extraction) passes _THINKING_OFF to
-# keep the old deepseek-chat behaviour and its small max_tokens budgets.
+# The ranker opts in per row (see _FAST_CATEGORIES). Every other call site (news
+# summariser, showcase vet, fwd extraction) passes _THINKING_OFF to keep the old
+# deepseek-chat behaviour and its small max_tokens budgets.
 _THINKING_ON = {"thinking": {"type": "enabled"}}
 _THINKING_OFF = {"thinking": {"type": "disabled"}}
+
+# Categories ranked WITHOUT reasoning. Thinking mode took ranking calls from
+# ~6.5s to 85-172s and made reasoning ~90% of output tokens, and the whole cost
+# lands inside the 07:01 -> 07:30 digest window. It is worth paying where the
+# score depends on reconciling figures the announcement reports; it is not worth
+# paying where the score is essentially determined by the fact itself.
+#
+# Only board_change qualifies, on 90 days of ranked tier A/B rows (2026-07-31):
+# 136 rows, 2.8k chars average, 94 of them under 4k chars with a mean score of
+# 12.0. It is the one high-volume category whose mass is genuinely routine.
+#
+# SIZE THE PRIZE HONESTLY before extending this list. Measured saving is ~27s of
+# model time per gated row, but ranking is 12-way concurrent and board_change is
+# only ~2 of ~22 rows in a morning batch, so the wall-clock saving is a handful
+# of seconds and the cost saving is a couple of percent of ~$4-8/month. The
+# expensive rows are the results categories, and whether reasoning earns its keep
+# THERE is the open question — see the thinking-on/off A/B this list must not
+# pre-empt.
+#
+# Categories rejected on the 90-day view, after a 30-day view made them look
+# inert (they all had 0 rows over the 76 bar, which hid that they cluster at
+# 65-75 just under it):
+#
+#     drill_results     20 rows   16 ACTIONABLE, 7 at >=65, max 75
+#     product_launch    21 rows   10 actionable, 4 at >=65, max 75
+#     update_statement  16 rows    9 actionable, 1 at >=65, max 75
+#
+# At ~20 rows per 90 days each, gating them saves nothing measurable while
+# risking exactly the tradeable row this feed exists to catch — see
+# docs/rns-gate-block-plan.md on misclassification cost being asymmetric. Same
+# argument rules out quarterly, clinical_trial, suspension and the long tail,
+# and delisting is a live digest source (6 of 10 morning rows clear 76).
+#
+# board_change is kept despite reaching 85 once ("Consequential Board Changes",
+# 2026-07-01) because that is 1 row in 136 and _FAST_REVIEW_SCORE below is the
+# tripwire for it. Note that row had NO body — it scored 85 off the summary
+# alone, so a body-length heuristic would not have rescued it either.
+#
+# Override without a deploy by setting RNS_FAST_CATEGORIES to a comma-separated
+# list (empty string restores blanket thinking).
+_FAST_CATEGORIES = frozenset(
+    c.strip()
+    for c in os.environ.get(
+        "RNS_FAST_CATEGORIES",
+        "board_change",
+    ).split(",")
+    if c.strip()
+)
+
+
+def _use_thinking(category: Optional[str]) -> bool:
+    """Whether this row's ranking call runs in reasoning mode.
+
+    Unknown and NULL categories reason: the fast path is an explicit opt-out
+    list, so a category added to rns._CATEGORIES later keeps the safe default
+    until someone measures it.
+    """
+    return (category or "") not in _FAST_CATEGORIES
 
 # Concurrent DeepSeek calls per ranking run. The win is in overlapping network
 # waits, not in saturating the API, and a run that gets itself rate-limited
@@ -885,6 +943,28 @@ def _log_cache_usage(tag: str, resp) -> None:
 # than assuming 32000 holds forever.
 _MAX_COMPLETION_TOKENS = int(os.environ.get("RNS_MAX_COMPLETION_TOKENS", "32000"))
 
+# Fast-path budget. With reasoning disabled the answer is the whole completion,
+# and the answer is what the 4000 -> 8000 step above was actually sized for:
+# 700-1,200 tokens of JSON on a row with several income and charge lines, on top
+# of a ~400-token typical answer. 4000 is ~3x the worst measured answer, and the
+# retry at double still covers a surprise. Keeping it low is the point — it caps
+# what a fast-path row can cost if a future prompt change makes it verbose.
+_FAST_MAX_COMPLETION_TOKENS = int(os.environ.get("RNS_FAST_MAX_COMPLETION_TOKENS", "4000"))
+
+# Safety net for the category gate. A 10-row A/B on 2026-07-31 (thinking off vs
+# on, same prompt, same rows) found the two modes agree exactly on only 3 of 10
+# and the fast path runs a mean +4 higher, max delta 20. That is tolerable ONLY
+# because every one of those rows scored 5-55, nowhere near the digest's 76 bar
+# — which is why these categories were picked. Some of the delta is not even a
+# mode effect: at temperature 0.2 thinking mode disagreed with its own stored
+# score on several of the same rows.
+#
+# So the gate's assumption is "these categories don't produce digest rows". If
+# that stops being true, the log must say so — the alternative is finding out
+# via a story the feed under-scored, and a missed tradeable announcement is the
+# expensive error here. Set below the 76 bar to give warning, not a post-mortem.
+_FAST_REVIEW_SCORE = int(os.environ.get("RNS_FAST_REVIEW_SCORE", "65"))
+
 
 class TruncatedResponse(RuntimeError):
     """The model ran out of completion budget before finishing its answer.
@@ -896,13 +976,21 @@ class TruncatedResponse(RuntimeError):
     """
 
 
-def _call_deepseek(messages: list[dict]) -> dict:
+def _call_deepseek(messages: list[dict], thinking: bool = True) -> dict:
+    """One ranking call. `thinking=False` is the fast path for the categories in
+    _FAST_CATEGORIES — same prompt and same schema, no reasoning chain, and a
+    budget sized for the answer alone.
+
+    Thinking defaults to True so that a caller which hasn't thought about the
+    mode gets the thorough one.
+    """
     client = _get_client()
     # One retry at double the budget. Reasoning length is nondeterministic, so a
     # row that overruns is often fine on a second pass; before this existed the
     # only retry was the next 15-minute sweep, which meant a row could miss the
     # 07:30 digest entirely while still eventually scoring an hour later.
-    budgets = (_MAX_COMPLETION_TOKENS, _MAX_COMPLETION_TOKENS * 2)
+    base = _MAX_COMPLETION_TOKENS if thinking else _FAST_MAX_COMPLETION_TOKENS
+    budgets = (base, base * 2)
     for attempt, budget in enumerate(budgets, start=1):
         resp = client.chat.completions.create(
             model=_DEEPSEEK_MODEL,
@@ -910,9 +998,9 @@ def _call_deepseek(messages: list[dict]) -> dict:
             response_format={"type": "json_object"},
             temperature=0.2,
             max_tokens=budget,
-            extra_body=_THINKING_ON,
+            extra_body=_THINKING_ON if thinking else _THINKING_OFF,
         )
-        _log_cache_usage("rns_llm", resp)
+        _log_cache_usage("rns_llm" if thinking else "rns_llm:fast", resp)
         choice = resp.choices[0]
         if getattr(choice, "finish_reason", None) != "length":
             return json.loads(choice.message.content)
@@ -1098,11 +1186,20 @@ def _rank_one(row_id: int) -> dict:
     price = _load_price_change(cand.get("symbol"))
     prior_guidance = _load_prior_guidance(cand.get("symbol"), exclude_id=row_id)
     messages = _build_messages(cand, history, price, prior_guidance)
-    result = _call_deepseek(messages)
-    # ":thinking" suffix makes the reasoning-mode cutover visible in llm_model
-    # so score distributions can be compared across the switch.
-    _save_ranking(row_id, result, f"{_DEEPSEEK_MODEL}:thinking")
-    return {"id": row_id, **result}
+    thinking = _use_thinking(cand.get("category"))
+    result = _call_deepseek(messages, thinking=thinking)
+    # The mode suffix makes the reasoning cutover visible in llm_model so score
+    # distributions can be compared across it. It now also records which mode
+    # ranked each row, which is the only way a later A/B can separate the two
+    # populations — the July switch was unmeasurable precisely because model and
+    # mode changed together with nothing in the row to tell them apart.
+    _save_ranking(row_id, result, f"{_DEEPSEEK_MODEL}:{'thinking' if thinking else 'fast'}")
+    score = _clip_int(result.get("score"), 0, 100)
+    if not thinking and score is not None and score >= _FAST_REVIEW_SCORE:
+        print(f"[rns_llm] !! fast-path row scored {score} — id={row_id} "
+              f"category={cand.get('category')}. This category was gated because it "
+              "produced no rows near the digest bar; re-check RNS_FAST_CATEGORIES.")
+    return {"id": row_id, "thinking": thinking, **result}
 
 
 def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -> dict:
@@ -1132,16 +1229,22 @@ def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -
     )
 
     ranked = errors = 0
+    # Counted so the cron log shows how the batch split across the two modes —
+    # the fast path is only worth keeping if it is actually taking rows, and a
+    # classifier change upstream could quietly empty it.
+    fast = 0
 
-    def _attempt(row_id: int) -> bool:
+    def _attempt(row_id: int) -> Optional[bool]:
+        """Returns the mode the row ranked in, or None if it failed. The counters
+        are accumulated by the consumer, not here — `_attempt` runs on several
+        threads at once and `+=` on a shared int can lose an update."""
         try:
-            _rank_one(row_id)
-            return True
+            return _rank_one(row_id)["thinking"]
         except Exception as e:
             # Per-row isolation, unchanged from the serial version: one bad row
             # (or one rate-limited call) must never sink the rest of the batch.
             print(f"[rns_llm] rank failed for {row_id}: {e}")
-            return False
+            return None
 
     workers = min(_RANK_WORKERS, len(rows))
     if workers > 1:
@@ -1149,17 +1252,20 @@ def _rank_pending(limit: int = 50, tiers: tuple = ("A", "B"), hours: int = 72) -
         # race _get_client()'s lazy init and construct throwaway duplicates.
         _get_client()
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="rns-rank") as pool:
-            for ok in pool.map(_attempt, [r["id"] for r in rows]):
-                ranked += ok
-                errors += not ok
+            modes = list(pool.map(_attempt, [r["id"] for r in rows]))
     else:
-        for r in rows:
-            if _attempt(r["id"]):
-                ranked += 1
-            else:
-                errors += 1
+        modes = [_attempt(r["id"]) for r in rows]
 
-    result = {"candidates": len(rows), "ranked": ranked, "errors": errors}
+    # `mode is None` is the failure case. Testing truthiness here would count
+    # every successful fast-path row as an error, since fast rows report False.
+    for mode in modes:
+        if mode is None:
+            errors += 1
+        else:
+            ranked += 1
+            fast += not mode
+
+    result = {"candidates": len(rows), "ranked": ranked, "fast": fast, "errors": errors}
     print(f"[rns_llm] ranking done — {result}")
     return result
 

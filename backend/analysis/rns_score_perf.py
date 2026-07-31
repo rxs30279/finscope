@@ -411,7 +411,11 @@ def _write_explanation_sheet(writer, df):
                  "that were pruned, so this is all we have)."),
         ("bullet", f"Scoring models present (unique announcements): {models}. "
                    "deepseek-chat is the old model; deepseek-v4-flash:thinking is the new 'flash "
-                   "reasoning' model live since ~2026-07-15. Segment by this to compare them."),
+                   "reasoning' model live since ~2026-07-15. Segment by this to compare them. "
+                   "deepseek-v4-flash:fast (from 2026-07-31) is the same model with reasoning "
+                   "off, used only for board_change - the one high-volume category whose mass "
+                   "is routine. It is a category segment as much as a model segment, so do NOT "
+                   "read a :fast vs :thinking return difference as a reasoning effect."),
         ("bullet", "Source: Tier A/B rns_announcements (the only tiers the LLM scores) joined to "
                    "price_history (daily OHLCV, split/dividend-adjusted). Rows with no resolved "
                    "symbol are excluded (no price series to join)."),

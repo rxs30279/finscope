@@ -17,8 +17,17 @@ def _rows(n):
 
 
 def _patch(monkeypatch, rows, rank_one, workers=5):
+    """`rank_one` here only records or raises; the wrapper supplies the return
+    shape _rank_pending reads. Since category gating, that shape carries the
+    mode the row ranked in — these tests all rank in thinking mode, which the
+    counts treat no differently. Mode-specific accounting lives in
+    test_rns_category_gating.py."""
+    def _wrapped(row_id):
+        rank_one(row_id)
+        return {"id": row_id, "thinking": True}
+
     monkeypatch.setattr(rns_llm, "_query", lambda *a, **k: rows)
-    monkeypatch.setattr(rns_llm, "_rank_one", rank_one)
+    monkeypatch.setattr(rns_llm, "_rank_one", _wrapped)
     monkeypatch.setattr(rns_llm, "_get_client", lambda: object())
     monkeypatch.setattr(rns_llm, "_RANK_WORKERS", workers)
 
@@ -34,7 +43,7 @@ def test_ranks_every_row_exactly_once(monkeypatch):
     _patch(monkeypatch, _rows(12), _rank)
     out = rns_llm._rank_pending()
 
-    assert out == {"candidates": 12, "ranked": 12, "errors": 0}
+    assert out == {"candidates": 12, "ranked": 12, "fast": 0, "errors": 0}
     assert sorted(seen) == list(range(1, 13)), "each row must be ranked once"
 
 
@@ -46,7 +55,7 @@ def test_one_failure_does_not_sink_the_batch(monkeypatch):
     _patch(monkeypatch, _rows(10), _rank)
     out = rns_llm._rank_pending()
 
-    assert out == {"candidates": 10, "ranked": 9, "errors": 1}
+    assert out == {"candidates": 10, "ranked": 9, "fast": 0, "errors": 1}
 
 
 def test_counts_are_accurate_under_concurrent_failures(monkeypatch):
@@ -112,7 +121,7 @@ def test_serial_mode_still_works(monkeypatch):
     _patch(monkeypatch, _rows(5), _rank, workers=1)
     out = rns_llm._rank_pending()
 
-    assert out == {"candidates": 5, "ranked": 5, "errors": 0}
+    assert out == {"candidates": 5, "ranked": 5, "fast": 0, "errors": 0}
     assert order == [1, 2, 3, 4, 5], "serial mode must preserve row order"
 
 
@@ -121,4 +130,4 @@ def test_empty_batch_is_a_no_op(monkeypatch):
         raise AssertionError("should not be called")
 
     _patch(monkeypatch, [], _rank)
-    assert rns_llm._rank_pending() == {"candidates": 0, "ranked": 0, "errors": 0}
+    assert rns_llm._rank_pending() == {"candidates": 0, "ranked": 0, "fast": 0, "errors": 0}
