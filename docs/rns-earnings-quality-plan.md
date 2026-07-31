@@ -526,3 +526,51 @@ motivated Phase 0.
   the ≥75 band.
 - Cost: <1c/day → 5c/day. Expected; ~$18/yr absolute. See Phase 0 for why the
   jump was 5x rather than the predicted 2x.
+
+## Appendix E — extraction under the fast path (2026-07-31, `91198a4`)
+
+`91198a4` moved DeepSeek reasoning off the ranker (`RNS_THINKING`, default
+`off`) and onto the showcase vet. `earnings_quality` and `guidance_checks` were
+built, validated and shipped entirely in thinking mode; from 2026-08-03 they are
+extracted **without it**. That mode change has never been measured on these
+fields — Phase 4's `--repeat` validation and
+`backend/analysis/rns_period_extraction_eval.py` both ran with `_THINKING_ON`,
+so their results say nothing about the fast path.
+
+**`backend/analysis/rns_extraction_mode_baseline.py`** profiles both columns per
+`llm_model` era so the two are directly comparable. Read-only, no LLM calls.
+Re-run it after the first fast-mode batches; the DELTA is the finding, never a
+single number.
+
+Baseline, 2026-07-29 → 07-31, 230 rows, all `deepseek-v4-flash:thinking`:
+
+| | `guidance_checks` | `earnings_quality` |
+|---|---|---|
+| populate, all Tier A/B | 43.5% | 37.4% |
+| populate, results categories | 51.5% | 47.9% |
+| entries per populated row | 3.99 | 5.47 |
+| core fields non-null | metric/period/guided_value 100% | item/period/value 100% |
+| comparator | `consensus_value` 3.3% | `prior_value` 81.7% |
+| fail-safe bucket | `vs_prior` unknown 7.0% | `kind` unclear 0% |
+
+Per category: `interim_results` 64.1%/59.8%, `trading_update` 70.0%/26.7%,
+`final_results` 14.0%/37.2%.
+
+**Watch two numbers, ignore the rest.** `prior_value` (81.7%, n=470 entries, 2σ
+±3.6% — **below ~78% is real**) because it is the only comparator the model
+actually finds and the whole low-base gate rests on it. And populate rate on
+`interim_results` (64.1%, n=92, 2σ ±10% — **below ~54% is real**). Headline
+populate rate is a weak signal: this window is peak interim season and the
+category mix will move, so compare per category. `kind` at 0% unclear and the
+100% core fields are sharp tripwires — any drift there is unambiguous.
+
+**Ignore `vs_consensus`.** 96.7% `no_consensus_stated` with `consensus_value`
+non-null 3.3% of the time, consistent with Appendix C's 68-of-75 reading. That
+half of the guidance gate is already inert; a fast-path change to it would be
+both invisible and inconsequential.
+
+**The baseline is thin — 3 days, 230 rows.** Migrations 025/026 only put these
+fields in the prompt on 2026-07-29, which is why an unbounded query reports
+`guidance_checks` at 15.6%: a fortnight of `:thinking` rows are NULL because
+nothing asked. The script derives its window from the first populated date for
+exactly this reason. Give it two or three fast-mode sessions before concluding.
