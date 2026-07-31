@@ -43,14 +43,45 @@ _DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 _DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
-# The v4 model names run in thinking (reasoning) mode unless told otherwise.
-# The ranker opts in per row (see _FAST_CATEGORIES). Every other call site (news
-# summariser, showcase vet, fwd extraction) passes _THINKING_OFF to keep the old
-# deepseek-chat behaviour and its small max_tokens budgets.
+# The v4 model names run in thinking (reasoning) mode unless told otherwise, so
+# every call site picks explicitly. As of 2026-07-31 the ranker runs WITHOUT
+# reasoning and the showcase vet runs WITH it — see _THINKING_DEFAULT below for
+# why the budget moved. The news summariser and the fwd extraction stay off.
 _THINKING_ON = {"thinking": {"type": "enabled"}}
 _THINKING_OFF = {"thinking": {"type": "disabled"}}
 
-# Categories ranked WITHOUT reasoning. Thinking mode took ranking calls from
+# Blanket ranker mode. Reasoning was moved off the ranker and onto the showcase
+# vet on 2026-07-31, on the reasoning that the two calls have opposite evidence:
+#
+#   * The ranker's reasoning has never been shown to change a score for the
+#     better. Model and mode switched together on 2026-07-15, so every "v4 runs
+#     hotter" observation confounds the two, and the only direct A/B (10 rows,
+#     2026-07-31) ran entirely on rows scoring 5-55 — nowhere near the 76 bar
+#     the digest actually turns on. It cost ~90% of output tokens for that.
+#   * The vet's reasoning has a documented failure it might fix: 4 of 5 v4-flash
+#     vet rationales drew the sequential half/quarter comparison backwards, all
+#     on the arithmetic and none on the inputs (docs/rns-gate-block-plan.md §1).
+#
+# So the same spend buys an unmeasured maybe on one call and a known defect on
+# the other. It is not a saving — the money moves, it does not stop.
+#
+# This is deliberately reversible in one env var rather than a code change,
+# because the thing being traded is digest quality and the revert has to be
+# available at 07:00 on a morning when something looks wrong. Set RNS_THINKING=on
+# to restore reasoning; _FAST_CATEGORIES then applies again as before.
+#
+# The `:thinking` / `:fast` suffix in llm_model means this switch writes the A/B
+# that was never run: rows either side of today are directly comparable in
+# rns_score_perf.py once the 1m horizon fills. Do not remove that label.
+_THINKING_DEFAULT = os.environ.get("RNS_THINKING", "off").strip().lower() not in (
+    "off", "0", "false", "no",
+)
+
+# Categories ranked WITHOUT reasoning. DORMANT while _THINKING_DEFAULT is off
+# (every category is fast now); kept whole because it is the shape the ranker
+# returns to if RNS_THINKING=on, and the measurements below cost a morning each.
+#
+# Thinking mode took ranking calls from
 # ~6.5s to 85-172s and made reasoning ~90% of output tokens, and the whole cost
 # lands inside the 07:01 -> 07:30 digest window. It is worth paying where the
 # score depends on reconciling figures the announcement reports; it is not worth
@@ -102,10 +133,18 @@ _FAST_CATEGORIES = frozenset(
 def _use_thinking(category: Optional[str]) -> bool:
     """Whether this row's ranking call runs in reasoning mode.
 
-    Unknown and NULL categories reason: the fast path is an explicit opt-out
-    list, so a category added to rns._CATEGORIES later keeps the safe default
-    until someone measures it.
+    With RNS_THINKING off (the default since 2026-07-31) no row reasons and the
+    category is irrelevant. This is checked FIRST rather than by listing every
+    category in RNS_FAST_CATEGORIES, because that env route cannot express it:
+    the parse strips empty entries, so NULL- and unknown-category rows would go
+    on reasoning however long the list got.
+
+    With it on, unknown and NULL categories reason: the fast path is an explicit
+    opt-out list, so a category added to rns._CATEGORIES later keeps the safe
+    default until someone measures it.
     """
+    if not _THINKING_DEFAULT:
+        return False
     return (category or "") not in _FAST_CATEGORIES
 
 # Concurrent DeepSeek calls per ranking run. The win is in overlapping network
@@ -976,10 +1015,22 @@ class TruncatedResponse(RuntimeError):
     """
 
 
-def _call_deepseek(messages: list[dict], thinking: bool = True) -> dict:
-    """One ranking call. `thinking=False` is the fast path for the categories in
-    _FAST_CATEGORIES — same prompt and same schema, no reasoning chain, and a
-    budget sized for the answer alone.
+def _call_deepseek(
+    messages: list[dict],
+    thinking: bool = True,
+    budget: Optional[int] = None,
+    tag: Optional[str] = None,
+) -> dict:
+    """One JSON-returning DeepSeek call with the truncation retry.
+
+    `thinking=False` is the fast path — same prompt and same schema, no
+    reasoning chain, and a budget sized for the answer alone.
+
+    `budget` and `tag` exist for callers outside the ranker (the showcase vet).
+    They are here rather than duplicated at the call site because the truncation
+    handling below is the part that must not be got wrong twice: a silent
+    finish_reason='length' is indistinguishable from a row that was never
+    attempted, which is exactly how 21 large caps went unscored on 2026-07-31.
 
     Thinking defaults to True so that a caller which hasn't thought about the
     mode gets the thorough one.
@@ -989,25 +1040,28 @@ def _call_deepseek(messages: list[dict], thinking: bool = True) -> dict:
     # row that overruns is often fine on a second pass; before this existed the
     # only retry was the next 15-minute sweep, which meant a row could miss the
     # 07:30 digest entirely while still eventually scoring an hour later.
-    base = _MAX_COMPLETION_TOKENS if thinking else _FAST_MAX_COMPLETION_TOKENS
+    base = budget or (_MAX_COMPLETION_TOKENS if thinking else _FAST_MAX_COMPLETION_TOKENS)
     budgets = (base, base * 2)
-    for attempt, budget in enumerate(budgets, start=1):
+    # Named apart from the `budget` parameter on purpose — shadowing it here
+    # would make the retry silently depend on which line read it first.
+    for attempt, attempt_budget in enumerate(budgets, start=1):
         resp = client.chat.completions.create(
             model=_DEEPSEEK_MODEL,
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0.2,
-            max_tokens=budget,
+            max_tokens=attempt_budget,
             extra_body=_THINKING_ON if thinking else _THINKING_OFF,
         )
-        _log_cache_usage("rns_llm" if thinking else "rns_llm:fast", resp)
+        label = tag or ("rns_llm" if thinking else "rns_llm:fast")
+        _log_cache_usage(label, resp)
         choice = resp.choices[0]
         if getattr(choice, "finish_reason", None) != "length":
             return json.loads(choice.message.content)
         # Log loudly: this is the one-line diagnosis that the investigation
         # above cost a morning to reach.
         used = getattr(getattr(resp, "usage", None), "completion_tokens", "n/a")
-        print(f"[rns_llm] !! response hit max_tokens at {budget} "
+        print(f"[{label}] !! response hit max_tokens at {attempt_budget} "
               f"(completion tokens: {used}) — "
               + ("retrying at double" if attempt < len(budgets) else "giving up"))
     raise TruncatedResponse(
@@ -1195,7 +1249,12 @@ def _rank_one(row_id: int) -> dict:
     # mode changed together with nothing in the row to tell them apart.
     _save_ranking(row_id, result, f"{_DEEPSEEK_MODEL}:{'thinking' if thinking else 'fast'}")
     score = _clip_int(result.get("score"), 0, 100)
-    if not thinking and score is not None and score >= _FAST_REVIEW_SCORE:
+    # Only the CATEGORY gate gets this tripwire. It means "a category we gated as
+    # never approaching the bar just approached it" — which is only a surprise
+    # while other rows are still reasoning. Under the blanket switch every row is
+    # fast and every digest row would trip it, turning the one loud line that
+    # matters into several per morning that nobody reads.
+    if _THINKING_DEFAULT and not thinking and score is not None and score >= _FAST_REVIEW_SCORE:
         print(f"[rns_llm] !! fast-path row scored {score} — id={row_id} "
               f"category={cand.get('category')}. This category was gated because it "
               "produced no rows near the digest bar; re-check RNS_FAST_CATEGORIES.")

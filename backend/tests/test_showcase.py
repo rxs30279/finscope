@@ -625,6 +625,64 @@ def test_list_showcase_empty(client):
     assert r.json() == []
 
 
+# ── _vet_candidate wiring ─────────────────────────────────────────────────────
+def _vet_json(**kw):
+    base = {"verdict": "caution", "confidence": "medium", "rationale": "low base",
+            "low_base": None}
+    base.update(kw)
+    return base
+
+
+def test_vet_runs_with_reasoning_on_its_own_budget():
+    """The vet is the one call asked to do arithmetic it cannot copy out of the
+    text — 4 of 5 v4-flash rationales inverted the sequential comparison on
+    2026-07-30. If this silently reverts to the fast path that regresses with no
+    error anywhere; the verdict just goes back to being wrong."""
+    with patch.object(showcase, "_annual_history", return_value=[]), \
+         patch("rns_llm._call_deepseek", return_value=_vet_json()) as call:
+        showcase._vet_candidate(_cand())
+    assert call.call_args.kwargs["thinking"] is True
+    assert call.call_args.kwargs["budget"] == showcase._VET_MAX_COMPLETION_TOKENS
+    assert call.call_args.kwargs["tag"] == "showcase_vet"
+
+
+def test_vet_budget_leaves_room_for_reasoning():
+    """450 tokens covered the answer alone. Reasoning shares the budget, so the
+    old cap would be spent before the answer started — every row a NULL verdict
+    that looks exactly like an API outage."""
+    assert showcase._VET_MAX_COMPLETION_TOKENS >= 4000
+
+
+def test_vet_records_the_mode_in_the_model_label():
+    """The 2026-07-30 audit could only split the failures by model because the
+    label recorded it. Without the suffix, "did reasoning fix the arithmetic?"
+    has no query that answers it."""
+    with patch.object(showcase, "_annual_history", return_value=[]), \
+         patch("rns_llm._call_deepseek", return_value=_vet_json()):
+        vet = showcase._vet_candidate(_cand())
+    assert vet["model"].endswith(":thinking")
+    assert vet["verdict"] == "caution"
+
+
+def test_vet_missing_history_still_vets():
+    """Degrades to the announcement-only judgement rather than skipping."""
+    with patch.object(showcase, "_annual_history", side_effect=RuntimeError("db down")), \
+         patch("rns_llm._call_deepseek", return_value=_vet_json()) as call:
+        assert showcase._vet_candidate(_cand())["verdict"] == "caution"
+    call.assert_called_once()
+
+
+def test_vet_truncation_propagates_as_a_failure():
+    """A truncated vet must reach the caller's except branch and land as a NULL
+    verdict — never as a verdict parsed from a half-written answer."""
+    import rns_llm
+    with patch.object(showcase, "_annual_history", return_value=[]), \
+         patch("rns_llm._call_deepseek",
+               side_effect=rns_llm.TruncatedResponse("out of budget")):
+        with pytest.raises(rns_llm.TruncatedResponse):
+            showcase._vet_candidate(_cand())
+
+
 # ── Optional live vet sanity (opt-in — real DeepSeek call) ─────────────────────
 @pytest.mark.skipif(
     not os.environ.get("RUN_LLM_TESTS"), reason="set RUN_LLM_TESTS=1 to hit DeepSeek"

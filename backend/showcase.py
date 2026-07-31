@@ -340,11 +340,40 @@ Return JSON only — no preamble, no code fence."""
     ]
 
 
+# Completion budget for the vet, which runs WITH reasoning (see below). The
+# answer itself is small — verdict, confidence, one or two sentences, and the
+# low_base object — and 450 tokens covered it for a year. Reasoning shares that
+# budget, so the old cap would have been spent before the answer started.
+#
+# Sized off the ranker's measurements rather than guessed: a typical reasoning
+# chain on this feed ran ~2,500 tokens and complex large-cap results reached
+# 17,000 (see rns_llm._MAX_COMPLETION_TOKENS). The vet sees a truncated body and
+# asks a narrower question than the ranker, so 8,000 with the retry at 16,000
+# should clear it — but the vet's whole job is the announcements where the
+# arithmetic is hard, which are the long ones. Watch the [showcase_vet] line in
+# the cron log: a cap is not a target, it bills what is generated.
+_VET_MAX_COMPLETION_TOKENS = int(os.environ.get("SHOWCASE_VET_MAX_TOKENS", "8000"))
+
+
 def _vet_candidate(cand: dict, before=None) -> dict:
     """Run the advisory vet. Raises on API/parse failure — the caller treats that
     as non-fatal and stores a NULL verdict. `before` limits the annual series
-    for backtests (see _annual_history)."""
-    from rns_llm import _get_client, _DEEPSEEK_MODEL, _THINKING_OFF
+    for backtests (see _annual_history).
+
+    Runs WITH reasoning since 2026-07-31. This is the one call in the pipeline
+    asked to do arithmetic the model cannot copy out of the text: the prompt
+    wants a sequential half/quarter comparison, and _annual_lines supplies FY
+    totals only, so the subtraction happens in the model's head on every row.
+    It got that backwards on 4 of 5 v4-flash rows audited on 2026-07-30 — every
+    input figure traced correctly, only the comparison failed. Reasoning is the
+    cheap thing to try before Phase 4 moves the subtraction into Python
+    (docs/rns-gate-block-plan.md); the two are complements, not alternatives,
+    and Phase 4 remains the real fix because a copied field beats a computed one.
+
+    Note this is advisory either way — insertion is hardcoded 'approved', so a
+    wrong verdict mislabels a card on /gates rather than suppressing a story.
+    """
+    from rns_llm import _call_deepseek, _DEEPSEEK_MODEL
 
     try:
         annual = _annual_history(cand.get("symbol"), before=before)
@@ -354,16 +383,16 @@ def _vet_candidate(cand: dict, before=None) -> dict:
         print(f"[showcase] annual history fetch failed (non-fatal) — {e}")
         annual = []
 
-    client = _get_client()
-    resp = client.chat.completions.create(
-        model=_DEEPSEEK_MODEL,
-        messages=_vet_messages(cand, annual),
-        response_format={"type": "json_object"},
-        temperature=0.2,
-        max_tokens=450,
-        extra_body=_THINKING_OFF,
+    # Via _call_deepseek for its truncation retry, which this call site did not
+    # have and now needs: with reasoning on, an overrun returns an empty string,
+    # json.loads raises, and the caller books it as a NULL verdict that looks
+    # exactly like an API outage.
+    result = _call_deepseek(
+        _vet_messages(cand, annual),
+        thinking=True,
+        budget=_VET_MAX_COMPLETION_TOKENS,
+        tag="showcase_vet",
     )
-    result = json.loads(resp.choices[0].message.content)
     verdict = (result.get("verdict") or "").lower().strip()
     if verdict not in ("include", "caution", "exclude"):
         verdict = None
@@ -371,7 +400,10 @@ def _vet_candidate(cand: dict, before=None) -> dict:
         "verdict": verdict,
         "confidence": (result.get("confidence") or "").lower().strip()[:10] or None,
         "rationale": (result.get("rationale") or "").strip()[:500] or None,
-        "model": _DEEPSEEK_MODEL,
+        # Mode suffix for the same reason the ranker stores one: the 2026-07-30
+        # audit could only split the failures by model because llm_model recorded
+        # it. Without this, "did reasoning fix the arithmetic?" is unanswerable.
+        "model": f"{_DEEPSEEK_MODEL}:thinking",
         "low_base": _parse_low_base(result.get("low_base")),
     }
 

@@ -1,17 +1,18 @@
-"""Category-gated reasoning in the ranker (rns_llm._use_thinking).
+"""Ranker reasoning mode (rns_llm._use_thinking) — the blanket switch and the
+category gate underneath it.
 
-Thinking mode took ranking calls from ~6.5s to 85-172s and made reasoning ~90%
-of output tokens, all of it inside the 07:01 -> 07:30 digest window. Categories
-whose score is decided by the fact itself rather than by reconciling reported
-figures — board changes, drill results, product launches, update statements —
-rank without it, on a budget sized for the answer alone.
+Since 2026-07-31 the ranker runs with reasoning OFF for every row and the budget
+moved to the showcase vet, which has a documented arithmetic failure to fix.
+_THINKING_DEFAULT carries that; _FAST_CATEGORIES is the finer gate it sits on
+top of, dormant but intact so RNS_THINKING=on restores the old shape exactly.
 
-These tests pin the parts that fail silently if they regress: the opt-out is a
-list (so an unrecognised category still reasons), the fast path really does send
-thinking disabled rather than just a smaller budget, and a fast row counts as
-ranked. That last one matters because fast rows report False, so any truthiness
-test in the accounting would book every one of them as a failure — and a row
-booked as failed is indistinguishable in the DB from one never attempted.
+These tests pin the parts that fail silently if they regress: the blanket switch
+really does reach NULL- and unknown-category rows (the env route it replaced
+could not), the gate still works underneath it, the fast path sends thinking
+disabled rather than just a smaller budget, and a fast row counts as ranked.
+That last one matters because fast rows report False, so any truthiness test in
+the accounting would book every one of them as a failure — and a row booked as
+failed is indistinguishable in the DB from one never attempted.
 """
 
 import sys, os, json
@@ -61,22 +62,49 @@ def fake_client(monkeypatch):
     return _install
 
 
-# ── Which rows reason ─────────────────────────────────────────────────────────
+@pytest.fixture
+def thinking_on(monkeypatch):
+    """Restore the pre-2026-07-31 shape (RNS_THINKING=on) so the category gate
+    underneath the blanket switch stays under test while it is dormant."""
+    monkeypatch.setattr(rns_llm, "_THINKING_DEFAULT", True)
 
 
-def test_fast_categories_skip_reasoning():
+# ── The blanket switch ────────────────────────────────────────────────────────
+
+
+def test_no_row_reasons_by_default():
+    """The shipped default. Includes the categories the gate deliberately left
+    reasoning — the switch is above the gate, not another entry in it."""
+    for cat in ("interim_results", "final_results", "trading_update",
+                "drill_results", "board_change"):
+        assert rns_llm._use_thinking(cat) is False
+
+
+def test_blanket_switch_reaches_null_and_unknown_categories():
+    """The reason this is a module flag and not RNS_FAST_CATEGORIES="a,b,c,...".
+    That env parse strips empty entries, so no list value can express "NULL
+    category too" — those rows would have gone on reasoning at full budget while
+    the log said the ranker was fast."""
+    assert rns_llm._use_thinking(None) is False
+    assert rns_llm._use_thinking("") is False
+    assert rns_llm._use_thinking("category_invented_next_quarter") is False
+
+
+# ── Which rows reason with RNS_THINKING=on ────────────────────────────────────
+
+
+def test_fast_categories_skip_reasoning(thinking_on):
     assert rns_llm._use_thinking("board_change") is False
 
 
-def test_results_categories_still_reason():
-    """The expensive categories are deliberately NOT gated — whether reasoning
-    earns its keep on results is an open question for a thinking on/off A/B,
-    and this list must not pre-empt it."""
+def test_results_categories_still_reason(thinking_on):
+    """The expensive categories were deliberately NOT gated, so that turning
+    reasoning back on restores it where it was argued to be worth paying for."""
     for cat in ("interim_results", "final_results", "trading_update", "delisting"):
         assert rns_llm._use_thinking(cat) is True
 
 
-def test_near_bar_categories_still_reason():
+def test_near_bar_categories_still_reason(thinking_on):
     """A 30-day window made these look inert (0 rows over the 76 bar) and they
     were briefly gated. The 90-day view shows they cluster at 65-75 just under
     it — drill_results alone was 16 of 20 rows marked watch/research. At ~20
@@ -86,7 +114,7 @@ def test_near_bar_categories_still_reason():
         assert rns_llm._use_thinking(cat) is True
 
 
-def test_unknown_and_null_categories_reason():
+def test_unknown_and_null_categories_reason(thinking_on):
     """The gate is an opt-out list, so a category added to rns._CATEGORIES later
     keeps the safe default until someone measures it."""
     assert rns_llm._use_thinking("category_invented_next_quarter") is True
@@ -131,6 +159,40 @@ def test_fast_budget_is_well_under_the_thinking_budget():
     assert rns_llm._FAST_MAX_COMPLETION_TOKENS * 2 < rns_llm._MAX_COMPLETION_TOKENS
 
 
+# ── Reuse by callers outside the ranker (the showcase vet) ────────────────────
+
+
+def test_explicit_budget_overrides_both_defaults(fake_client):
+    client = fake_client([_resp("stop", json.dumps({"verdict": "include"}))])
+    assert rns_llm._call_deepseek([], thinking=True, budget=8000) == {"verdict": "include"}
+    assert client.calls == [(8000, rns_llm._THINKING_ON)]
+
+
+def test_explicit_budget_still_retries_at_double(fake_client):
+    """The whole reason a second call site shares this function: an overrun that
+    is not retried lands as a NULL verdict indistinguishable from an outage."""
+    client = fake_client([
+        _resp("length", ""),
+        _resp("stop", json.dumps({"verdict": "caution"})),
+    ])
+    assert rns_llm._call_deepseek([], budget=8000) == {"verdict": "caution"}
+    assert [b for b, _ in client.calls] == [8000, 16000]
+
+
+def test_exhausted_budget_raises_rather_than_returning_empty(fake_client):
+    fake_client([_resp("length", ""), _resp("length", "")])
+    with pytest.raises(rns_llm.TruncatedResponse):
+        rns_llm._call_deepseek([], budget=8000)
+
+
+def test_tag_labels_the_log_line(fake_client, capsys):
+    """Without this the vet's truncations would be logged as [rns_llm], sending
+    the next investigation to the wrong call site."""
+    fake_client([_resp("length", ""), _resp("stop", json.dumps({}))])
+    rns_llm._call_deepseek([], budget=8000, tag="showcase_vet")
+    assert "[showcase_vet] !! response hit max_tokens at 8000" in capsys.readouterr().out
+
+
 # ── Row-level wiring ──────────────────────────────────────────────────────────
 
 
@@ -165,14 +227,23 @@ def test_gated_category_ranks_fast_and_is_labelled(rank_one_harness):
     assert saved["model"].endswith(":fast")
 
 
-def test_ungated_category_still_reasons(rank_one_harness):
+def test_results_row_is_labelled_fast_under_the_blanket_switch(rank_one_harness):
+    """The label has to follow the mode actually used, not the category. It is
+    the only record of which side of 2026-07-31 a row was scored on, and so the
+    only way the switch itself can be read as an A/B in rns_score_perf.py."""
+    saved = rank_one_harness("interim_results")
+    assert rns_llm._rank_one(1)["thinking"] is False
+    assert saved["model"].endswith(":fast")
+
+
+def test_ungated_category_still_reasons(rank_one_harness, thinking_on):
     saved = rank_one_harness("interim_results")
     rns_llm._rank_one(1)
     assert saved["thinking"] is True
     assert saved["model"].endswith(":thinking")
 
 
-def test_high_scoring_fast_row_warns(rank_one_harness, capsys):
+def test_high_scoring_fast_row_warns(rank_one_harness, thinking_on, capsys):
     """The gate assumes these categories never approach the digest bar. If one
     does, the log has to say so — the alternative is discovering it through a
     story the feed under-scored."""
@@ -182,8 +253,17 @@ def test_high_scoring_fast_row_warns(rank_one_harness, capsys):
     assert "fast-path row scored" in out and "board_change" in out
 
 
-def test_ordinary_fast_row_is_quiet(rank_one_harness, capsys):
+def test_ordinary_fast_row_is_quiet(rank_one_harness, thinking_on, capsys):
     rank_one_harness("board_change", score=10)
+    rns_llm._rank_one(1)
+    assert "fast-path row scored" not in capsys.readouterr().out
+
+
+def test_tripwire_silent_under_the_blanket_switch(rank_one_harness, capsys):
+    """With every row fast, a high-scoring fast row is the expected case, not a
+    surprise. Left unconditional this fires on every digest row — the one loud
+    line that means something becomes several a morning that nobody reads."""
+    rank_one_harness("interim_results", score=90)
     rns_llm._rank_one(1)
     assert "fast-path row scored" not in capsys.readouterr().out
 
