@@ -306,3 +306,35 @@ def test_accounting_matches_under_concurrency(monkeypatch):
     assert rns_llm._rank_pending() == {
         "candidates": 10, "ranked": 10, "fast": 5, "errors": 0,
     }
+
+
+# ── Absent-content scoring rule ───────────────────────────────────────────────
+# Added 2026-07-31 after measuring what reasoning-off does to information-poor
+# rows. With thinking on, filing notices ("Annual Financial Report" pointing at
+# a document we cannot fetch) scored 0. With it off they came back at 30-50 and
+# action "watch": the model still WROTE the right judgement — "unlikely to move
+# the share price materially" — but without reasoning tokens it never converted
+# that into a low number, parking on a mid-range hedge instead. Re-ranking 19
+# such rows moved the six stub-bodied ones from a mean of 36.7 to 8.3.
+#
+# That matters because ~11% of tier A/B rows carry a stub body, so roughly five
+# a morning would outrank real low-signal news in the score-sorted /rns feed.
+
+
+def test_rubric_scores_absent_content_down():
+    """The instruction is prompt text, so nothing else can catch its removal."""
+    block = rns_llm._JSON_SCHEMA_BLOCK
+    assert "Absent content scores DOWN" in block
+    # The polarity must stay explicit against the quality n/a rule in the system
+    # prompt, which says the OPPOSITE for a different kind of missing data:
+    # absent financials must not be penalised, absent body text must be.
+    assert "missing financial COVERAGE must not be penalised" in block
+    assert "announcement CONTENT must be" in block
+
+
+def test_rubric_requires_score_to_match_thesis():
+    """The observed failure was a 50 attached to an 'ignore' with a dismissive
+    thesis, so the coherence rule is pinned separately from the stub rule."""
+    block = rns_llm._JSON_SCHEMA_BLOCK
+    assert "The number must agree with the words" in block
+    assert 'action is "ignore", the score belongs below 20' in block

@@ -610,6 +610,22 @@ do not pick a score and then justify it:
                    one-off contributor is worth less than its headline rate,
                    and a charge or loss RATE rising year on year is a negative
                    however positively the announcement is phrased.
+                   Absent content scores DOWN, not up. Where the body reads
+                   "(body unavailable ...)" or "(not available)" the item is a
+                   filing notice pointing at a document you cannot see: score
+                   the headline alone and keep it near the noise floor.
+                   Uncertainty is not a reason to hedge upward — "could be
+                   significant if the figures differ" is true of every unread
+                   document ever filed, so it distinguishes nothing. A results
+                   headline whose figures you cannot read is a filing notice,
+                   not a result. This is the OPPOSITE of the quality n/a rule:
+                   missing financial COVERAGE must not be penalised, missing
+                   announcement CONTENT must be.
+                   The number must agree with the words. If the thesis calls
+                   the item routine, or says it is unlikely to move the share
+                   price, or action is "ignore", the score belongs below 20 —
+                   never write a dismissive thesis and attach a mid-range
+                   score to it.
   confidence       one of: "high", "medium", "low"
   thesis           one sentence: why this matters (or why it doesn't)
   action           one of: "watch", "research", "ignore"
