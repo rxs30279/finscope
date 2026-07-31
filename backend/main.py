@@ -2314,6 +2314,7 @@ _DIGEST_TOKEN = os.environ.get("DIGEST_CRON_TOKEN", "")
 def digest(
     token: str = Query(default=""),
     dry_run: bool = Query(default=False),
+    updated: bool = Query(default=False),
     x_digest_token: str = Header(default=""),
 ):
     """HTTP endpoint for cron-job.org to trigger the RNS email digest.
@@ -2326,6 +2327,12 @@ def digest(
     `?dry_run=true` fetches + renders + validates the digest but never contacts
     Resend, so the smoke suite can exercise the full path without emailing
     anyone. The flag only ever *removes* the send, so it fails safe.
+
+    `?updated=true` prefixes the subject with "[Updated]", for manually
+    re-sending a digest whose content changed after the scheduled send. The
+    cron never passes it — it is a human-triggered correction. Leaving it off
+    is the safe default, so a mistyped param sends a normal digest rather than
+    mislabelling one.
     """
     if not _DIGEST_TOKEN:
         return {"ok": False, "error": "DIGEST_CRON_TOKEN not configured"}
@@ -2335,7 +2342,7 @@ def digest(
     if not hmac.compare_digest(supplied, _DIGEST_TOKEN):
         raise HTTPException(403, "Invalid token")
 
-    stats = run_digest(dry_run=dry_run)
+    stats = run_digest(dry_run=dry_run, updated=updated)
     exit_code = stats.get("exit_code", 1)
     # mode/recipients land in cron-job.org's stored response, so its execution
     # history shows whether segment mode ran and to how many addresses — a

@@ -834,46 +834,82 @@ def _log_cache_usage(tag: str, resp) -> None:
           f"(reasoning {reasoning if reasoning is not None else 'n/a'})")
 
 
+# Reasoning tokens share the completion budget, so the cap must leave room for
+# the chain of thought as well as the JSON answer.
+#
+# History, because each step was sized off measurement rather than guessed:
+# 4000 -> 8000 when earnings_quality shipped. The 4000 cap was sized for a
+# ~400-token answer; an announcement with several income and charge lines emits
+# 700-1,200 tokens of JSON on top of reasoning that itself ran 2,500 tokens on a
+# typical BARC call. At 4000, BARC 9689888 failed 7 of 7 validation runs and 19
+# of 56 calls across the target set died. At 6000 it still burned the whole
+# budget on 1 of 7.
+#
+# 8000 -> 32000 on 2026-07-31, after 21 of 48 rows in the morning batch — every
+# one of them a large-cap interim or prelim — came back empty. Measured need on
+# three of them, re-run at 32000 and all finishing with valid JSON:
+#
+#     NWG 9697081   reasoning  7,945 + answer 1,693 = 9,638
+#     IAG 9696992   reasoning 17,067 + answer 1,278 = 18,345
+#     ITV 9697040   reasoning 16,075 + answer 1,749 = 17,824
+#
+# So 8000 was not marginally short, it was less than half. Note the trigger is
+# announcement *complexity*, not size: IAG's body is 14k chars and ITV's 18k,
+# while 167k-char rows scored fine on the old cap.
+#
+# The failure mode is silent and expensive. Reasoning consumes the whole budget,
+# the model emits zero answer tokens, json.loads raises on an empty string, and
+# _rank_pending's per-row isolation turns that into a row that is never scored,
+# never flagged and never in the digest — on exactly the large caps this field
+# exists to judge. Worse, it is indistinguishable in the DB from a row that was
+# never attempted, because llm_processed_at stays NULL either way.
+#
+# A cap is not a target: it bills what is generated, so raising it costs nothing
+# on calls that were already finishing, and every call it rescues was previously
+# 100% wasted spend and latency. Watch the completion counts in the log rather
+# than assuming 32000 holds forever.
+_MAX_COMPLETION_TOKENS = int(os.environ.get("RNS_MAX_COMPLETION_TOKENS", "32000"))
+
+
+class TruncatedResponse(RuntimeError):
+    """The model ran out of completion budget before finishing its answer.
+
+    Distinct from a JSONDecodeError because the two want opposite fixes — this
+    one means raise the budget, that one means the model emitted junk — and
+    because the truncated body is usually empty, which makes them look identical
+    at the call site.
+    """
+
+
 def _call_deepseek(messages: list[dict]) -> dict:
     client = _get_client()
-    # Reasoning tokens share the completion budget, so the cap must leave room
-    # for the chain of thought as well as the JSON answer.
-    #
-    # Raised 4000 -> 8000 when earnings_quality shipped, in two measured steps,
-    # and this is not optional headroom. The old cap was sized for a ~400-token
-    # answer; an announcement with several income and charge lines now emits
-    # 700-1,200 tokens of JSON on top of reasoning that itself ran 2,500 tokens
-    # on a typical BARC call. At 4000, BARC 9689888 failed 7 of 7 validation
-    # runs and 19 of 56 calls across the target set died. At 6000 it still
-    # burned the whole budget on 1 of 7. The failure mode is silent and
-    # expensive: the response is cut mid-string, json.loads raises, and
-    # _rank_pending's per-row isolation turns that into a row that is never
-    # scored, never flagged and never in the digest — on exactly the big-body
-    # large caps this field exists to judge.
-    #
-    # A cap is not a target. Raising it costs nothing on calls that were
-    # already finishing, and every call it rescues was previously 100% wasted
-    # spend and latency. Watch the completion counts in the log rather than
-    # assuming 8000 holds forever.
-    resp = client.chat.completions.create(
-        model=_DEEPSEEK_MODEL,
-        messages=messages,
-        response_format={"type": "json_object"},
-        temperature=0.2,
-        max_tokens=8000,
-        extra_body=_THINKING_ON,
+    # One retry at double the budget. Reasoning length is nondeterministic, so a
+    # row that overruns is often fine on a second pass; before this existed the
+    # only retry was the next 15-minute sweep, which meant a row could miss the
+    # 07:30 digest entirely while still eventually scoring an hour later.
+    budgets = (_MAX_COMPLETION_TOKENS, _MAX_COMPLETION_TOKENS * 2)
+    for attempt, budget in enumerate(budgets, start=1):
+        resp = client.chat.completions.create(
+            model=_DEEPSEEK_MODEL,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.2,
+            max_tokens=budget,
+            extra_body=_THINKING_ON,
+        )
+        _log_cache_usage("rns_llm", resp)
+        choice = resp.choices[0]
+        if getattr(choice, "finish_reason", None) != "length":
+            return json.loads(choice.message.content)
+        # Log loudly: this is the one-line diagnosis that the investigation
+        # above cost a morning to reach.
+        used = getattr(getattr(resp, "usage", None), "completion_tokens", "n/a")
+        print(f"[rns_llm] !! response hit max_tokens at {budget} "
+              f"(completion tokens: {used}) — "
+              + ("retrying at double" if attempt < len(budgets) else "giving up"))
+    raise TruncatedResponse(
+        f"model exhausted {budgets[-1]} completion tokens without finishing"
     )
-    _log_cache_usage("rns_llm", resp)
-    choice = resp.choices[0]
-    # Truncation is otherwise indistinguishable from the model emitting bad
-    # JSON, and the two want opposite fixes. Log it loudly so the next time the
-    # answer outgrows the budget it is a one-line diagnosis, not a re-run of
-    # the investigation above.
-    if getattr(choice, "finish_reason", None) == "length":
-        print(f"[rns_llm] !! response hit max_tokens — JSON will be truncated "
-              f"(completion tokens: "
-              f"{getattr(getattr(resp, 'usage', None), 'completion_tokens', 'n/a')})")
-    return json.loads(choice.message.content)
 
 
 # The two guidance axes, kept as explicit whitelists. Anything the model

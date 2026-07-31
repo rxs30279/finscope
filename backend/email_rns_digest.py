@@ -791,8 +791,16 @@ def _dry_run_report(rows: list[dict], total_all: int, subject: str) -> dict:
     return {"exit_code": 0, "mode": "dry_run", "recipients": recipients}
 
 
-def _send_digest(dry_run: bool = False) -> dict:
+def _send_digest(dry_run: bool = False, updated: bool = False) -> dict:
     """Fetch, render and send (or dry-run) the digest.
+
+    `updated` marks the subject as a correction of a digest already sent today.
+    It exists because a re-send is otherwise indistinguishable from a duplicate
+    in the inbox: the subject is derived from the date and row count, both of
+    which barely move within a morning. First used 2026-07-31, when a max_tokens
+    overrun (see rns_llm._MAX_COMPLETION_TOKENS) left 21 large-cap interims
+    unscored in the 07:30 send — the content changed materially, the subject
+    would not have.
 
     Returns a stats dict surfaced by /api/digest so cron-job.org's execution
     history records which path ran and to how many recipients:
@@ -828,6 +836,10 @@ def _send_digest(dry_run: bool = False) -> dict:
         subject = f"RNS Digest {now_uk.strftime('%a %d %b')} — {len(rows)} items"
     else:
         subject = f"RNS Digest {now_uk.strftime('%a %d %b')} — no significant items"
+    # Leading marker, not a suffix: inboxes truncate the tail, and the whole
+    # point is that it is visible next to the original in the list view.
+    if updated:
+        subject = f"[Updated] {subject}"
 
     # ── Dry run: render + validate, never send ────────────────────────────────
     if dry_run:
@@ -950,13 +962,17 @@ def _record_send(stats: dict) -> None:
         print(f"[digest] WARNING: could not record pipeline_runs marker: {e}")
 
 
-def main(dry_run: bool = False) -> dict:
+def main(dry_run: bool = False, updated: bool = False) -> dict:
     """Run the digest and, for real sends only, record a pipeline_runs marker.
 
     Thin wrapper over `_send_digest` so /api/digest and the CLI get the same
     stats dict as before while every non-dry-run send now leaves a DB trace.
+
+    A corrective re-send deliberately still stamps the marker: healthcheck's
+    `digest.sent` check reads freshness, and a re-send is a *more* recent
+    successful send, not a competing one.
     """
-    stats = _send_digest(dry_run=dry_run)
+    stats = _send_digest(dry_run=dry_run, updated=updated)
     if not dry_run:
         _record_send(stats)
     return stats
@@ -964,5 +980,7 @@ def main(dry_run: bool = False) -> dict:
 
 if __name__ == "__main__":
     # `--dry-run` renders + validates the digest and prints what would be sent,
-    # without contacting Resend. Everything else is a normal send.
-    sys.exit(main(dry_run="--dry-run" in sys.argv)["exit_code"])
+    # without contacting Resend. `--updated` marks the subject as a correction
+    # of a send already made today. Everything else is a normal send.
+    sys.exit(main(dry_run="--dry-run" in sys.argv,
+                  updated="--updated" in sys.argv)["exit_code"])

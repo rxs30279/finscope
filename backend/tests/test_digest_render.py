@@ -275,3 +275,37 @@ def test_send_one_passes_non_empty_text_kwarg(monkeypatch):
     assert captured["text"]
     assert "TSCO" in captured["text"]
     assert "Unsubscribe:" in captured["text"]
+
+
+# ── Corrective re-send subject marker ─────────────────────────────────────────
+# Added 2026-07-31: a re-send is otherwise indistinguishable from a duplicate,
+# because the subject is derived from date + row count and neither moves much
+# within a morning. See _send_digest's `updated` arg.
+
+def _dry_subject(monkeypatch, rows, updated):
+    """Run _send_digest's dry-run path and capture the subject it builds."""
+    monkeypatch.setattr(d, "_fetch_rows", lambda *a, **k: rows)
+    monkeypatch.setattr(d, "_count_all_rns", lambda *a, **k: len(rows))
+    captured = {}
+    monkeypatch.setattr(d, "_dry_run_report",
+                        lambda rows_, total, subject: captured.setdefault("s", subject) or {})
+    d._send_digest(dry_run=True, updated=updated)
+    return captured["s"]
+
+
+def test_updated_flag_prefixes_subject(monkeypatch):
+    row = {"symbol": "TST.L", "headline": "H", "published_at": datetime.now(timezone.utc)}
+    assert _dry_subject(monkeypatch, [row], updated=True).startswith("[Updated] ")
+
+
+def test_default_subject_is_unmarked(monkeypatch):
+    """The cron must never send a digest labelled as a correction."""
+    row = {"symbol": "TST.L", "headline": "H", "published_at": datetime.now(timezone.utc)}
+    assert not _dry_subject(monkeypatch, [row], updated=False).startswith("[Updated]")
+
+
+def test_updated_flag_marks_empty_digest_too(monkeypatch):
+    """The no-items variant takes a different branch — it must mark too, or a
+    correction that drops to zero rows would look like a routine empty day."""
+    assert _dry_subject(monkeypatch, [], updated=True).startswith("[Updated] ")
+    assert "no significant items" in _dry_subject(monkeypatch, [], updated=True)
