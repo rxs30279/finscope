@@ -50,12 +50,27 @@ _DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 _THINKING_ON = {"thinking": {"type": "enabled"}}
 _THINKING_OFF = {"thinking": {"type": "disabled"}}
 
-# Concurrent DeepSeek calls per ranking run. Kept deliberately low: the win is
-# in overlapping network waits, not in saturating the API, and a run that gets
-# itself rate-limited would trade a fast batch for a batch full of errors. The
-# shared DB pool (db.py, max 20) comfortably covers this many borrowers.
-# Set to 1 to rank serially.
-_RANK_WORKERS = max(1, int(os.environ.get("RNS_RANK_WORKERS", "5")))
+# Concurrent DeepSeek calls per ranking run. The win is in overlapping network
+# waits, not in saturating the API, and a run that gets itself rate-limited
+# would trade a fast batch for a batch full of errors. Set to 1 to rank serially.
+#
+# Raised 5 -> 12 on 2026-07-31. Reasoning-mode calls are far slower than the
+# ~6.5s/call this was sized against: the recovery run that day measured 16 rows
+# in 439s at 5 workers = ~137s per call. At that latency a 48-row morning takes
+# 48 * 137 / 5 = 22 min, and the batch starts ~07:01 against an 07:30 digest —
+# so the morning of 07-31 genuinely had not finished when the email went out.
+# 12 workers puts it at ~9 min (done ~07:11, ingest and summaries included),
+# which also clears the 07:12 send time [[project-email-digest]] is aiming at.
+#
+# 12 is a ceiling set by the DB pool, not by ambition: _rank_one borrows at most
+# one connection at a time per thread, so 12 concurrent borrowers leaves 8 spare
+# in db.py's pool of 20. Going much past that needs DB_POOL_MAX raised in step.
+# Cost is unaffected — same tokens, just sent in parallel.
+#
+# Rate limiting is the untested risk. If a morning comes back with errors in the
+# cron log, set RNS_RANK_WORKERS=5 in the Dokploy env to roll back without a
+# deploy (the var is otherwise unset, so this default is what applies).
+_RANK_WORKERS = max(1, int(os.environ.get("RNS_RANK_WORKERS", "12")))
 
 _client = None
 
