@@ -33,6 +33,8 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
+from psycopg2.extras import Json
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
@@ -821,11 +823,14 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         # low_base on this candidate now, while its vet output is in hand.
         # This gate's evaluation pool is the vet's pool, not the wide Tier A/B
         # sweep record_gate_evaluations runs in the morning cron, because it
-        # needs fields only the vet call produces. Shadow mode: recorded on
-        # /gates only, never blocks — does NOT touch the INSERT below or the
-        # public High Impact page.
+        # needs fields only the vet call produces. Shadow mode: the GATE'S
+        # verdict never blocks the flag below. The raw dict itself IS also
+        # saved onto the INSERT below (migration 028) — the gate's own
+        # evidence only survives on rows it manages to adjudicate, so without
+        # this the model's extraction would be unrecoverable on every n/a exit.
+        low_base = (vet or {}).get("low_base")
         try:
-            record_low_base_evaluation(c["id"], {**c, "low_base": (vet or {}).get("low_base")})
+            record_low_base_evaluation(c["id"], {**c, "low_base": low_base})
         except Exception as e:
             print(f"[showcase] low_base gate recording failed (non-fatal) — {e}")
 
@@ -842,12 +847,14 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                  category, rules_score, keyword_hits, summary, llm_score,
                  llm_confidence, llm_thesis, llm_risks, story_close,
                  vet_verdict, vet_confidence, vet_rationale, vet_model, vet_processed_at,
+                 low_base,
                  fwd_metric, fwd_value, fwd_currency, fwd_period, fwd_basis,
                  fwd_is_bound, fwd_quote, fwd_ev, fwd_multiple, fwd_model,
                  fwd_processed_at,
                  status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
+                    %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     'approved')
             ON CONFLICT (rns_id) DO NOTHING
@@ -860,6 +867,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                 (vet or {}).get("verdict"), (vet or {}).get("confidence"),
                 (vet or {}).get("rationale"), (vet or {}).get("model"),
                 datetime.now(timezone.utc) if vet else None,
+                Json(low_base) if low_base is not None else None,
                 fwd["fwd_metric"], fwd["fwd_value"], fwd["fwd_currency"],
                 fwd["fwd_period"], fwd["fwd_basis"], fwd["fwd_is_bound"],
                 fwd["fwd_quote"], fwd["fwd_ev"], fwd["fwd_multiple"],

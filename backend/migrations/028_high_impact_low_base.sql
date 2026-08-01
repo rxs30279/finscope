@@ -1,0 +1,30 @@
+-- Persist the vet's raw low_base extraction (period, metric, current_value,
+-- preceding_period_value, prior_year_value, prior_year_2_value, direction),
+-- verbatim as the model wrote it, alongside the vet_* columns that already
+-- live on high_impact_rns.
+--
+-- Why this exists: the gate that reads this data (gates._gate_low_base) only
+-- persists its OUTCOME, in rns_gate_evaluations.evidence -- and only on the
+-- rows it manages to adjudicate. Every "n/a" exit (not_vetted, missing_period,
+-- unparseable_value, quarter_unsupported, metric_unmapped, no_annual_history)
+-- returns before evidence is populated, so for the large majority of rows
+-- there has been zero record of what the model actually extracted. That is
+-- exactly the blind spot that made the sibling earnings_quality fix
+-- (_parse_bps reading percentage rates, 2026-08-01) possible to get wrong
+-- silently for as long as it did on guidance_checks/earnings_quality's own
+-- history -- except THOSE two survive on rns_announcements forever, so a
+-- parser change can be replayed against real history in a query. low_base had
+-- no equivalent: the raw dict was built in showcase.flag_high_impact_candidates,
+-- used once to call record_low_base_evaluation, and discarded.
+--
+-- Stored AS THE MODEL WROTE IT (strings, not parsed floats) -- same reasoning
+-- as migration 026: a parse failure should be visible against the stored
+-- quote, not hidden behind a value computed at write time.
+--
+-- On high_impact_rns, not rns_announcements: low_base's evaluation pool is the
+-- vet's pool (only candidates that reach flag_high_impact_candidates ever
+-- produce this object), not the wide Tier A/B sweep -- see gates.py's note on
+-- record_low_base_evaluation. Idempotent. Apply with:
+--   python backend/run_migration.py migrations/028_high_impact_low_base.sql
+
+ALTER TABLE high_impact_rns ADD COLUMN IF NOT EXISTS low_base JSONB;

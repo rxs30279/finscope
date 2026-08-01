@@ -211,8 +211,11 @@ def test_flag_keeps_positive_and_stores_vet():
     params = ex.call_args[0][1]
     assert params[16] == "include"          # vet_verdict
     assert isinstance(params[20], datetime)  # vet_processed_at set
-    # low_base gate is shadow-evaluated on the vet's own pool, separately from
-    # the high_impact_rns INSERT above — must not touch showcase._exec/params.
+    # The raw low_base dict is saved verbatim onto the INSERT (migration 028),
+    # in addition to being shadow-evaluated below — the gate's own evidence
+    # only survives on rows it manages to adjudicate, so the model's own
+    # extraction needs its own durable copy.
+    assert params[21].adapted == {"period": "H1"}   # low_base
     record_lb.assert_called_once()
     assert record_lb.call_args[0][0] == _cand()["id"]
     assert record_lb.call_args[0][1]["low_base"] == {"period": "H1"}
@@ -242,6 +245,7 @@ def test_flag_vet_failure_still_inserts_null_verdict():
     params = ex.call_args[0][1]
     assert params[16] is None   # vet_verdict NULL
     assert params[20] is None   # vet_processed_at NULL
+    assert params[21] is None   # low_base NULL — no vet output to save
     # A failed vet still gets a (n/a/not_vetted) low_base evaluation recorded.
     assert record_lb.call_args[0][1]["low_base"] is None
 
