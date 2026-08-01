@@ -157,6 +157,13 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
   // Local copy of the searched symbol, kept for row styling after the context
   // value is consumed (cleared) by the scroll effect below.
   const [highlighted, setHighlighted] = useState<string | null>(null);
+  // Frozen at mount: were we navigated here by a nav-search click? If so, the
+  // saved-scroll-position restore below must sit out entirely — both it and the
+  // search-jump effect write `scrollTop` from their own rAF loops in the same
+  // commit, and the restore's repeated overwrites (see useScrollRestore) starve
+  // the target row of ever mounting, silently leaving the page at the old
+  // remembered offset instead of the searched row. Search intent should win.
+  const arrivedViaSearch = useRef(!!highlightSymbol);
 
   useEffect(() => {
     const s = loadScreenerState();
@@ -372,6 +379,7 @@ export default function Screener({ onSelect, highlightSymbol, watchlist, onToggl
     "screener",
     !loading && sorted.length > 0,
     () => scrollRef.current,
+    arrivedViaSearch.current,
   );
 
   // Reset the scroll position to the top whenever the filtered/sorted set

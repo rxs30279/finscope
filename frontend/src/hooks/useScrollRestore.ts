@@ -51,6 +51,12 @@ export function useScrollRestore(
   key: string,
   ready: boolean,
   getScroller?: () => HTMLElement | null,
+  // Suppresses applying the saved offset on this mount (e.g. the page was
+  // navigated to for a different reason — a search jump — that should win over
+  // "put me back where I was"), while still tracking/saving the live offset
+  // normally so leaving later persists a fresh position. Frozen by the caller
+  // for the life of the mount; changing it mid-life is not supported.
+  skipRestore?: boolean,
 ) {
   // -1 means "nothing measured yet" — distinct from a genuine 0. Without that
   // distinction, navigating away while the list was still loading would write 0
@@ -119,6 +125,7 @@ export function useScrollRestore(
   useEffect(() => {
     if (!ready || restored.current) return;
     restored.current = true;
+    if (skipRestore) return;
     const saved = loadScrollPos(key);
     // Adopt the value immediately, so an unmount before the frames below still
     // saves where we meant to be rather than 0.
