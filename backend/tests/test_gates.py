@@ -248,11 +248,29 @@ def test_low_base_gate_route1_pass_on_the_capd_shape():
 
 
 def test_low_base_gate_route1_blocks_a_genuine_sequential_decline():
+    # A sequential decline alone is no longer enough — it has to survive the
+    # seasonality check, which here it does: $90m is also below the $95m the
+    # same quarter made two years ago, so the level genuinely has not held.
+    r = _gate("low_base").evaluate({"low_base": {
+        "period": "Q2", "current_value": "$90m", "preceding_period_value": "$101.7m",
+        "prior_year_2_value": "$95m",
+    }})
+    assert r.state == "block"
+    assert r.reason == "below_same_period_two_years_ago"
+    assert r.evidence["two_year_lfl_pct"] < 0
+
+
+def test_low_base_gate_na_when_sequential_shortfall_cannot_be_seasonally_adjudicated():
+    # STEP 1, the stop-loss. Without the two-year comparator a negative
+    # sequential step is ambiguous between deceleration and seasonality, and
+    # over-blocking is the high-severity error — so it fails OPEN.
     r = _gate("low_base").evaluate({"low_base": {
         "period": "Q2", "current_value": "$90m", "preceding_period_value": "$101.7m",
     }})
-    assert r.state == "block"
-    assert r.reason == "below_preceding_period"
+    assert r.state == "n/a"
+    assert r.reason == "seasonality_unadjudicable"
+    # The sequential figures are still recorded, so /gates shows why it abstained.
+    assert r.evidence["delta_pct"] < 0
 
 
 def test_low_base_gate_na_quarter_unsupported_with_no_printed_preceding_figure():
@@ -335,6 +353,103 @@ def test_low_base_gate_route2_uses_growth_pct_when_prior_value_absent():
     assert r.state == "pass"
     assert r.evidence["basis"] == "derived_from_fy_total"
     assert abs(r.evidence["preceding_value"] - 50.0) < 0.1  # 150 - 100
+
+
+# ── Seasonality (GRG.L 9692273) ──────────────────────────────────────────────
+# The gate's first ever real adjudication, and a false positive: Greggs' H1
+# operating profit of £86.5m sits 26.1% below the derived H2 2025 of £117.1m
+# (FY2025 £187.5m - H1 2025 £70.4m) purely because the business earns ~62% of
+# its profit in H2. It blocked; the stock rose 18.5% that session. The
+# announcement prints a three-year H1 table, which is what rescues it.
+_GRG_ANNUALS = [{"operating_income": 195.3e6}, {"operating_income": 187.5e6}]  # oldest first
+
+
+def test_low_base_gate_does_not_block_greggs_seasonal_h1():
+    with patch("showcase._annual_history", return_value=_GRG_ANNUALS):
+        r = _gate("low_base").evaluate({"symbol": "GRG.L", "low_base": {
+            "period": "H1", "metric": "operating_income",
+            "current_value": "£86.5m", "prior_year_value": "£70.4m",
+            "prior_year_2_value": "£75.8m",
+        }})
+    assert r.state == "pass"
+    # Sequentially down 26.1%, but up 14.1% on the same half two years ago...
+    assert r.evidence["delta_pct"] < 0
+    assert 13 < r.evidence["two_year_lfl_pct"] < 15
+    # ...and the seasonal step is 15pp BETTER than the company's own norm
+    # (-26.1% this year against -41.1% last year).
+    assert 14 < r.evidence["vs_seasonal_norm_pp"] < 16
+
+
+def test_low_base_gate_blocks_a_level_collapse_behind_a_normal_seasonal_step():
+    # Test B's job: the seasonal step looks ordinary, but H1 is below where it
+    # was two years ago — the low base is flattering a level that never
+    # recovered. Test A sleeps through this one, which is why B is primary.
+    with patch("showcase._annual_history", return_value=_GRG_ANNUALS):
+        r = _gate("low_base").evaluate({"symbol": "GRG.L", "low_base": {
+            "period": "H1", "metric": "operating_income",
+            "current_value": "£70.0m", "prior_year_value": "£70.4m",
+            "prior_year_2_value": "£75.8m",
+        }})
+    assert r.state == "block"
+    assert r.reason == "below_same_period_two_years_ago"
+
+
+def test_low_base_gate_blocks_a_seasonal_step_much_worse_than_the_norm():
+    # Test A's job: grew over two years, so B passes it, but this year's step
+    # is 5.4pp worse than the company's own — a real change in the pattern.
+    # FY(n-1) 220.0 -> derived preceding H2 = 220.0 - 70.4 = 149.6.
+    with patch("showcase._annual_history",
+               return_value=[{"operating_income": 195.3e6}, {"operating_income": 220.0e6}]):
+        r = _gate("low_base").evaluate({"symbol": "GRG.L", "low_base": {
+            "period": "H1", "metric": "operating_income",
+            "current_value": "£80.0m", "prior_year_value": "£70.4m",
+            "prior_year_2_value": "£75.8m",
+        }})
+    assert r.state == "block"
+    assert r.reason == "worse_than_seasonal_norm"
+    assert r.evidence["two_year_lfl_pct"] > 0  # B alone would have passed it
+    assert r.evidence["vs_seasonal_norm_pp"] < -5
+
+
+def test_low_base_gate_ignores_a_preceding_figure_copied_from_the_prior_year():
+    # Observed on GRG.L 9692273 with v4-flash:thinking — it put the prior-year
+    # H1 (£70.4m) into preceding_period_value as well, which would have read as
+    # a +22.9% sequential GAIN off the wrong base. Route 1 must decline it and
+    # fall through to the FY-derived route, reaching the same verdict honestly.
+    with patch("showcase._annual_history", return_value=_GRG_ANNUALS):
+        r = _gate("low_base").evaluate({"symbol": "GRG.L", "low_base": {
+            "period": "H1", "metric": "operating_income",
+            "current_value": "£86.5m",
+            "preceding_period_value": "£70.4m",   # the mis-copy
+            "prior_year_value": "£70.4m",
+            "prior_year_2_value": "£75.8m",
+        }})
+    assert r.state == "pass"
+    assert r.evidence["basis"] == "derived_from_fy_total"
+    assert r.evidence["delta_pct"] == -26.1  # the true sequential step, not +22.9
+
+
+def test_low_base_gate_positive_sequential_step_needs_no_seasonality_evidence():
+    # The CAPD/STAN/JNEO shape: above the preceding period, so no seasonal
+    # pattern can explain it away and the two-year figure is never consulted.
+    r = _gate("low_base").evaluate({"low_base": {
+        "period": "Q2", "current_value": "$117.3m", "preceding_period_value": "$101.7m",
+    }})
+    assert r.state == "pass"
+    assert "two_year_lfl_pct" not in r.evidence
+
+
+def test_low_base_gate_seasonal_norm_skipped_without_a_second_fiscal_year():
+    # Only one FY on file — test A cannot be derived, so B decides alone and
+    # the norm fields are simply absent rather than guessed.
+    with patch("showcase._annual_history", return_value=[{"operating_income": 187.5e6}]):
+        r = _gate("low_base").evaluate({"symbol": "GRG.L", "low_base": {
+            "period": "H1", "metric": "operating_income",
+            "current_value": "£86.5m", "prior_year_value": "£70.4m",
+            "prior_year_2_value": "£75.8m",
+        }})
+    assert r.state == "pass"
+    assert "vs_seasonal_norm_pp" not in r.evidence
 
 
 def test_low_base_gate_records_model_direction_mismatch_without_changing_state():

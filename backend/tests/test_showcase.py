@@ -396,11 +396,31 @@ def test_parse_bps_reads_the_forms_banks_print():
     assert showcase._parse_bps("62bps (H125: 52bps)") == 62
 
 
-def test_parse_bps_refuses_percentages_and_money():
+def test_parse_bps_reads_a_standalone_percentage_as_a_rate():
+    # UK banks print the cost of risk and the asset quality ratio as
+    # percentages, not bps. Requiring the unit hid both of the only two
+    # percentage-printed rate pairs in the table.
+    assert showcase._parse_bps("0.25%") == 25
+    assert showcase._parse_bps("0.19%") == 19
+    assert showcase._parse_bps("  3.19 % ") == 319
+    # Parentheses are the accounting charge convention, not a sign. Reading
+    # VANQ's "(7.0)% vs (6.6)%" as -700 vs -660 would turn a 40bps
+    # deterioration into an improvement.
+    assert showcase._parse_bps("(7.0)%") == 700
+    assert showcase._parse_bps("(6.6)%") == 660
+    # An explicit minus is a real release and is honoured.
+    assert showcase._parse_bps("-10.85%") == -1085
+    # A bps figure still wins over any percentage in the same string.
+    assert showcase._parse_bps("62bps (0.62%)") == 62
+
+
+def test_parse_bps_refuses_percentages_in_prose_and_money():
     # "increased 38%" read as 3,800bps would fire the bank gate on an income
-    # line's own comparator. Requiring the unit costs nothing — banks print the
-    # loan loss rate in bps precisely because it is the normalised figure.
-    for s in ("increased 38%", "38%", "£1.4bn", "c.£225m", "62", "", None, 62):
+    # line's own comparator, so a percentage only counts when it is the whole
+    # string. "38%" alone IS now read — on a bank cost_or_charge line that is a
+    # rate, and the gate never reaches this parser on any other kind of line.
+    for s in ("increased 38%", "up 38% to £1.4bn", "38% of revenue",
+              "£1.4bn", "c.£225m", "62", "", None, 62):
         assert showcase._parse_bps(s) is None, s
 
 
@@ -459,14 +479,48 @@ def test_worsening_loss_rate_scans_past_earlier_entries():
 
 
 def test_worsening_loss_rate_fires_on_the_quarter_as_well_as_the_half():
-    # Enumeration is unstable — 2 to 7 entries across 7 BARC runs — so the
-    # threshold sits below BOTH observed rises (H1 +10bps, Q2 +7bps) rather
-    # than letting the outcome depend on which period the model enumerated.
+    # Enumeration is unstable — 2 to 7 entries across 7 BARC runs — so the rule
+    # must fire on either window rather than letting the outcome depend on
+    # which period the model happened to enumerate. Q2's +7bps is the tightest
+    # rise we need to catch and the threshold sits exactly on it.
     q2 = {"item": "Loan loss rate", "period": "Q2 2026", "value": "51bps",
           "prior_value": "44bps", "kind": "cost_or_charge"}
     assert showcase._worsening_loss_rate(
         {**_BANK, "earnings_quality": [q2]}
     ) == q2
+
+
+# The two percentage-printed rate pairs the bps-only parser used to discard.
+# Both are real stored rows from 2026-07-30; between them they are the only
+# reason this parser changed, so they are pinned as fixtures.
+_VANQ_COR = {
+    "item": "Cost of risk", "period": "H1 2026", "value": "(7.0)%",
+    "prior_value": "(6.6)%", "kind": "cost_or_charge", "one_off_named": None,
+}
+_LLOY_AQR = {
+    "item": "Asset quality ratio", "period": "H1 2026", "value": "0.25%",
+    "prior_value": "0.19%", "kind": "cost_or_charge", "one_off_named": None,
+}
+
+
+def test_worsening_loss_rate_catches_a_cost_of_risk_printed_as_a_percentage():
+    # VANQ.L 2026-07-30: cost of risk 6.6 -> 7.0%, i.e. +40bps, and the stock
+    # fell 17% over the following two sessions. The gate scored the row as
+    # unparseable purely because the bank wrote "%" instead of "bps".
+    assert showcase._worsening_loss_rate(
+        {**_BANK, "earnings_quality": [_VANQ_COR]}
+    ) == _VANQ_COR
+
+
+def test_worsening_loss_rate_ignores_a_six_bp_rise_off_a_benign_base():
+    # LLOY.L 2026-07-30: asset quality ratio 0.19 -> 0.25%. That is +32% in
+    # relative terms — a bigger relative move than BARC's — and the stock still
+    # rose 5.6%, because 0.19% is an exceptionally benign base. The threshold
+    # keeps it out; see the note on _BANK_LLR_RISE_BPS for why a delta-in-bps
+    # rule is the wrong shape for this case rather than merely mis-tuned.
+    assert showcase._worsening_loss_rate(
+        {**_BANK, "earnings_quality": [_LLOY_AQR]}
+    ) is None
 
 
 def test_worsening_loss_rate_ignores_the_absolute_impairment_charge():

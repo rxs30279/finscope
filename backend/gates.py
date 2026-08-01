@@ -168,23 +168,67 @@ _LOW_BASE_HALVES = ("H1", "H2")
 _LOW_BASE_PERIODS = ("H1", "H2", "Q1", "Q2", "Q3", "Q4")
 _LOW_BASE_METRICS = ("revenue", "operating_income", "net_income")
 
+# ── Seasonality ───────────────────────────────────────────────────────────────
+# A sequential comparison is seasonality-contaminated and, taken alone, is not
+# evidence of anything. Greggs earns ~62% of its operating profit in H2, so its
+# H1 sits 25-40% below the preceding H2 EVERY year no matter how well it trades.
+# This gate's first ever real adjudication (GRG.L 9692273, 2026-07-29) blocked
+# on a -26.1% gap that was pure December; the stock rose 18.5% that session.
+#
+# So a NEGATIVE sequential step no longer blocks on its own. It is ambiguous
+# between "decelerating" and "seasonal", and the two are told apart with the
+# same-period figure from TWO years ago — which UK interims routinely print
+# (Greggs prints H1 2026 / H1 2025 / H1 2024 side by side in its highlights):
+#
+#   B  two-year like-for-like — is the period below the SAME period two years
+#      ago? Seasonally immune by construction, because it compares H1 to H1.
+#      This is the seasonally-valid form of what the gate was built for: a
+#      headline growth rate flattering a level that has not actually recovered.
+#   A  seasonal norm — is this year's sequential step materially worse than the
+#      company's OWN step a year earlier? Greggs ran -26.1% against a -41.1%
+#      norm, i.e. 15pp BETTER than usual. Catches a genuine change in the
+#      seasonal pattern that B sleeps through, but it is level-blind on its own
+#      (a uniformly shrinking business keeps a normal-looking step), so it only
+#      ever runs alongside B, never instead of it.
+#
+# A POSITIVE sequential step still passes immediately and needs none of this: no
+# seasonal pattern can make a period beat the one before it unless trading
+# genuinely improved. That is what keeps the CAPD/STAN/JNEO negative controls
+# passing on exactly the evidence they passed on before this change.
+#
+# Where prior_year_2_value is absent neither test can run and the result is n/a,
+# never a block. Over-blocking is the high-severity error in this system, and
+# this gate has ZERO production observations to calibrate against — 127 of 127
+# recorded evaluations are n/a/not_vetted, because the only code path that
+# supplies a low_base object is the vet, which no candidate has reached.
+#
+# PROVISIONAL threshold, calibrated on nothing. Unlike the old -0% cutoff it is
+# at least a threshold on a meaningful quantity — how far this year's seasonal
+# step falls short of the company's own — rather than on a structural artefact.
+# Revisit once the gate has actually adjudicated some rows.
+_SEASONAL_WORSENING_PP = 5.0
 
-def _low_base_fy_figure(symbol: Optional[str], metric: str) -> Optional[float]:
-    """The most recently reported COMPLETE fiscal year's value for `metric`.
+
+def _low_base_fy_series(symbol: Optional[str], metric: str, n: int = 2) -> list:
+    """The last `n` COMPLETE fiscal years' values for `metric`, newest first.
 
     An interim announcement's prior-year comparator period (e.g. "H1 2025")
     belongs to the fiscal year immediately before the one in progress — which
     is, by construction, the latest year annual_financials has on file: the
     year containing the current period hasn't closed yet, so it can't be
-    there instead.
+    there instead. The second element is the year before that, needed to
+    derive the company's own seasonal step a year earlier (test A).
     """
     from showcase import _annual_history
 
     hist = _annual_history(symbol)  # oldest first
-    if not hist:
-        return None
-    v = hist[-1].get(metric)
-    return float(v) if v is not None else None
+    out = []
+    for h in reversed(hist):
+        v = h.get(metric)
+        out.append(float(v) if v is not None else None)
+        if len(out) >= n:
+            break
+    return out
 
 
 def _gate_low_base(cand: dict) -> GateResult:
@@ -210,6 +254,21 @@ def _gate_low_base(cand: dict) -> GateResult:
     # announcement already printed the true sequential quarters.
     preceding = _parse_money(lb.get("preceding_period_value"))
     basis = "printed_preceding_period"
+    # Kept in scope for the seasonal-norm test below, which needs the
+    # prior-year half and the FY before last to derive last year's own step.
+    prior = None
+    fy: list = []
+
+    # Route 1 is only the safest route while the model can tell "the period
+    # immediately before this one" from "the same period a year ago". On
+    # GRG.L 9692273 v4-flash:thinking copied £70.4m — the prior-year H1 — into
+    # BOTH fields, which turned a -26.1% sequential step into a +22.9% one and
+    # would have passed the row for the wrong reason. Two identical figures are
+    # that mis-copy far more often than a genuine coincidence, so fall through
+    # to the FY-derived route, which reconstructs the preceding period from
+    # data we own rather than from the field in doubt.
+    if preceding is not None and preceding == _parse_money(lb.get("prior_year_value")):
+        preceding = None
 
     if preceding is None:
         # Route 2 — derive the preceding HALF as FY total minus the
@@ -235,11 +294,11 @@ def _gate_low_base(cand: dict) -> GateResult:
         if metric not in _LOW_BASE_METRICS:
             return GateResult(state="n/a", reason="metric_unmapped")
 
-        fy_total = _low_base_fy_figure(cand.get("symbol"), metric)
-        if fy_total is None:
+        fy = _low_base_fy_series(cand.get("symbol"), metric, 2)
+        if not fy or fy[0] is None:
             return GateResult(state="n/a", reason="no_annual_history")
 
-        preceding = fy_total - prior
+        preceding = fy[0] - prior
         basis = "derived_from_fy_total"
 
     if not preceding:
@@ -263,8 +322,49 @@ def _gate_low_base(cand: dict) -> GateResult:
     if model_direction in ("above", "below", "in_line") and model_direction != computed_direction:
         evidence["model_direction_mismatch"] = {"model": model_direction, "computed": computed_direction}
 
-    if delta_pct < 0:
-        return GateResult(state="block", reason="below_preceding_period", evidence=evidence)
+    # At or above the preceding period — unambiguous in the safe direction. No
+    # seasonal pattern can lift a period above the one before it without real
+    # improvement, so this needs no seasonality evidence at all.
+    if delta_pct >= 0:
+        return GateResult(state="pass", evidence=evidence)
+
+    # Below it — could be deceleration, could be December. Both seasonality-
+    # immune tests need the same period two years ago, copied not derived.
+    prior2 = _parse_money(lb.get("prior_year_2_value"))
+    if prior2 is None or prior2 <= 0:
+        evidence["note"] = (
+            "sequential shortfall not adjudicable — no same-period figure from "
+            "two years ago, so seasonality cannot be ruled out"
+        )
+        return GateResult(state="n/a", reason="seasonality_unadjudicable",
+                          evidence=evidence)
+
+    # Test B — two-year like-for-like (level).
+    lfl_pct = round((current / prior2 - 1) * 100, 1)
+    evidence["same_period_2y_ago"] = prior2
+    evidence["two_year_lfl_pct"] = lfl_pct
+    evidence["like_for_like_direction"] = (
+        "above" if lfl_pct > 1 else "below" if lfl_pct < -1 else "in_line"
+    )
+
+    # Test A — seasonal norm (pattern). Only derivable on the FY-total route,
+    # where we hold the year before last and the model copied the prior-year
+    # half; a printed preceding period gives no equivalent for last year.
+    if basis == "derived_from_fy_total" and len(fy) >= 2 and fy[1]:
+        preceding_prior = fy[1] - prior2
+        if preceding_prior:
+            step_prior = round((prior / preceding_prior - 1) * 100, 1)
+            evidence["preceding_value_prior_year"] = round(preceding_prior, 1)
+            evidence["seasonal_step_prior_year_pct"] = step_prior
+            evidence["vs_seasonal_norm_pp"] = round(delta_pct - step_prior, 1)
+
+    if lfl_pct < 0:
+        return GateResult(state="block", reason="below_same_period_two_years_ago",
+                          evidence=evidence)
+    norm_pp = evidence.get("vs_seasonal_norm_pp")
+    if norm_pp is not None and norm_pp < -_SEASONAL_WORSENING_PP:
+        return GateResult(state="block", reason="worse_than_seasonal_norm",
+                          evidence=evidence)
     return GateResult(state="pass", evidence=evidence)
 
 
@@ -272,7 +372,7 @@ GATES: tuple[Gate, ...] = (
     Gate("sentiment", "Announcement direction must read positive.", "armed", _gate_sentiment),
     Gate("guidance", "Guidance not raised against a printed consensus it fails to clear.", "armed", _gate_guidance),
     Gate("earnings_quality", "Bank loan-loss rate must not be rising.", "armed", _gate_earnings_quality),
-    Gate("low_base", "Headline growth vs the immediately preceding period, not just the prior-year comparator.", "shadow", _gate_low_base),
+    Gate("low_base", "Headline growth vs the immediately preceding period, seasonally adjudicated against the same period two years earlier.", "shadow", _gate_low_base),
 )
 
 

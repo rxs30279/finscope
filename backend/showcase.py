@@ -286,8 +286,13 @@ def _vet_messages(cand: dict, annual: Optional[list[dict]] = None) -> list[dict]
         "announcement prints it directly (e.g. Q1 next to Q2). Separately, "
         "copy the prior-year same-period figure, or the YoY growth percentage "
         "against it, ONLY if the announcement states one of those — never "
-        "convert one into the other yourself. Leave any field null rather "
-        "than estimating it. Give your own best-effort direction read "
+        "convert one into the other yourself. Interims routinely print a "
+        "two- or three-year comparative table for the same period; where the "
+        "figure for the SAME period TWO years earlier is printed, copy that "
+        "into prior_year_2_value. It is the one comparison unaffected by "
+        "seasonality, so it is what decides the case for a business whose "
+        "trading is skewed to one half of the year. Leave any field null "
+        "rather than estimating it. Give your own best-effort direction read "
         "(above/below/in_line) against the correct preceding-period base, "
         "not the prior-year figure — this is checked mechanically afterwards, "
         "so a guess is fine. "
@@ -323,11 +328,18 @@ Return a JSON object with exactly these fields:
                 period                   "H1"|"H2"|"Q1"|"Q2"|"Q3"|"Q4"|null
                 metric                   "revenue"|"operating_income"|
                                          "net_income"|"other"|null
-                current_value            the headline figure, verbatim
+                current_value            the headline figure, verbatim AND
+                                         WITH ITS UNITS — "£86.5m", never
+                                         "86.5". A bare number cannot be
+                                         read back and the field is discarded.
                 preceding_period_value   immediately preceding same-length
                                          period's figure, ONLY if printed
                 prior_year_value         prior-year same-period figure, ONLY
-                                         if printed
+                                         if printed. Units, as above.
+                prior_year_2_value       the SAME period TWO years earlier,
+                                         ONLY if printed (interims often show
+                                         a three-year comparative table) —
+                                         never derived, never estimated
                 prior_year_growth_pct    YoY growth %, ONLY if printed instead
                                          of an absolute prior figure
                 direction                your own read: "above"|"below"|
@@ -426,6 +438,10 @@ def _parse_low_base(raw) -> dict:
         "current_value": _str("current_value"),
         "preceding_period_value": _str("preceding_period_value"),
         "prior_year_value": _str("prior_year_value"),
+        # The seasonality-immune comparator — see gates._SEASONAL_WORSENING_PP.
+        # Copied like every other field here; the arithmetic on it happens in
+        # gates._gate_low_base, never in the model and never in this function.
+        "prior_year_2_value": _str("prior_year_2_value"),
         "prior_year_growth_pct": growth if isinstance(growth, (int, float)) else None,
         "direction": _str("direction"),
     }
@@ -499,12 +515,28 @@ _MAG = {
 }
 _MAG_ALT = "|".join(sorted(_MAG, key=len, reverse=True))
 
-# Rates only. A percentage is deliberately NOT converted — "increased 38%" is a
-# growth rate, not a loss rate, and reading it as 3,800bps would fire the bank
-# gate on an income line's own comparator. Banks print the loan loss rate in
-# bps precisely because it is the normalised figure, so requiring the unit
-# costs nothing and removes the whole class of unit confusion.
+# Rates only. A percentage EMBEDDED IN PROSE is deliberately NOT converted —
+# "increased 38%" is a growth rate, not a loss rate, and reading it as 3,800bps
+# would fire the bank gate on an income line's own comparator.
+#
+# But requiring the bps unit did not "cost nothing", as this comment used to
+# claim. Of the 28 bank cost_or_charge lines in the table on 2026-08-01, exactly
+# three are rates and only ONE of those printed bps (NWG's loan impairment rate,
+# 19 -> 19bps). The other two — LLOY's asset quality ratio and VANQ's cost of
+# risk — are printed as percentages by the banks themselves, so the gate simply
+# never saw them. Every other line is an absolute £m charge, which is precisely
+# the figure this gate exists NOT to fire on. The unit requirement wasn't
+# filtering noise, it was filtering out the signal.
+#
+# So: a percentage is read as a rate only when it is the WHOLE string. That
+# keeps "increased 38%" out (it is prose, so it fails the anchor) while letting
+# "0.25%" and "(7.0)%" in. Parentheses do not flip the sign — they are the
+# accounting convention for a charge, applied to both sides of the pair by the
+# announcement, and treating "(7.0)% vs (6.6)%" as -700 vs -660 would invert a
+# 40bps DETERIORATION into an improvement. An explicit minus IS honoured, since
+# a negative loss rate is a genuine release.
 _BPS_RE = re.compile(rf"({_NUM})\s*(?:bps|bp|basis\s+points?)\b", re.I)
+_RATE_PCT_RE = re.compile(rf"^\(?\s*({_NUM})\s*\)?\s*%$")
 _MONEY_CCY_RE = re.compile(rf"[£$€]\s*({_NUM})\s*({_MAG_ALT})?\b", re.I)
 _MONEY_BARE_RE = re.compile(rf"({_NUM})\s*({_MAG_ALT})\b", re.I)
 
@@ -515,14 +547,24 @@ def _parse_bps(s) -> Optional[float]:
     First rather than last: the model quotes the current figure ahead of its
     comparator ("62bps (H125: 52bps)"), so if it puts the whole clause in
     `value` the leading number is still the one meant.
+
+    A bare percentage — the whole string and nothing else — is converted, since
+    that is how UK banks actually print the cost of risk and the asset quality
+    ratio. A percentage inside prose is not; see the note above _BPS_RE.
     """
     if not isinstance(s, str):
         return None
     m = _BPS_RE.search(s)
+    if m:
+        try:
+            return float(m.group(1).replace(",", ""))
+        except ValueError:
+            return None
+    m = _RATE_PCT_RE.match(s.strip())
     if not m:
         return None
     try:
-        return float(m.group(1).replace(",", ""))
+        return float(m.group(1).replace(",", "")) * 100
     except ValueError:
         return None
 
@@ -571,16 +613,29 @@ def _parse_money(s) -> Optional[float]:
 # unit-tested, not in a prompt where it is re-derived every morning against a
 # 25-point score spread.
 #
-# PROVISIONAL threshold — calibrated on n=1. The only observations are BARC's
-# H1 2026 loan loss rate (52 -> 62bps, +10) and its Q2 2026 rate (44 -> 51bps,
-# +7); both are the same real deterioration, seen over different windows. The
-# threshold sits below both deliberately: the model's enumeration of
-# earnings_quality entries is not stable run to run (2 to 7 entries across 7
-# BARC runs), so a threshold set at the H1 figure would make the outcome depend
-# on WHICH period the model happened to enumerate. Revisit once more bank
-# results have landed — RNS ingest only began 2026-06-29, so the table is
-# shallow on banks and this cannot be calibrated properly yet.
-_BANK_LLR_RISE_BPS = 5
+# PROVISIONAL threshold — now fitted on n=4, which is better than the n=1 it
+# started at and still not a calibration. Every bank rate pair we can read:
+#
+#   BARC H1 2026 loan loss rate      52 -> 62bps   +10   fell 5.5%   want block
+#   BARC Q2 2026 loan loss rate      44 -> 51bps    +7   (same day)  want block
+#   NWG  H1 2026 loan impairment     19 -> 19bps     0   +1.4%       want pass
+#   LLOY H1 2026 asset quality ratio 0.19 -> 0.25%  +6   +5.6%       want pass
+#   VANQ H1 2026 cost of risk        6.6 -> 7.0%   +40   -17.0%      want block
+#
+# 7 is the only value that gets all five right, and it lands exactly on an
+# observation with no margin either side — so treat it as a stopgap, not a
+# finding. It cannot go higher without losing BARC's Q2 window, and the
+# enumeration is not stable run to run (2 to 7 entries across 7 BARC runs), so
+# relying on H1 being the one enumerated is not safe.
+#
+# The LLOY row is the interesting one and argues this metric may be wrong. Its
+# AQR rose 32% in relative terms — a bigger relative move than BARC's — and the
+# stock still rose 5.6%, because 0.19% is an exceptionally benign base and the
+# rest of the result was strong (RoTE 14.1 -> 17.1%). A pure delta-in-bps rule
+# cannot tell "+6bps off a trivial base" from "+6bps off a stressed one". If a
+# fifth observation breaks the fit, add a floor on the LEVEL rather than nudging
+# this number again.
+_BANK_LLR_RISE_BPS = 7
 
 
 def _worsening_loss_rate(cand: dict) -> Optional[dict]:
