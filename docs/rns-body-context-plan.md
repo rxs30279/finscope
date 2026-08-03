@@ -278,6 +278,18 @@ score integrity. **Diff into a scratch table or CSV; never re-rank history in pl
 **Decision (2026-07-28): keep `HIGH_IMPACT_MIN_LLM_SCORE = 75`.** Recorded here so
 the analysis isn't redone, and so the reasoning is available when it *is* revisited.
 
+> **REVISITED 2026-08-03 (`5d6f7f5`) — this is the change this appendix was
+> written for.** The constant no longer exists. It split into
+> `HIGH_IMPACT_VET_ENTRY_SCORE = 60` (earns a vet call) and
+> `HIGH_IMPACT_MIN_VET_SCORE = 75` (publishes, applied to the vet's own new
+> `vet_score`, not to `llm_score`). The quantisation data below is still the
+> right analysis and it now argues for the *entry* floor: on that 60-day
+> distribution, dropping 75 → 60 adds the 70-bucket (47 rows) and everything
+> between, which matched the ~48 extra rows/month measured before the change.
+> What the data below cannot tell you is where the **publish** floor belongs —
+> that applies to a scale which did not exist when this was written, and
+> currently rests on zero observations.
+
 The threshold sits on the modal score. Scores are quantised to round numbers — over
 60 days: 70→47 rows, **75→49**, 80→14, 85→46, 90→5, 95→7, 100→2. Nothing lands
 between 75 and 80, so page inclusion for the largest single cluster turns on a

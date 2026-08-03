@@ -150,6 +150,13 @@ Write the incident up here when it happens.
   assignment. A correction scoring 55 while its original scored 75 is the score
   instability problem, tracked with `docs/rns-gate-block-plan.md`'s scope note,
   not this one.
+  <!-- 2026-08-03 (5d6f7f5): HIGH_IMPACT_MIN_LLM_SCORE no longer exists — split
+       into HIGH_IMPACT_VET_ENTRY_SCORE (60) and HIGH_IMPACT_MIN_VET_SCORE (75).
+       llm_score itself is still untuned, so this scope line still holds in
+       substance. NOTE for this plan specifically: the JNEO 75->55 instability
+       case now matters MORE, because 60 is the entry floor — an amendment can
+       drop a row out of vet eligibility entirely, not just below the flag. -->
+
 - Re-ranking or re-vetting history in place.
 - Storing RNS numbers as a first-class identifier. Worth revisiting only if
   window matching proves insufficient.

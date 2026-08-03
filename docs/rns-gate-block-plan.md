@@ -1,5 +1,36 @@
 # One Python gate block, and a page to calibrate it — plan
 
+> ## ⚠️ Two scope decisions in this plan were overturned on 2026-08-03 (`5d6f7f5`)
+>
+> The plan is kept as written — it is the record of what was decided and why,
+> and Phases 1-4 shipped on it. But two of its **Out of scope** commitments no
+> longer describe the code, and reading them as current will mislead:
+>
+> | This plan says | Now true |
+> |---|---|
+> | `HIGH_IMPACT_MIN_LLM_SCORE` stays at 75 (§ intro, §3, §5) | Split in two. `HIGH_IMPACT_VET_ENTRY_SCORE = 60` gates entry to the vet; `HIGH_IMPACT_MIN_VET_SCORE = 75` gates publication. |
+> | The vet's verdict stays advisory permanently (§2, §5) | The vet now emits `vet_score` (0-100) and **it decides publication**. `vet_verdict`/`vet_rationale` remain advisory prose; the *score* is what blocks. |
+>
+> The pipeline is now two scored passes asking different questions:
+>
+> ```
+> ranker  llm_score >= 60  -> earns a vet call   (price-impact likelihood x magnitude)
+> vet     vet_score >= 75  -> publishes          (conviction in a 1-3 month case)
+> ```
+>
+> What did **not** change, and is still load-bearing: `llm_score` itself is
+> untuned; over-blocking is still the high-severity error; new gates still land
+> in shadow; and Phase 4's `low_base` is still the structured field that
+> adjudicates growth arithmetic in Python rather than trusting the model's
+> comparison. The reasoning in §1 for why the vet's *arithmetic* cannot be
+> trusted is unaffected — scoring authority is a different question from
+> arithmetic reliability, and the caps in `showcase._clean_vet_score` exist
+> precisely because the model's number cannot be trusted unconditionally either.
+>
+> New in that change: `status='shadow'` for vetted-but-unpublished rows
+> (migration 029), which is what makes the 60-74 band an evidence base for
+> calibrating the new floor. **That floor currently rests on zero observations.**
+
 **Goal: turn the ad-hoc sequence of pre-vet checks into a single ordered
 registry of named, testable Python predicates, and build a private page that
 shows every gate's verdict on every candidate as a traffic light — so a gate
@@ -14,6 +45,9 @@ wrong in 4 of its last 5 numeric attempts (§1, *The case that started this*).
 
 Scope decisions, both carried forward from the previous two plans:
 `HIGH_IMPACT_MIN_LLM_SCORE` **stays at 75**, and `llm_score` is **not** tuned.
+<!-- SUPERSEDED 2026-08-03 (5d6f7f5): the threshold was split — entry to the vet
+     is now 60, publication is decided by the vet's own vet_score at 75. The
+     second half still holds: llm_score itself is untuned. See the banner. -->
 Three rows have now shown a 25-30pt spread on the same announcement; nothing
 here adds a dependence on that number.
 
@@ -113,6 +147,14 @@ vet fields are display-only, surfaced on `/gates` and on the showcase card. So
 four wrong rationales are currently a misleading label on rows that are
 otherwise fine, not a suppression. The four errors are free *because* the vet
 has no blocking authority.
+
+> **No longer free, as of 2026-08-03 (`5d6f7f5`).** The vet's *score* now
+> decides publication, so a bad vet call withholds a story rather than
+> mislabelling one. The arithmetic weakness documented in this section is
+> therefore a live cost, not a cosmetic one — which is the argument for
+> finishing Phase 4's Python adjudication rather than relying on the model's
+> own comparison. `showcase._clean_vet_score` caps the score by verdict
+> (`exclude <= 40`, `caution <= 74`) as a partial guard.
 
 Two conclusions replace the original ones:
 
@@ -302,6 +344,12 @@ pre-filter, but not the default view.
 
 **`HIGH_IMPACT_MIN_LLM_SCORE` is untouched at 75.** It governs public flagging
 and is a separate product decision; changing it is not folded into this plan.
+<!-- SUPERSEDED 2026-08-03 (5d6f7f5). It was indeed a separate product decision,
+     and it was taken separately: the constant is gone, replaced by
+     HIGH_IMPACT_VET_ENTRY_SCORE (60, entry to the vet) and
+     HIGH_IMPACT_MIN_VET_SCORE (75, publication, applied to vet_score).
+     /gates' own score column follows the ENTRY floor, so a row above that line
+     is one that earned a vet call — not one that published. -->
 
 **Most rows will be all-amber, and that is correct.** On 2026-07-29 only 26 of
 57 Tier A/B rows carried any `guidance_checks` at all — the other 31 were
@@ -525,11 +573,18 @@ fire on it.
 
 ## 5. Out of scope
 
-- Any change to `HIGH_IMPACT_MIN_LLM_SCORE`, to `llm_score`, or to the
+- ~~Any change to `HIGH_IMPACT_MIN_LLM_SCORE`~~ **(overturned 2026-08-03,
+  `5d6f7f5` — split into a 60 vet-entry floor and a 75 publish floor on
+  `vet_score`)**, to `llm_score` (still untuned), or to the
   sentiment rule's own logic (it moves into the registry unchanged).
-- Making `vet_verdict` block. The vet's prose verdict stays advisory
+- ~~Making `vet_verdict` block. The vet's prose verdict stays advisory
   permanently; what gains blocking authority is the structured field Phase 4
-  extracts from it.
+  extracts from it.~~ **(partially overturned 2026-08-03, `5d6f7f5`.** The
+  prose verdict `vet_verdict` is *still* advisory and still blocks nothing —
+  that half stands. But the vet now also emits a numeric `vet_score`, and that
+  DOES block: below 75 the row is stored `status='shadow'` and never reaches
+  the public page. Phase 4's structured `low_base` remains the separate,
+  Python-adjudicated channel it was always meant to be.**)**
 - Public exposure of `/gates`, or any gate state on the public showcase card.
 - Insurer / REIT / miner analogues of the bank rule.
 - Re-ranking history in place.

@@ -345,6 +345,11 @@ change here that could silently degrade something already working:
 - Gating on `one_off_named` / income composition (surfaced only, see Phase 3).
 - Any change to `HIGH_IMPACT_MIN_LLM_SCORE`, to `llm_score` itself, or to the
   sentiment gate.
+  <!-- 2026-08-03 (5d6f7f5): HIGH_IMPACT_MIN_LLM_SCORE no longer exists — split
+       into HIGH_IMPACT_VET_ENTRY_SCORE (60) and HIGH_IMPACT_MIN_VET_SCORE (75,
+       applied to the vet's new vet_score). llm_score and the sentiment gate are
+       both still untouched. -->
+
 - Insurer, REIT and miner equivalents (reserve releases, revaluation gains,
   asset sales). The extraction field is sector-neutral and will capture them;
   only the bank rule is being built now.
