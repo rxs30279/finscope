@@ -45,6 +45,10 @@ interface MatrixRow {
   in_universe: boolean;
   vet_verdict: "include" | "caution" | "exclude" | null;
   vet_rationale: string | null;
+  // The second LLM pass's own score. NULL means either the row never reached
+  // the vet, or the vet call failed — showcase_status tells the two apart.
+  vet_score: number | null;
+  showcase_status: string | null;
   public_flag_fail: string[];
   gates: Record<string, GateCell>;
   returns: RowReturns;
@@ -72,9 +76,14 @@ interface MatrixResponse {
 type Window_ = "latest" | "7d" | "30d";
 type Cohort = "category" | "in_universe" | "all";
 
-// Mirrors showcase.py's HIGH_IMPACT_MIN_LLM_SCORE — used to color the score
+// Mirrors showcase.py's HIGH_IMPACT_VET_ENTRY_SCORE — used to color the score
 // cell red instead of duplicating "score" in the floor column.
-const HIGH_IMPACT_MIN_LLM_SCORE = 75;
+//
+// This is the VET ENTRY floor, not the publish floor. Since 2026-08-03 clearing
+// it means the row earned an expensive second look, not that it was published:
+// that is decided afterwards by the vet's own vet_score (>= 75). A row can sit
+// above this line and still never appear on the public page.
+const HIGH_IMPACT_VET_ENTRY_SCORE = 60;
 
 const GATE_LABEL: Record<string, string> = {
   sentiment: "sent",
@@ -157,6 +166,64 @@ function GateMarker({ cell }: { cell: GateCell | undefined }) {
 
 // Display-only — the vet only ever runs on rows that already cleared every
 // gate AND the public flag's own floors, so most rows show a dim dash here.
+// The publish floor, applied to the VET's score (showcase.HIGH_IMPACT_MIN_VET_SCORE).
+const HIGH_IMPACT_MIN_VET_SCORE = 75;
+
+// Second-pass score, shown next to the ranker's so the two are comparable at a
+// glance. A NULL is ambiguous on its own — the row may never have reached the
+// vet, or the vet call may have failed — so showcase_status disambiguates:
+// a 'shadow' row WAS vetted, anything else was not.
+function VetScoreCell({ row }: { row: MatrixRow }) {
+  if (row.vet_score === null) {
+    // Three different NULLs, and conflating them would misread history. Only a
+    // SHADOW row with no score is a live vet failure: shadow is the status the
+    // flagger assigns when it refuses to publish, so a null score there means
+    // the call itself returned nothing. An 'approved' row with a null score is
+    // a legacy row published before the vet scored anything (pre-2026-08-03) —
+    // not a failure. No status at all means it never reached the vet.
+    const failed = row.showcase_status === "shadow";
+    const legacy = !failed && row.showcase_status !== null;
+    return (
+      <span
+        style={{ color: failed ? colors.red : colors.textDim }}
+        title={
+          failed
+            ? "vet returned no usable score — row withheld from the public page"
+            : legacy
+              ? "published before the vet became a scorer (pre-2026-08-03)"
+              : "never reached the vet"
+        }
+      >
+        {failed ? "!" : "—"}
+      </span>
+    );
+  }
+  const published = row.vet_score >= HIGH_IMPACT_MIN_VET_SCORE;
+  // The interesting rows are the disagreements: the ranker and the vet landing
+  // on opposite sides of their respective floors.
+  const promoted =
+    published && row.llm_score !== null && row.llm_score < HIGH_IMPACT_MIN_VET_SCORE;
+  const demoted =
+    !published && row.llm_score !== null && row.llm_score >= HIGH_IMPACT_MIN_VET_SCORE;
+  return (
+    <span
+      style={{ color: published ? colors.green : colors.red, fontWeight: promoted || demoted ? 700 : 400 }}
+      title={
+        promoted
+          ? `promoted — ranker scored ${row.llm_score}, vet published it on ${row.vet_score}`
+          : demoted
+            ? `demoted — ranker scored ${row.llm_score}, vet withheld it on ${row.vet_score}`
+            : published
+              ? `published (>= ${HIGH_IMPACT_MIN_VET_SCORE})`
+              : `withheld (< ${HIGH_IMPACT_MIN_VET_SCORE})`
+      }
+    >
+      {promoted ? "▲" : demoted ? "▼" : ""}
+      {row.vet_score}
+    </span>
+  );
+}
+
 function VetPill({ verdict, rationale }: { verdict: MatrixRow["vet_verdict"]; rationale: string | null }) {
   if (!verdict) return <span style={{ color: colors.textDim }}>·</span>;
   const style = VET_STYLE[verdict];
@@ -378,7 +445,18 @@ export default function GatesClient() {
                 <Th align="left">date</Th>
                 <Th align="left">symbol</Th>
                 <Th align="left">headline</Th>
-                <Th align="right">score</Th>
+                <Th
+                  align="right"
+                  title={`Pass 1 — the ranker's llm_score: price-impact likelihood x magnitude. >= ${HIGH_IMPACT_VET_ENTRY_SCORE} earns a vet call.`}
+                >
+                  rank
+                </Th>
+                <Th
+                  align="right"
+                  title={`Pass 2 — the vet's vet_score: conviction in a positive 1-3 month case after the sceptical read. >= ${HIGH_IMPACT_MIN_VET_SCORE} publishes. Arrows mark disagreement with pass 1.`}
+                >
+                  vet
+                </Th>
                 {gateNames.map((n) => (
                   <Th key={n} align="center" title={data.gates.find((g) => g.name === n)?.description}>
                     {GATE_LABEL[n] ?? n}
@@ -443,18 +521,21 @@ export default function GatesClient() {
                     <span
                       style={{
                         color:
-                          row.llm_score !== null && row.llm_score < HIGH_IMPACT_MIN_LLM_SCORE
+                          row.llm_score !== null && row.llm_score < HIGH_IMPACT_VET_ENTRY_SCORE
                             ? colors.red
                             : colors.text,
                       }}
                       title={
-                        row.llm_score !== null && row.llm_score < HIGH_IMPACT_MIN_LLM_SCORE
-                          ? `below the flag threshold (${HIGH_IMPACT_MIN_LLM_SCORE})`
+                        row.llm_score !== null && row.llm_score < HIGH_IMPACT_VET_ENTRY_SCORE
+                          ? `below the vet entry threshold (${HIGH_IMPACT_VET_ENTRY_SCORE})`
                           : undefined
                       }
                     >
                       {row.llm_score ?? "—"}
                     </span>
+                  </Td>
+                  <Td align="right">
+                    <VetScoreCell row={row} />
                   </Td>
                   {gateNames.map((n) => (
                     <Td key={n} align="center">

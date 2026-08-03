@@ -45,7 +45,24 @@ router = APIRouter(prefix="/api/showcase", tags=["showcase"])
 # ── Tunables ──────────────────────────────────────────────────────────────────
 # The auto-flag is deliberately strict: this is a small, curated showcase, so a
 # missed candidate is cheap (nothing appears) while a weak one wastes a review.
-HIGH_IMPACT_MIN_LLM_SCORE = 75
+#
+# TWO thresholds since migration 029, because there are now two scores. The
+# ranker's llm_score decides who is worth an expensive second look; the vet's
+# vet_score decides who is published. They are NOT the same question — see
+# _vet_messages for the rubric split — so do not collapse them back into one
+# number without reading that comment first.
+#
+# Entry to the vet. Was 75 and did double duty as the publish floor until
+# 2026-08-03. Dropped to 60 so the vet can PROMOTE a story the ranker
+# underrated: the 60-74 band is ~48 rows/month that previously got no second
+# look at all, and missing a tradeable announcement is this system's
+# high-severity error. Nothing in that band has ever been vetted (n=0), so
+# expect the include rate to fall — that is the band being unproven, not a
+# malfunction.
+HIGH_IMPACT_VET_ENTRY_SCORE = 60
+# Publish floor, applied to the VET's score. Rows that clear the entry score but
+# not this land as status='shadow' — vetted, stored, invisible.
+HIGH_IMPACT_MIN_VET_SCORE = 75
 HIGH_IMPACT_CATEGORIES = ("trading_update", "final_results", "interim_results", "quarterly")
 HIGH_IMPACT_MIN_MARKET_CAP = 50_000_000  # £50m — keep to genuinely tradeable names
 # Balance-sheet / quality floors — keep over-levered and low-quality names out of
@@ -215,7 +232,18 @@ def _annual_history(symbol: Optional[str], before=None, years: int = 5) -> list[
     rows = _q(
         """
         SELECT fiscal_year, period_end_date, revenue, operating_income,
-               net_income, eps_diluted
+               net_income, eps_diluted,
+               -- Dilution. The vet's system prompt has always named "heavy
+               -- equity dilution" as one of the things it must catch, and until
+               -- 2026-08-03 it was given no share count to catch it with.
+               shares_diluted,
+               -- Cash conversion and balance sheet. A profit line that is not
+               -- converting to cash, or growth funded by rising net debt, is
+               -- exactly the "positive-FRAMED story the market may punish"
+               -- this call exists to find — and none of it was reachable from
+               -- revenue/operating income/net income alone.
+               fcf, net_debt, total_equity,
+               operating_margin, net_income_margin, roce
         FROM annual_financials
         WHERE company_symbol = %s
           AND (%s::date IS NULL OR period_end_date < %s::date)
@@ -233,8 +261,30 @@ def _fmt_money_m(v) -> str:
     return f"£{float(v) / 1e6:,.1f}m"
 
 
+def _fmt_pct1(v) -> str:
+    """Ratios are stored as fractions (0.081 = 8.1%)."""
+    if v is None:
+        return "n/a"
+    return f"{float(v) * 100:.1f}%"
+
+
+def _fmt_shares_m(v) -> str:
+    if v is None:
+        return "n/a"
+    return f"{float(v) / 1e6:,.1f}m"
+
+
 def _annual_lines(hist: list[dict]) -> str:
-    """Render the annual series as prompt lines the vet can do arithmetic on."""
+    """Render the annual series as prompt lines the vet can do arithmetic on.
+
+    Two lines per year rather than one. The single-line version carried only
+    revenue/operating income/net income/EPS, which left the model unable to
+    answer questions the system prompt explicitly asks it — dilution needs a
+    share count, and "profit flattered by one-off/non-cash gains" is far easier
+    to spot when FCF sits next to net income. Kept as labelled text rather than
+    a table because the surrounding prompt is prose and the model copies
+    figures out of it verbatim.
+    """
     if not hist:
         return "  (no stored annual financials for this company)"
     lines = []
@@ -246,7 +296,68 @@ def _annual_lines(hist: list[dict]) -> str:
             f"operating income {_fmt_money_m(h.get('operating_income'))}, "
             f"net income {_fmt_money_m(h.get('net_income'))}, diluted EPS {eps_s}"
         )
+        lines.append(
+            f"      FCF {_fmt_money_m(h.get('fcf'))}, "
+            f"net debt {_fmt_money_m(h.get('net_debt'))}, "
+            f"equity {_fmt_money_m(h.get('total_equity'))}, "
+            f"diluted shares {_fmt_shares_m(h.get('shares_diluted'))}, "
+            f"op margin {_fmt_pct1(h.get('operating_margin'))}, "
+            f"net margin {_fmt_pct1(h.get('net_income_margin'))}, "
+            f"ROCE {_fmt_pct1(h.get('roce'))}"
+        )
     return "\n".join(lines)
+
+
+# How much announcement text the vet sees. The stored rns_announcements.body is
+# capped at 24k chars by rns._truncate_body — a cut sized for the RANKER, which
+# runs on ~1,000 rows/month and only needs the narrative. The vet runs on ~107
+# and has to read comparative tables, so it re-fetches the page instead. Same
+# route showcase_fwd already takes, and for the same reason.
+#
+# Head+tail, not head-only: rns.py's own note records that reiterated-guidance
+# language and consensus footnotes turn up ~85% of the way through a long
+# results document, so a head-only cut drops exactly what the sceptical read
+# needs. fetch_announcement_text truncates head-only, hence the raw fetch here.
+_VET_BODY_HEAD = 60_000
+_VET_BODY_TAIL = 20_000
+
+
+def _head_tail(text: str, head: int, tail: int) -> str:
+    if len(text) <= head + tail:
+        return text
+    omitted = len(text) - head - tail
+    return f"{text[:head]}\n\n[… {omitted} chars omitted …]\n\n{text[-tail:]}"
+
+
+def _vet_full_text(cand: dict) -> str:
+    """Freshest, longest announcement text available for the vet.
+
+    Falls back to the stored (24k-capped) body on any fetch failure, and to the
+    stub message when there was never a body to fetch. Non-fatal by design: a
+    slow or dead URL must degrade the vet's input, never cost a candidate its
+    vet call — the score now decides publication, so a raised exception here
+    would silently drop a story.
+    """
+    if cand.get("body_is_stub"):
+        return "(body unavailable — announcement links to an external document)"
+    stored = cand.get("body") or "(not available)"
+    url = cand.get("url")
+    if not url:
+        return stored
+    try:
+        from showcase_fwd import fetch_announcement_text
+
+        # max_chars far above any real announcement so the head+tail cut below
+        # is the only truncation applied — fetch_announcement_text's own cut is
+        # head-only and would defeat the point.
+        full = fetch_announcement_text(url, max_chars=1_000_000)
+    except Exception as e:
+        print(f"[showcase] vet full-text fetch failed for {cand.get('symbol')} "
+              f"(non-fatal, using stored body) — {e}")
+        return stored
+    if not full or len(full) <= len(stored):
+        return stored
+    return _head_tail(full, _VET_BODY_HEAD, _VET_BODY_TAIL)
 
 
 def _vet_body_text(cand: dict) -> str:
@@ -255,7 +366,11 @@ def _vet_body_text(cand: dict) -> str:
     return cand.get("body") or "(not available)"
 
 
-def _vet_messages(cand: dict, annual: Optional[list[dict]] = None) -> list[dict]:
+def _vet_messages(
+    cand: dict,
+    annual: Optional[list[dict]] = None,
+    body_text: Optional[str] = None,
+) -> list[dict]:
     system = (
         "You are a sceptical UK equity analyst vetting positive-looking RNS "
         "announcements for a 1-3 month long showcase of good investment cases. "
@@ -298,7 +413,24 @@ def _vet_messages(cand: dict, annual: Optional[list[dict]] = None) -> list[dict]
         "(above/below/in_line) against the correct preceding-period base, "
         "not the prior-year figure — this is checked mechanically afterwards, "
         "so a guess is fine. "
-        "Judge whether this is a genuinely positive near-term investment case. "
+        "Judge whether this is a genuinely positive near-term investment case, "
+        "and express that judgement as a score from 0 to 100. "
+        "The score is your CONVICTION that a holder buying on this "
+        "announcement is in a good position over the next 1-3 months, having "
+        "made every deduction the checks above call for. It is NOT a measure "
+        "of how much the share price is likely to move: a large move on a "
+        "story you distrust scores LOW, and a modest, well-founded improvement "
+        "in a sound business scores well. Anchor it: 80+ means you would be "
+        "comfortable putting this in front of a reader as a good case with no "
+        "caveat you feel uneasy about; 60-79 means positive but carrying a "
+        "catch a reader must be told; below 40 means the positive framing does "
+        "not survive the checks. Fill verdict and rationale FIRST and let them "
+        "constrain the number — an 'exclude' verdict cannot carry a score above "
+        "40, and a 'caution' cannot exceed 74, whatever the headline says. "
+        "Score down for what you could not check, not up: if the announcement "
+        "text is unavailable, the base period cannot be established, or the "
+        "figures needed are absent, the case is unproven and belongs below 50. "
+        "Uncertainty is never a reason to hedge upward. "
         "Return STRICT JSON only."
     )
     user = f"""Announcement
@@ -314,18 +446,26 @@ Investegate AI summary
 
 Announcement text (verbatim, may be truncated) — this is the primary source;
 the summary above is a useful lead but can omit or misread material detail
-  {_vet_body_text(cand)}
+  {body_text if body_text is not None else _vet_body_text(cand)}
 
 Historical annual financials (from our own database; NOTE: "revenue" here is
 TOTAL revenue, which can differ from the company's preferred headline metric
 such as net operating income — compare bases carefully)
 {_annual_lines(annual or [])}
 
-Return a JSON object with exactly these fields:
+Return a JSON object with exactly these fields, IN THIS ORDER — decide the
+verdict and write the rationale before you choose the score, so the number
+follows the reasoning rather than the reasoning excusing the number:
   verdict     one of: "include" (clean positive case), "caution" (positive but
               with a real catch to check), "exclude" (likely to disappoint)
   confidence  one of: "high", "medium", "low"
   rationale   one or two sentences naming the specific catch, or why it's clean
+  score       integer 0-100 — conviction that this is a genuinely positive
+              1-3 month investment case, AFTER every deduction above. Not a
+              price-move forecast. Must agree with verdict: exclude <= 40,
+              caution <= 74, and a score of 75+ asserts you found nothing a
+              reader would need warning about. An unreadable announcement or an
+              unestablished base period belongs below 50.
   low_base    an object (null fields where not stated — never estimate):
                 period                   "H1"|"H2"|"Q1"|"Q2"|"Q3"|"Q4"|null
                 metric                   "revenue"|"operating_income"|
@@ -369,6 +509,39 @@ Return JSON only — no preamble, no code fence."""
 _VET_MAX_COMPLETION_TOKENS = int(os.environ.get("SHOWCASE_VET_MAX_TOKENS", "8000"))
 
 
+_VET_VERDICT_SCORE_CAP = {"exclude": 40, "caution": 74}
+
+
+def _clean_vet_score(raw, verdict: Optional[str]) -> Optional[int]:
+    """Coerce the vet's score, then enforce the verdict caps in Python.
+
+    The caps are stated in the prompt, but this number now decides whether a
+    story is published, so they are re-applied here rather than trusted. The
+    failure this guards against is real and documented for this exact model:
+    the ranker had to be told "the number must agree with the words" because
+    v4-flash writes a dismissive thesis and attaches a mid-range score to it
+    (rns_llm._JSON_SCHEMA_BLOCK). Capping is deliberately one-directional — a
+    pessimistic score under an 'include' verdict is left alone, since the
+    asymmetry here is that publishing a bad story costs more than holding one
+    back.
+
+    Returns None on anything unusable. None is NOT zero: it means the vet did
+    not produce a judgement, and the caller must not publish on it.
+    """
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        score = int(round(float(raw)))
+    except (TypeError, ValueError):
+        return None
+    score = max(0, min(100, score))
+    cap = _VET_VERDICT_SCORE_CAP.get(verdict or "")
+    if cap is not None and score > cap:
+        print(f"[showcase] vet score {score} exceeds '{verdict}' cap {cap} — capped")
+        score = cap
+    return score
+
+
 def _vet_candidate(cand: dict, before=None) -> dict:
     """Run the advisory vet. Raises on API/parse failure — the caller treats that
     as non-fatal and stores a NULL verdict. `before` limits the annual series
@@ -402,7 +575,7 @@ def _vet_candidate(cand: dict, before=None) -> dict:
     # json.loads raises, and the caller books it as a NULL verdict that looks
     # exactly like an API outage.
     result = _call_deepseek(
-        _vet_messages(cand, annual),
+        _vet_messages(cand, annual, body_text=_vet_full_text(cand)),
         thinking=True,
         budget=_VET_MAX_COMPLETION_TOKENS,
         tag="showcase_vet",
@@ -412,6 +585,7 @@ def _vet_candidate(cand: dict, before=None) -> dict:
         verdict = None
     return {
         "verdict": verdict,
+        "score": _clean_vet_score(result.get("score"), verdict),
         "confidence": (result.get("confidence") or "").lower().strip()[:10] or None,
         "rationale": (result.get("rationale") or "").strip()[:500] or None,
         # Mode suffix for the same reason the ranker stores one: the 2026-07-30
@@ -763,16 +937,23 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
               OR t.net_income_margin >= GREATEST(0, COALESCE(pm.margin_median, %s))
               OR (t.net_income_margin > 0 AND t.roce >= %s)
           )
+          -- Dedupe on PUBLISHED history only. A shadow row (vetted, scored
+          -- below the publish floor) must not suppress the same symbol's next
+          -- announcement: since 2026-08-03 the vet sees the 60-74 band, so
+          -- without this exclusion a company scoring 62 on Monday would lock
+          -- itself out of a 90 on Wednesday for a month. Dropping a tradeable
+          -- announcement is this system's high-severity error.
           AND NOT EXISTS (
               SELECT 1 FROM high_impact_rns h
               WHERE h.symbol = r.symbol
+                AND h.status <> 'shadow'
                 AND h.flagged_at >= NOW() - (%s || ' days')::interval
           )
         ORDER BY r.llm_score DESC
         """,
         (
             PEER_MARGIN_MIN_GROUP,
-            HIGH_IMPACT_MIN_LLM_SCORE,
+            HIGH_IMPACT_VET_ENTRY_SCORE,
             list(HIGH_IMPACT_CATEGORIES),
             hours,
             HIGH_IMPACT_MIN_MARKET_CAP,
@@ -788,6 +969,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
     flagged = 0
     counts = {g.name: 0 for g in GATES}
     vetted = 0
+    shadowed = 0
     for c in cands:
         # Gate order is the registry's evaluation order (sentiment, guidance,
         # earnings_quality) — same short-circuit as before the registry
@@ -834,11 +1016,45 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         except Exception as e:
             print(f"[showcase] low_base gate recording failed (non-fatal) — {e}")
 
+        # ── Publish decision ────────────────────────────────────────────────
+        # The vet's score, not the ranker's, decides what reaches the public
+        # page (migration 029). A row that cleared the entry floor but not this
+        # one is still stored — status='shadow' — because the 60-74 band is the
+        # only evidence base for calibrating this threshold and it cannot be
+        # reconstructed later: rns_announcements rows are pruned, so a
+        # retrospective re-vet is impossible.
+        #
+        # A NULL vet_score means the vet call FAILED, not that the story is
+        # weak. It must not publish on a number that was never produced, so it
+        # lands as shadow and is visible in the cron log as a vet failure
+        # above. This is the one behaviour change that can silently lose a good
+        # story — previously a failed vet still flagged with a NULL verdict.
+        vet_score = (vet or {}).get("score")
+        publish = vet_score is not None and vet_score >= HIGH_IMPACT_MIN_VET_SCORE
+        status = "approved" if publish else "shadow"
+        if not publish:
+            shadowed += 1
+            print(
+                f"[showcase] {c['symbol']} shadowed — vet_score="
+                f"{vet_score if vet_score is not None else 'NULL (vet failed)'} "
+                f"< {HIGH_IMPACT_MIN_VET_SCORE} (llm_score={c['llm_score']}, "
+                f"verdict={(vet or {}).get('verdict')})"
+            )
+
         # Forward multiple: LLM extracts any stated FY profit figure from the
         # full announcement text, Python computes EV/multiple. Internally
-        # non-fatal — a blank column must never block a flag.
-        from showcase_fwd import extract_fwd_fields
-        fwd = extract_fwd_fields(c)
+        # non-fatal — a blank column must never block a flag. Skipped for
+        # shadow rows: it is a second LLM call per row and nothing renders it
+        # off the public page, so paying for it on the ~80% that never publish
+        # is the one avoidable cost the wider entry floor would have added.
+        if publish:
+            from showcase_fwd import extract_fwd_fields
+            fwd = extract_fwd_fields(c)
+        else:
+            # processed=False leaves fwd_processed_at NULL, which keeps the row
+            # eligible for the /extract-fwd backfill if it is ever promoted.
+            from showcase_fwd import _empty as _empty_fwd
+            fwd = _empty_fwd(processed=False)
 
         n = _exec(
             """
@@ -847,16 +1063,16 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                  category, rules_score, keyword_hits, summary, llm_score,
                  llm_confidence, llm_thesis, llm_risks, story_close,
                  vet_verdict, vet_confidence, vet_rationale, vet_model, vet_processed_at,
-                 low_base,
+                 vet_score, low_base,
                  fwd_metric, fwd_value, fwd_currency, fwd_period, fwd_basis,
                  fwd_is_bound, fwd_quote, fwd_ev, fwd_multiple, fwd_model,
                  fwd_processed_at,
                  status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s,
-                    %s,
+                    %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    'approved')
+                    %s)
             ON CONFLICT (rns_id) DO NOTHING
             """,
             (
@@ -867,14 +1083,19 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                 (vet or {}).get("verdict"), (vet or {}).get("confidence"),
                 (vet or {}).get("rationale"), (vet or {}).get("model"),
                 datetime.now(timezone.utc) if vet else None,
+                vet_score,
                 Json(low_base) if low_base is not None else None,
                 fwd["fwd_metric"], fwd["fwd_value"], fwd["fwd_currency"],
                 fwd["fwd_period"], fwd["fwd_basis"], fwd["fwd_is_bound"],
                 fwd["fwd_quote"], fwd["fwd_ev"], fwd["fwd_multiple"],
                 fwd["fwd_model"], fwd["fwd_processed_at"],
+                status,
             ),
         )
-        flagged += n
+        # `flagged` counts PUBLISHED rows only — it is what the cron log and the
+        # /status card report, and a shadow row is not a flag.
+        if publish:
+            flagged += n
 
     return {
         "candidates": len(cands),
@@ -885,6 +1106,11 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         "skipped_guidance": counts.get("guidance", 0),
         "skipped_earnings_quality": counts.get("earnings_quality", 0),
         "vetted": vetted,
+        # Vetted but below the publish floor. Watch this against `flagged`: the
+        # threshold is uncalibrated (the vet had never emitted a score before
+        # migration 029), so the split is the first evidence of whether 75 is
+        # in the right place on the NEW scale.
+        "shadowed": shadowed,
     }
 
 
@@ -1144,6 +1370,10 @@ def _enrich(entries: list[dict]) -> list[dict]:
                 "vet_verdict": e["vet_verdict"],
                 "vet_confidence": e["vet_confidence"],
                 "vet_rationale": e["vet_rationale"],
+                # The score that actually put this story on the page (migration
+                # 029). NULL on every row flagged before 2026-08-03 — the UI
+                # must render that as "—", never as a zero.
+                "vet_score": e.get("vet_score"),
                 "flagged_at": e["flagged_at"],
                 "decided_at": e["decided_at"],
             },

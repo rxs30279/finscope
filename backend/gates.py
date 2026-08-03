@@ -588,7 +588,7 @@ _MATRIX_SQL = """
            m.sector, m.industry, m.ftse_index,
            t.market_cap, t.net_debt, t.ebitda, t.net_income_margin, t.roce,
            pm.margin_median,
-           h.vet_verdict, h.vet_rationale
+           h.vet_verdict, h.vet_rationale, h.vet_score, h.status AS showcase_status
     FROM rns_announcements r
     LEFT JOIN company_metadata m ON m.symbol = r.symbol
     LEFT JOIN LATERAL (
@@ -631,11 +631,14 @@ _FLOOR_LABEL = {
     "margin": "net income margin below the industry-peer floor (no ROCE escape)",
     "dedup": "same symbol already flagged in the last 30 days",
 }
+# NB "score" now means "below the vet ENTRY floor (60)" — clearing every floor
+# here means the row reached the vet, not that it was published. Publication is
+# decided afterwards by vet_score >= HIGH_IMPACT_MIN_VET_SCORE.
 
 
 def _public_flag_fails(row: dict, recently_flagged: set) -> list[str]:
     from showcase import (
-        HIGH_IMPACT_MIN_LLM_SCORE, HIGH_IMPACT_CATEGORIES, HIGH_IMPACT_MIN_MARKET_CAP,
+        HIGH_IMPACT_VET_ENTRY_SCORE, HIGH_IMPACT_CATEGORIES, HIGH_IMPACT_MIN_MARKET_CAP,
         HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA, HIGH_IMPACT_MIN_NET_MARGIN, HIGH_IMPACT_MIN_ROCE,
     )
 
@@ -644,8 +647,12 @@ def _public_flag_fails(row: dict, recently_flagged: set) -> list[str]:
         return float(v) if v is not None else None
 
     fails = []
+    # Since 2026-08-03 this is the VET ENTRY floor, not the publish floor.
+    # Clearing it no longer means a row is published — that is now decided by
+    # the vet's own vet_score, which this diagnostic cannot predict because it
+    # runs before the vet call. "score" here means "never reached the vet".
     score = row.get("llm_score")
-    if score is None or score < HIGH_IMPACT_MIN_LLM_SCORE:
+    if score is None or score < HIGH_IMPACT_VET_ENTRY_SCORE:
         fails.append("score")
     if row.get("llm_action") not in ("watch", "research"):
         fails.append("action")
@@ -766,11 +773,15 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
     # flag_high_impact_candidates uses (NOT EXISTS ... flagged_at >= NOW() - N
     # days). A row's own entry doesn't count against it: only rows with a NULL
     # vet_verdict get checked below, and a row already in high_impact_rns has one.
+    # The status filter must stay in step with the candidate SQL: shadow rows
+    # (vetted, below the publish floor) do not consume a symbol's dedupe window,
+    # or a 62 on Monday would lock out a 90 on Wednesday.
     symbols = list({r["symbol"] for r in rows})
     recently_flagged = {
         row["symbol"] for row in _q(
             "SELECT DISTINCT symbol FROM high_impact_rns "
-            "WHERE symbol = ANY(%s) AND flagged_at >= NOW() - (%s || ' days')::interval",
+            "WHERE symbol = ANY(%s) AND status <> 'shadow' "
+            "AND flagged_at >= NOW() - (%s || ' days')::interval",
             (symbols, HIGH_IMPACT_DEDUPE_DAYS),
         )
     } if symbols else set()
@@ -785,6 +796,17 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
             "llm_score": r["llm_score"], "llm_sentiment": r["llm_sentiment"],
             "in_universe": r.get("market_cap") is not None,
             "vet_verdict": r.get("vet_verdict"), "vet_rationale": r.get("vet_rationale"),
+            # Both LLM passes side by side: llm_score decided whether this row
+            # earned a vet call (>= 60), vet_score decided whether it published
+            # (>= 75). Seeing them together is the only way to spot the vet
+            # systematically promoting or demoting the ranker — and the only
+            # calibration evidence for the vet's threshold, which currently
+            # rests on zero observations.
+            "vet_score": r.get("vet_score"),
+            # 'shadow' = vetted but below the publish floor. Distinguishes
+            # "never vetted" from "vetted and rejected", which vet_score alone
+            # cannot when the vet call itself failed (NULL score, shadow row).
+            "showcase_status": r.get("showcase_status"),
             "public_flag_fail": (
                 [] if r.get("vet_verdict") else _public_flag_fails(r, recently_flagged)
             ),

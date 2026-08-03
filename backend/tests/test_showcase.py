@@ -11,6 +11,22 @@ import gates
 import showcase
 
 
+@pytest.fixture(autouse=True)
+def _no_vet_network():
+    """Keep the vet's full-text re-fetch off the network.
+
+    Since 2026-08-03 _vet_candidate calls _vet_full_text, which re-fetches the
+    announcement page to get past the 24k stored-body cap. The fixture URL is
+    "http://x", so unpatched every vet test pays a DNS timeout — ~2.3s each,
+    and the file header promises these run without external dependencies.
+
+    Patched at the network boundary rather than over _vet_full_text itself, so
+    the fallback logic still executes for real and the tests that exercise the
+    fetch can simply re-patch this same name with their own return value."""
+    with patch("showcase_fwd.fetch_announcement_text", return_value=None):
+        yield
+
+
 def _cand(**kw):
     base = dict(
         id=1, symbol="ABC.L", company_name="Abc plc", headline="FY results",
@@ -198,6 +214,7 @@ def test_sentiment_prefers_stored_llm_sentiment():
 # ── flag_high_impact_candidates ───────────────────────────────────────────────
 def test_flag_keeps_positive_and_stores_vet():
     vet = {"verdict": "include", "confidence": "high", "rationale": "clean",
+           "score": 85,
            "model": "deepseek-chat", "low_base": {"period": "H1"}}
     with patch.object(showcase, "_q", return_value=[_cand()]), \
          patch.object(showcase, "_story_close", return_value=123.0), \
@@ -207,15 +224,17 @@ def test_flag_keeps_positive_and_stores_vet():
         res = showcase.flag_high_impact_candidates(hours=48)
     assert res == {"candidates": 1, "flagged": 1, "skipped_sentiment": 0,
                    "skipped_guidance": 0, "skipped_earnings_quality": 0,
-                   "vetted": 1}
+                   "vetted": 1, "shadowed": 0}
     params = ex.call_args[0][1]
     assert params[16] == "include"          # vet_verdict
     assert isinstance(params[20], datetime)  # vet_processed_at set
+    assert params[21] == 85                 # vet_score
+    assert params[-1] == "approved"         # 85 >= publish floor
     # The raw low_base dict is saved verbatim onto the INSERT (migration 028),
     # in addition to being shadow-evaluated below — the gate's own evidence
     # only survives on rows it manages to adjudicate, so the model's own
     # extraction needs its own durable copy.
-    assert params[21].adapted == {"period": "H1"}   # low_base
+    assert params[22].adapted == {"period": "H1"}   # low_base
     record_lb.assert_called_once()
     assert record_lb.call_args[0][0] == _cand()["id"]
     assert record_lb.call_args[0][1]["low_base"] == {"period": "H1"}
@@ -233,21 +252,90 @@ def test_flag_skips_non_positive():
     ex.assert_not_called()
 
 
-def test_flag_vet_failure_still_inserts_null_verdict():
+def test_flag_vet_failure_shadows_instead_of_publishing():
+    """CONTRACT REVERSED 2026-08-03 (migration 029). A failed vet used to flag
+    the story anyway with a NULL verdict; now vet_score decides publication and
+    a NULL score is not a passing score, so the row is stored as 'shadow'.
+
+    This is the sharpest edge of the new design: a DeepSeek outage during the
+    morning batch no longer mislabels stories, it withholds them. The row is
+    still INSERTed, so nothing is lost and a re-vet can promote it — but the
+    public page stays empty until the API recovers."""
     with patch.object(showcase, "_q", return_value=[_cand()]), \
          patch.object(showcase, "_story_close", return_value=1.0), \
          patch.object(showcase, "_vet_candidate", side_effect=RuntimeError("api down")), \
          patch.object(gates, "record_low_base_evaluation") as record_lb, \
          patch.object(showcase, "_exec", return_value=1) as ex:
         res = showcase.flag_high_impact_candidates()
-    assert res["flagged"] == 1
+    assert res["flagged"] == 0
+    assert res["shadowed"] == 1
     assert res["vetted"] == 0
     params = ex.call_args[0][1]
     assert params[16] is None   # vet_verdict NULL
     assert params[20] is None   # vet_processed_at NULL
-    assert params[21] is None   # low_base NULL — no vet output to save
+    assert params[21] is None   # vet_score NULL — never treat as 0
+    assert params[22] is None   # low_base NULL — no vet output to save
+    assert params[-1] == "shadow"
     # A failed vet still gets a (n/a/not_vetted) low_base evaluation recorded.
     assert record_lb.call_args[0][1]["low_base"] is None
+
+
+def test_flag_shadows_a_vetted_row_below_the_publish_floor():
+    """The 60-74 llm_score band's normal outcome: vetted, scored, stored,
+    invisible. The row must still carry its full vet output — that band is the
+    only evidence base for calibrating HIGH_IMPACT_MIN_VET_SCORE, and it cannot
+    be rebuilt later because rns_announcements rows get pruned."""
+    vet = {"verdict": "caution", "confidence": "medium", "rationale": "dilution",
+           "score": 64, "model": "deepseek-v4-flash:thinking",
+           "low_base": {"period": "H1"}}
+    with patch.object(showcase, "_q", return_value=[_cand(llm_score=65)]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation"), \
+         patch.object(showcase, "_exec", return_value=1) as ex:
+        res = showcase.flag_high_impact_candidates()
+    assert res["flagged"] == 0
+    assert res["shadowed"] == 1
+    assert res["vetted"] == 1
+    params = ex.call_args[0][1]
+    assert params[-1] == "shadow"
+    assert params[21] == 64                        # vet_score stored
+    assert params[16] == "caution"                 # full vet output kept
+    assert params[22].adapted == {"period": "H1"}  # low_base kept
+
+
+def test_flag_publishes_a_promoted_row_the_ranker_underrated():
+    """The point of dropping the entry floor to 60: the vet can PROMOTE. A
+    story the ranker scored 65 — previously never even looked at — reaches the
+    public page on the vet's own judgement."""
+    vet = {"verdict": "include", "confidence": "high", "rationale": "clean",
+           "score": 82, "model": "deepseek-v4-flash:thinking", "low_base": None}
+    with patch.object(showcase, "_q", return_value=[_cand(llm_score=65)]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation"), \
+         patch.object(showcase, "_exec", return_value=1) as ex:
+        res = showcase.flag_high_impact_candidates()
+    assert res["flagged"] == 1
+    assert res["shadowed"] == 0
+    assert ex.call_args[0][1][-1] == "approved"
+
+
+def test_flag_demotes_a_high_ranker_score_the_vet_distrusts():
+    """The other half: an 85 the vet scores down no longer publishes. Three
+    rows currently live carry verdict='exclude' precisely because the old
+    design could not do this."""
+    vet = {"verdict": "exclude", "confidence": "high", "rationale": "guidance cut",
+           "score": 30, "model": "deepseek-v4-flash:thinking", "low_base": None}
+    with patch.object(showcase, "_q", return_value=[_cand(llm_score=85)]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation"), \
+         patch.object(showcase, "_exec", return_value=1) as ex:
+        res = showcase.flag_high_impact_candidates()
+    assert res["flagged"] == 0
+    assert res["shadowed"] == 1
+    assert ex.call_args[0][1][-1] == "shadow"
 
 
 # ── guidance gate ─────────────────────────────────────────────────────────────
@@ -623,7 +711,8 @@ def test_flag_still_flags_a_bank_with_a_clean_loss_rate():
                  earnings_quality=[{**_BARC_LLR, "prior_value": "62bps"}])
     with patch.object(showcase, "_q", return_value=[cand]), \
          patch.object(showcase, "_story_close", return_value=1.0), \
-         patch.object(showcase, "_vet_candidate", return_value=None), \
+         patch.object(showcase, "_vet_candidate",
+                      return_value={"verdict": "include", "score": 85}), \
          patch.object(gates, "record_low_base_evaluation"), \
          patch.object(showcase, "_exec", return_value=1):
         res = showcase.flag_high_impact_candidates()
@@ -757,3 +846,72 @@ def test_vet_flags_wise_nasdaq_listing():
     )
     vet = showcase._vet_candidate(cand)
     assert vet["verdict"] in ("caution", "exclude")
+
+
+# ── vet_score cleaning (migration 029) ────────────────────────────────────────
+# This number now decides publication, so the prompt's rules are re-enforced in
+# Python rather than trusted. See showcase._clean_vet_score.
+def test_vet_score_coerces_and_clamps():
+    assert showcase._clean_vet_score(82, "include") == 82
+    assert showcase._clean_vet_score("82", "include") == 82
+    assert showcase._clean_vet_score(81.6, "include") == 82   # rounds, not floors
+    assert showcase._clean_vet_score(140, "include") == 100
+    assert showcase._clean_vet_score(-5, "include") == 0
+
+
+def test_vet_score_unusable_input_is_none_not_zero():
+    """None must stay distinguishable from a real 0 — the caller refuses to
+    publish on NULL, and a 0 would look like a considered rejection."""
+    for bad in (None, "", "high", [], {}, True, False):
+        assert showcase._clean_vet_score(bad, "include") is None
+
+
+def test_vet_score_capped_by_verdict():
+    """v4-flash is documented to write dismissive words and attach a mid-range
+    number (rns_llm._JSON_SCHEMA_BLOCK). The caps stop that publishing a story."""
+    assert showcase._clean_vet_score(90, "exclude") == 40
+    assert showcase._clean_vet_score(90, "caution") == 74
+    # Below the cap is left alone, and an unknown/None verdict is not capped.
+    assert showcase._clean_vet_score(20, "exclude") == 20
+    assert showcase._clean_vet_score(90, None) == 90
+
+
+def test_vet_score_capping_is_one_directional():
+    """A pessimistic score under an optimistic verdict is NOT raised — holding
+    a story back is the cheaper error."""
+    assert showcase._clean_vet_score(10, "include") == 10
+
+
+# ── vet full-text re-fetch ────────────────────────────────────────────────────
+def test_vet_full_text_prefers_the_refetched_page():
+    long_text = "A" * 50_000
+    with patch("showcase_fwd.fetch_announcement_text", return_value=long_text):
+        out = showcase._vet_full_text(_cand(body="short stored body"))
+    assert out == long_text
+
+
+def test_vet_full_text_falls_back_to_stored_body_on_fetch_failure():
+    """A dead URL must degrade the input, never cost the row its vet call — a
+    raised exception here would now silently drop a story."""
+    with patch("showcase_fwd.fetch_announcement_text",
+               side_effect=RuntimeError("timeout")):
+        out = showcase._vet_full_text(_cand(body="stored body"))
+    assert out == "stored body"
+
+
+def test_vet_full_text_keeps_the_stub_message():
+    with patch("showcase_fwd.fetch_announcement_text") as fetch:
+        out = showcase._vet_full_text(_cand(body=None, body_is_stub=True))
+    assert "body unavailable" in out
+    fetch.assert_not_called()
+
+
+def test_vet_full_text_head_tail_keeps_both_ends():
+    """Head-only truncation would drop the reiterated-guidance and consensus
+    language rns.py records as sitting ~85% through a long results document."""
+    text = ("H" * showcase._VET_BODY_HEAD) + ("M" * 5000) + ("T" * showcase._VET_BODY_TAIL)
+    with patch("showcase_fwd.fetch_announcement_text", return_value=text):
+        out = showcase._vet_full_text(_cand(body="x"))
+    assert out.startswith("H")
+    assert out.endswith("T")
+    assert "5000 chars omitted" in out

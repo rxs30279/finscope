@@ -123,22 +123,47 @@ function IndexBadge({ index, full = false }) {
   );
 }
 
-// AI (LLM) score, coloured on the RNS page's bands. `bare` drops the "AI Score"
+// Vet score, coloured on the RNS page's bands. `bare` drops the "Vet Score"
 // label — used in the table column, which already has a header naming it.
-function ScoreCell({ value, bare = false, size = 12 }) {
-  if (value == null) return <span style={{ color: "#333" }}>—</span>;
+// The score shown here is the VET's (migration 029, 2026-08-03) — the second
+// LLM pass, and the one that actually decides whether a story reaches this
+// page. It is NOT the ranker's llm_score: that one measures price-impact
+// likelihood x magnitude and only decides who earns a second look (>= 60).
+// This measures conviction in a positive 1-3 month case after the sceptical
+// read, and >= 75 is what publishes. Both are shown side by side on /gates.
+//
+// Every story flagged before 2026-08-03 has vet_score NULL and renders "—".
+// That is correct, not a bug: those rows were published under the old
+// single-score rule and were never scored on this scale.
+function ScoreCell({
+  value,
+  bare = false,
+  size = 12,
+  label = "Vet Score",
+  title = "AI vet conviction, 0–100: how strong a 1–3 month case this is after the sceptical second read. 75+ is required to appear here.",
+}) {
+  if (value == null) {
+    return (
+      <span
+        style={{ color: "#333" }}
+        title="Not vet-scored — flagged before the vet became a scorer (2026-08-03)"
+      >
+        —
+      </span>
+    );
+  }
   const colour =
     value >= 75 ? "#f97316" : value >= 50 ? "#60a5fa" : value >= 25 ? "#94a3b8" : "#555";
   return (
     <span
-      title="AI significance score (0–100)"
+      title={title}
       style={{
         fontFamily: "monospace",
         fontSize: size,
         fontWeight: 700,
       }}
     >
-      {!bare && <><span style={{ color: "#fff" }}>AI Score</span> </>}
+      {!bare && <><span style={{ color: "#fff" }}>{label}</span> </>}
       <span style={{ color: colour }}>{value}</span>
     </span>
   );
@@ -386,7 +411,7 @@ function PendingCard({ entry, onApprove, onReject }) {
           {(entry.symbol || "").replace(".L", "")}
         </span>
         <IndexBadge index={entry.ftse_index} />
-        <ScoreCell value={st.llm_score} />
+        <ScoreCell value={st.vet_score} />
         {entry.fwd_multiple != null && <FwdMultipleCell r={entry} />}
         {vet && (
           <span title={st.vet_rationale || ""} style={{ color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 6px", fontSize: 10, fontWeight: 700, fontFamily: "monospace" }}>
@@ -508,8 +533,8 @@ function MobileCard({
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, marginLeft: 2, flexShrink: 0 }}>
-            <span style={{ color: "#64748b", fontSize: 10, fontWeight: 700, letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "uppercase" }}>AI Score</span>
-            <ScoreCell value={st.llm_score} bare size={20} />
+            <span style={{ color: "#64748b", fontSize: 10, fontWeight: 700, letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "uppercase" }}>Vet Score</span>
+            <ScoreCell value={st.vet_score} bare size={20} />
           </div>
           <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(calc(-50% + 66px), -50%)", pointerEvents: "none" }}>
             <Sparkline points={r.spark} sinceCount={r.spark_since} sinceUp={changePct == null ? null : changePct >= 0} width={64} height={22} />
@@ -686,7 +711,7 @@ function MobileCard({
 // ── columns ───────────────────────────────────────────────────────────────────
 const COLS = [
   { key: "name", label: "Stock", align: "left" },
-  { key: "ai", label: "AI Score", align: "center" },
+  { key: "ai", label: "Vet Score", align: "center" },
   { key: "price", label: "Price", align: "right" },
   { key: "pct_news", label: "% Change", align: "right" },
   { key: "fwd", label: "Fwd Multiple", align: "center" },
@@ -1110,7 +1135,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
 
                           {/* AI significance score */}
                           <td style={{ ...S.td, textAlign: "center" }}>
-                            <ScoreCell value={st.llm_score} bare />
+                            <ScoreCell value={st.vet_score} bare />
                           </td>
 
                           {/* Price */}
