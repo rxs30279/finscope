@@ -915,3 +915,38 @@ def test_vet_full_text_head_tail_keeps_both_ends():
     assert out.startswith("H")
     assert out.endswith("T")
     assert "5000 chars omitted" in out
+
+
+# ── price context (1m/6m) ─────────────────────────────────────────────────────
+def test_price_context_renders_both_windows():
+    with patch("rns_llm._load_price_change", return_value={"chg_1m": 0.221, "chg_6m": 0.141}):
+        out = showcase._price_context("GRG.L")
+    assert "1 month +22.1%" in out
+    assert "6 months +14.1%" in out
+
+
+def test_price_context_withheld_for_point_in_time_reruns():
+    """rns_llm._load_price_change measures from CURRENT_DATE. In a backtest that
+    is future data, so it must be withheld rather than silently leaked."""
+    with patch("rns_llm._load_price_change") as load:
+        out = showcase._price_context("GRG.L", before="2026-01-01")
+    assert "look-ahead" in out
+    load.assert_not_called()
+
+
+def test_price_context_degrades_without_history():
+    with patch("rns_llm._load_price_change", return_value={}):
+        assert "no price history" in showcase._price_context("NEW.L")
+    with patch("rns_llm._load_price_change", side_effect=RuntimeError("db down")):
+        assert "no price history" in showcase._price_context("GRG.L")
+    assert "no price history" in showcase._price_context(None)
+
+
+def test_vet_prompt_carries_price_context_and_neutral_framing():
+    user = showcase._vet_messages(_cand(), [], price_context="  1 month +22.1%, 6 months +14.1%")[1]["content"]
+    assert "1 month +22.1%" in user
+    assert "before this announcement" in user.lower()
+    # The rubric must not tell the model that a strong prior run is bad — that
+    # would be calibrating a direction on zero evidence.
+    system = showcase._vet_messages(_cand(), [])[0]["content"]
+    assert "context, not as a verdict in either direction" in system

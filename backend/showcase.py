@@ -274,6 +274,26 @@ def _fmt_shares_m(v) -> str:
     return f"{float(v) / 1e6:,.1f}m"
 
 
+def _fmt_net_debt_m(v) -> str:
+    """Net cash reads as net cash, never as negative net debt.
+
+    Mirrors rns_llm._format_net_debt. "net debt £-198.6m" is a double negative
+    the model has to unpick to reach "this company has £198.6m of cash", and
+    getting it backwards inverts a leverage judgement — which is one of the
+    four things the vet's system prompt exists to catch.
+
+    Self-labelling ("net cash £198.6m" / "net debt £50.0m") rather than taking
+    a fixed "net debt" label from the caller, so the line never reads
+    "net debt £198.6m net cash".
+    """
+    if v is None:
+        return "net debt n/a"
+    nd = float(v)
+    if nd < 0:
+        return f"net cash {_fmt_money_m(-nd)}"
+    return f"net debt {_fmt_money_m(nd)}"
+
+
 def _annual_lines(hist: list[dict]) -> str:
     """Render the annual series as prompt lines the vet can do arithmetic on.
 
@@ -298,7 +318,7 @@ def _annual_lines(hist: list[dict]) -> str:
         )
         lines.append(
             f"      FCF {_fmt_money_m(h.get('fcf'))}, "
-            f"net debt {_fmt_money_m(h.get('net_debt'))}, "
+            f"{_fmt_net_debt_m(h.get('net_debt'))}, "
             f"equity {_fmt_money_m(h.get('total_equity'))}, "
             f"diluted shares {_fmt_shares_m(h.get('shares_diluted'))}, "
             f"op margin {_fmt_pct1(h.get('operating_margin'))}, "
@@ -366,10 +386,37 @@ def _vet_body_text(cand: dict) -> str:
     return cand.get("body") or "(not available)"
 
 
+def _price_context(symbol: Optional[str], before=None) -> str:
+    """1m/6m price change for the vet, or an explicit no-data line.
+
+    LOOK-AHEAD GUARD: rns_llm._load_price_change measures from CURRENT_DATE, not
+    from the announcement. Live that is exactly right — the vet runs the same
+    morning, so `latest` is the prior session's close, the price before this
+    announcement's own move. For a backtest (`before` set) it would feed future
+    prices into a past judgement, so it is withheld entirely rather than
+    silently wrong. Same reason _annual_history takes `before`.
+    """
+    if before is not None:
+        return "  (withheld — point-in-time re-run, live prices would be look-ahead)"
+    if not symbol:
+        return "  (no price history)"
+    try:
+        from rns_llm import _load_price_change, _fmt_pct
+
+        p = _load_price_change(symbol)
+    except Exception as e:
+        print(f"[showcase] price context failed for {symbol} (non-fatal) — {e}")
+        return "  (no price history)"
+    if not p or (p.get("chg_1m") is None and p.get("chg_6m") is None):
+        return "  (no price history)"
+    return f"  1 month {_fmt_pct(p.get('chg_1m'))}, 6 months {_fmt_pct(p.get('chg_6m'))}"
+
+
 def _vet_messages(
     cand: dict,
     annual: Optional[list[dict]] = None,
     body_text: Optional[str] = None,
+    price_context: Optional[str] = None,
 ) -> list[dict]:
     system = (
         "You are a sceptical UK equity analyst vetting positive-looking RNS "
@@ -413,6 +460,13 @@ def _vet_messages(
         "(above/below/in_line) against the correct preceding-period base, "
         "not the prior-year figure — this is checked mechanically afterwards, "
         "so a guess is fine. "
+        "You are also given the share price move over the 1 and 6 months "
+        "BEFORE this announcement. Treat it as context, not as a verdict in "
+        "either direction: a stock that has already run may have priced this "
+        "in, and a stock that has fallen may be cheap or may be falling for a "
+        "reason the announcement does not address. Say which you think it is "
+        "only when the announcement gives you grounds — never infer the "
+        "reason for a past move from the move itself. "
         "Judge whether this is a genuinely positive near-term investment case, "
         "and express that judgement as a score from 0 to 100. "
         "The score is your CONVICTION that a holder buying on this "
@@ -447,6 +501,10 @@ Investegate AI summary
 Announcement text (verbatim, may be truncated) — this is the primary source;
 the summary above is a useful lead but can omit or misread material detail
   {body_text if body_text is not None else _vet_body_text(cand)}
+
+Share price before this announcement (our own price history; the latest close
+predates today's news, so this is what the market already thought)
+{price_context if price_context is not None else "  (no price history)"}
 
 Historical annual financials (from our own database; NOTE: "revenue" here is
 TOTAL revenue, which can differ from the company's preferred headline metric
@@ -575,7 +633,12 @@ def _vet_candidate(cand: dict, before=None) -> dict:
     # json.loads raises, and the caller books it as a NULL verdict that looks
     # exactly like an API outage.
     result = _call_deepseek(
-        _vet_messages(cand, annual, body_text=_vet_full_text(cand)),
+        _vet_messages(
+            cand,
+            annual,
+            body_text=_vet_full_text(cand),
+            price_context=_price_context(cand.get("symbol"), before=before),
+        ),
         thinking=True,
         budget=_VET_MAX_COMPLETION_TOKENS,
         tag="showcase_vet",
