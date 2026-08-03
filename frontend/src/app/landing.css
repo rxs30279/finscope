@@ -744,6 +744,12 @@ html.am-snap:has(.am-landing) {
     padding-top: 34px;
   }
 }
+/* Mobile: drop the animated phone player entirely — desktop/tablet keep it. */
+@media (max-width: 760px) {
+  .am-landing .am-cta-phone {
+    display: none;
+  }
+}
 .am-landing .am-cta-eyebrow {
   display: inline-flex;
   align-items: center;
