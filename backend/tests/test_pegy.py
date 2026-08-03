@@ -1,6 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from main import _attach_pegy, _forward_pe, _PEGY_GROWTH_CAP
+from main import _attach_pegy, _forward_pe, _eps_diluted_effective, _PEGY_GROWTH_CAP
 
 _f = lambda x: float(x) if x is not None else None
 
@@ -21,6 +21,8 @@ def _row(**kw):
         "dividend_yield": None,
         "dividends_per_share": None,
         "period_end_price": None,
+        "net_income": None,
+        "shares_for_eps": None,
     }
     base.update(kw)
     return base
@@ -142,7 +144,53 @@ def test_pegy_uses_forward_pe_so_one_off_inflated_eps_is_not_cheap():
 
 
 def test_forward_pe_ignored_when_eps_diluted_non_positive():
-    # Loss-making statutory year (eps_diluted <= 0): can't form a safe ratio, so
-    # fall back to trailing P/E.
+    # Loss-making statutory year (eps_diluted <= 0) and nothing to derive from:
+    # can't form a safe ratio, so fall back to trailing P/E.
     row = _row(price_to_earnings=20.0, eps_diluted=-0.5, eps_est_current_yr=0.4)
     assert _forward_pe(row, _f) == 20.0
+
+
+# ── Derived EPS when yfinance omits 'Diluted EPS' ────────────────────────────────
+
+def test_eps_diluted_effective_prefers_stored_value():
+    # A usable stored EPS wins; net_income/shares is never consulted.
+    row = _row(eps_diluted=0.50, net_income=1e9, shares_for_eps=1e9)
+    assert _eps_diluted_effective(row, _f) == 0.50
+
+
+def test_eps_diluted_effective_derives_from_net_income():
+    row = _row(eps_diluted=None, net_income=363e6, shares_for_eps=11_705_047_064)
+    assert round(_eps_diluted_effective(row, _f), 5) == 0.03101
+
+
+def test_eps_diluted_effective_none_without_shares():
+    row = _row(eps_diluted=None, net_income=363e6, shares_for_eps=None)
+    assert _eps_diluted_effective(row, _f) is None
+
+
+def test_eps_diluted_effective_ignores_zero_share_count():
+    row = _row(eps_diluted=None, net_income=363e6, shares_for_eps=0)
+    assert _eps_diluted_effective(row, _f) is None
+
+
+def test_forward_pe_rebases_when_eps_diluted_missing():
+    # GLEN.L 2026-08-03: yfinance gave no eps_diluted, so the forward P/E used to
+    # degrade to the trailing 253.25 — a statutory artefact of the $1.2bn Cerrejon
+    # impairment that cut FY2025 EPS to $0.03. Deriving EPS from net income
+    # rebases it onto the $0.586 estimate and lands near the ~13x the market
+    # actually pays.
+    row = _row(price_to_earnings=253.25002, eps_diluted=None,
+               net_income=363e6, shares_for_eps=11_705_047_064,
+               eps_est_current_yr=0.58565)
+    assert round(_forward_pe(row, _f), 1) == 13.4
+
+
+def test_pegy_uses_derived_eps_so_a_depressed_year_is_not_penalised():
+    # Same GLEN shape: the trailing-PE PEGY was 54.2 (junk); the derived-EPS
+    # forward PEGY is a sane single-digit figure.
+    pegy = _pegy(price_to_earnings=253.25002, eps_diluted=None,
+                 net_income=363e6, shares_for_eps=11_705_047_064,
+                 eps_est_current_yr=0.58565,
+                 eps_growth_next_yr=0.0226, total_analysts=20,
+                 dividend_yield=0.0241)
+    assert pegy < 10

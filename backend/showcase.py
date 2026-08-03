@@ -1229,7 +1229,9 @@ _MQVR_SQL = """
            CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END as price_to_earnings,
            t.price_to_book, t.price_to_sales, t.roe, t.roic,
            t.gross_margin, t.operating_margin, t.net_income_margin,
-           t.eps_cagr_10, t.eps_diluted, t.fcf_margin,
+           t.eps_cagr_10, t.eps_diluted, t.fcf_margin, t.net_income,
+           -- Denominator for _eps_diluted_effective when eps_diluted is absent.
+           COALESCE(t.shares_diluted, t.shares_basic, t.shares_outstanding) AS shares_for_eps,
            t.dividends_per_share, t.dividend_yield, t.period_end_price, t.fcf,
            t.gross_margin_median, t.operating_margin_median,
            t.net_margin_median, t.roe_median, t.roic_median,

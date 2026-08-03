@@ -809,6 +809,35 @@ def _debt_service_component(row):
 _PEGY_GROWTH_CAP = 0.30
 
 
+def _eps_diluted_effective(r, _f):
+    """Diluted EPS in the reporting currency, derived from net income when the
+    stored figure is unusable.
+
+    yfinance omits 'Diluted EPS' for a sizeable minority of the universe (91 of
+    731 rows on 2026-08-03), and _forward_pe below needs it as the numerator of
+    its rebasing ratio. Without it the forward P/E silently degrades to the
+    trailing one — which is precisely the case the rebasing exists to fix.
+    Glencore was the worked example: a $1.2bn Cerrejon impairment cut FY2025
+    statutory EPS to $0.03, leaving a trailing P/E of 253 that flowed straight
+    through to a PEGY of 54 despite a perfectly good $0.586 estimate being on
+    the row.
+
+    net_income / shares is the same approximation the trailing P/E already
+    makes, and stays in the reporting currency, so the dimensionless-ratio
+    guarantee in _forward_pe still holds. Prefers the stored EPS whenever it is
+    positive; a non-positive stored EPS falls through to the derivation rather
+    than short-circuiting, since the caller would reject it either way.
+    """
+    eps = _f(r.get("eps_diluted"))
+    if eps is not None and eps > 0:
+        return eps
+    ni = _f(r.get("net_income"))
+    shares = _f(r.get("shares_for_eps"))
+    if ni is None or shares is None or shares <= 0:
+        return eps
+    return ni / shares
+
+
 def _forward_pe(r, _f):
     """Forward P/E rebased onto analyst EPS estimates, currency-safe.
 
@@ -832,7 +861,7 @@ def _forward_pe(r, _f):
     trailing_pe = _f(r.get("price_to_earnings"))
     if trailing_pe is None or trailing_pe <= 0:
         return None
-    eps_dil = _f(r.get("eps_diluted"))
+    eps_dil = _eps_diluted_effective(r, _f)
     est_cur = _f(r.get("eps_est_current_yr"))
     if eps_dil is not None and eps_dil > 0 and est_cur is not None and est_cur > 0:
         return trailing_pe * eps_dil / est_cur
@@ -1689,6 +1718,8 @@ def screener(
                t.revenue_growth, t.eps_diluted_growth, t.fcf_growth,
                t.debt_to_equity, t.current_ratio, t.fcf, t.ebitda,
                t.revenue_cagr_10, t.eps_cagr_10, t.eps_diluted, t.period_end_date,
+               -- Denominator for _eps_diluted_effective when eps_diluted is absent.
+               COALESCE(t.shares_diluted, t.shares_basic, t.shares_outstanding) AS shares_for_eps,
                t.fcf_margin, t.dividends_per_share, t.dividend_yield, t.period_end_price,
                t.gross_margin_median, t.operating_margin_median,
                t.net_margin_median, t.roe_median, t.roic_median,
@@ -1729,6 +1760,9 @@ def screener(
     for r in results:
         r["quality_score"] = _quality_score(r)
         r["value_score"] = _value_score(r)
+        # Fetched only so _eps_diluted_effective can stand in for a missing
+        # eps_diluted — both scorers above are its last reader.
+        r.pop("shares_for_eps", None)
     # Surface ICB labels so the table matches the sidebar/heatmap. Done last so
     # scoring above still sees the raw GICS sector it was built against.
     for r in results:
