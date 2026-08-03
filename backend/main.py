@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import os
 import re
 import hmac
+import math
 import statistics
 import traceback
 import urllib.error
@@ -1821,9 +1822,20 @@ def quotes(symbols: str, response: Response):
             misses.append(sym)
 
     def _fetch(sym):
-        # Try intraday (1-min bars) first — gives a near-live price during
-        # market hours. Falls back to daily if market is closed or intraday
-        # is unavailable.
+        # fast_info's last price is the authoritative quote: during the session
+        # it is the live print, and after the close it is the official close.
+        # It has to come first because the 1-minute history below EXCLUDES the
+        # closing auction — yfinance drops bars outside the regular session, and
+        # on the LSE the auction is exactly where the day's close is set. Serving
+        # the pre-auction print made the company page show a negative day change
+        # on a stock that closed up (ZTF.L, 2026-08-03: 453.25 vs a 467.0 close).
+        try:
+            price = yf.Ticker(sym).fast_info["lastPrice"]
+            if price is not None and math.isfinite(float(price)) and float(price) > 0:
+                return sym, float(price)
+        except Exception as e:
+            print(f"[quotes] {sym} fast_info failed: {e}")
+        # Fallbacks: intraday (1-min bars), then daily.
         for period, interval in (("2d", "1m"), ("5d", "1d")):
             try:
                 h = yf.Ticker(sym).history(
