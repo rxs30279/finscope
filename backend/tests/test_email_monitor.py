@@ -26,6 +26,9 @@ def _msg(email_id, event_types, sent_at=None, last_event_at=None, provider="rese
         "subject": subject,
         "sent_at": sent_at,
         "delivered_at": None,
+        # In real data the send IS the first event, so mirror that by default;
+        # the no-sent cases override it explicitly.
+        "first_event_at": sent_at,
         "last_event_at": last_event_at or now,
         "event_types": event_types,
     }
@@ -193,6 +196,54 @@ def test_metrics_buckets_by_send_day_not_event_day(monkeypatch):
     out = email_monitor.daily_metrics(days=5)
     days_with_mail = [p["day"] for p in out["points"] if p["messages"]]
     assert days_with_mail == [_at(2).astimezone(timezone.utc).astimezone(email_monitor._UK_TZ).date().isoformat()]
+
+
+def test_metrics_does_not_invent_a_send_from_a_late_open(monkeypatch):
+    """Seen in prod 2026-08-04: the 21 Jul digest was opened on 3 Aug. Its own
+    sent/delivered rows sat outside the event window, so the group arrived
+    holding nothing but the open — and the message materialised as a Sunday
+    send with delivered=0, dragging that day's deliverability down. The fix is
+    the lookback (the sent row comes back into scope) plus cohorting on the
+    FIRST event rather than the last."""
+    sent_at = _at(12)
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        _msg("old-digest", ["email.sent", "email.delivered", "email.opened"],
+             sent_at=sent_at, last_event_at=_at(0, hour=17)),
+    ])
+    out = email_monitor.daily_metrics(days=3)
+    # Sent 12 days ago, so it belongs to no column in a 3-day window at all.
+    assert out["totals"] == {
+        "messages": 0, "delivered": 0, "opened": 0, "clicked": 0,
+        "bounced": 0, "failed": 0, "complained": 0, "delayed": 0,
+    }
+    assert all(p["messages"] == 0 for p in out["points"])
+
+
+def test_metrics_lookback_reaches_past_the_charted_window(monkeypatch):
+    """The query has to see a message's own send even when only its engagement
+    lands in the window, or the bug above comes straight back."""
+    seen = {}
+
+    def fake_query(sql, params=None):
+        seen["params"] = params
+        return []
+
+    monkeypatch.setattr(email_monitor, "query", fake_query)
+    email_monitor.daily_metrics(days=15)
+    assert seen["params"]["days"] == 15 + email_monitor._COHORT_LOOKBACK_DAYS
+
+
+def test_metrics_falls_back_to_first_event_not_last(monkeypatch):
+    """For the messages with no email.sent row at all, the earliest event is a
+    fair proxy for the send; the latest is whenever someone last touched it."""
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        {**_msg("no-sent", ["email.delivered", "email.opened"], sent_at=None,
+                last_event_at=_at(0)),
+         "first_event_at": _at(2)},
+    ])
+    out = email_monitor.daily_metrics(days=5)
+    days_with_mail = [p["day"] for p in out["points"] if p["messages"]]
+    assert days_with_mail == [_at(2).astimezone(email_monitor._UK_TZ).date().isoformat()]
 
 
 def test_metrics_nulls_engagement_before_it_was_tracked(monkeypatch):
