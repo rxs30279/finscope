@@ -1139,6 +1139,91 @@ def test_vet_prompt_missing_currency_is_labelled_an_assumption():
     assert "reporting currency not on file, assumed" in user
 
 
+# ── Guidance context ──────────────────────────────────────────────────────────
+_GUIDANCE = [
+    {"metric": "Adjusted Operating Profit", "period": "FY2026",
+     "guided_value": "> £40m", "consensus_value": "£44.1m",
+     "vs_prior": "reiterated", "vs_consensus": "below"},
+    {"metric": "Free cash flow", "period": "FY2027",
+     "guided_value": "positive FCF", "consensus_value": None,
+     "vs_prior": "new", "vs_consensus": "no_consensus_stated"},
+]
+
+
+def test_vet_prompt_carries_the_rankers_guidance_extraction():
+    """The vet's first named job is catching a quiet guidance cut, and the
+    ranker had already extracted the comparison it was re-deriving from text."""
+    user = showcase._vet_messages(
+        _cand(guidance_checks=_GUIDANCE), []
+    )[1]["content"]
+    assert "Adjusted Operating Profit (FY2026): guided > £40m" in user
+    assert "vs prior guidance: reiterated; vs consensus: below" in user
+    assert "consensus printed as £44.1m" in user
+    # Every entry, not just the first — a second statement is where the catch
+    # usually hides.
+    assert "Free cash flow (FY2027)" in user
+    # Framed as a checklist to verify, never as a finding to adopt: it is the
+    # same model on the same document one pass earlier.
+    assert "Not an independent source" in user
+
+
+def test_vet_prompt_separates_no_guidance_from_no_extraction():
+    # NULL means the ranker emitted nothing; [] means it read the announcement
+    # and found no forward statement. Collapsing them would tell the model a
+    # company guided nothing when in fact nobody looked.
+    absent = showcase._vet_messages(_cand(guidance_checks=None), [])[1]["content"]
+    assert "not extracted for this announcement" in absent
+    empty = showcase._vet_messages(_cand(guidance_checks=[]), [])[1]["content"]
+    assert "found no forward-looking statement" in empty
+
+
+def test_vet_system_prompt_teaches_the_reiterated_below_combination():
+    system = showcase._vet_messages(_cand(), [])[0]["content"]
+    # The one combination the guidance gate exists for.
+    assert "reiterated AND below a consensus" in system
+    # And the trap in the other direction — most announcements print no
+    # consensus footnote at all, which is not evidence of anything.
+    assert "carries no information in either direction" in system
+
+
+# ── Company size ──────────────────────────────────────────────────────────────
+def test_vet_prompt_carries_market_cap():
+    big = showcase._vet_messages(_cand(market_cap=1.61e9), [])[1]["content"]
+    assert "Market cap £1.61bn" in big
+    small = showcase._vet_messages(_cand(market_cap=62_500_000), [])[1]["content"]
+    assert "Market cap £62.5m" in small
+    none = showcase._vet_messages(_cand(market_cap=None), [])[1]["content"]
+    assert "market cap not on file" in none
+
+
+def test_market_cap_warns_when_it_and_the_accounts_differ_in_currency():
+    """market_cap is in the QUOTE currency, annual_financials in the REPORTING
+    currency. For HSBA that is GBP against USD — a ratio across the two is
+    wrong by the FX rate with nothing in the output to reveal it."""
+    usd = showcase._vet_messages(
+        _cand(market_cap=270.26e9, currency="GBp", financial_currency="USD"), []
+    )[1]["content"]
+    assert "Market cap £270.26bn" in usd
+    assert "market cap is in GBP, but the company reports its accounts in USD" in usd
+    assert "Do not form a ratio across the two" in usd
+
+
+def test_market_cap_stays_quiet_when_gbp_quote_meets_gbp_accounts():
+    # "GBp" and "GBP" are the same currency — the stored cap is in pounds, not
+    # pence (verified against GRG's own share count). A warning here would be
+    # noise on ~99% of the universe.
+    gbp = showcase._vet_messages(
+        _cand(market_cap=1.61e9, currency="GBp", financial_currency="GBP"), []
+    )[1]["content"]
+    assert "Market cap £1.61bn" in gbp
+    assert "DIFFERENT currency" not in gbp
+    # Unknown reporting currency must not warn either — nothing is known to differ.
+    unknown = showcase._vet_messages(
+        _cand(market_cap=1.61e9, currency="GBp", financial_currency=None), []
+    )[1]["content"]
+    assert "DIFFERENT currency" not in unknown
+
+
 # ── Score bands ───────────────────────────────────────────────────────────────
 def test_vet_prompt_score_bands_agree_with_the_publish_floor():
     """The bands must not straddle HIGH_IMPACT_MIN_VET_SCORE.

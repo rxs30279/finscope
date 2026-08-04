@@ -493,6 +493,90 @@ def _price_context(symbol: Optional[str], before=None) -> str:
     return f"  1 month {_fmt_pct(p.get('chg_1m'))}, 6 months {_fmt_pct(p.get('chg_6m'))}"
 
 
+def _size_context(cand: dict) -> str:
+    """Market cap, plus a currency warning when it and the accounts disagree.
+
+    The vet's system prompt names "heavy equity dilution" as one of the four
+    things it exists to catch, and _annual_history was extended to supply
+    shares_diluted for it — but without a market cap a placing or a share count
+    cannot be sized against anything, so the check was unrunnable.
+
+    CURRENCY TRAP, and the reason this is not just another line in the header:
+    market_cap is denominated in the QUOTE currency (sterling for LSE lines —
+    prices.py:592 draws the same distinction), while annual_financials is in the
+    REPORTING currency, which is USD for the dollar filers. For HSBA the two
+    blocks are therefore GBP and USD respectively. Handing the model a market cap
+    without saying so would recreate, one block lower, exactly the mislabelling
+    fixed in c1d08f1 — and a P/E or dilution ratio formed across the two would be
+    wrong by the FX rate with nothing to reveal it.
+    """
+    cap = cand.get("market_cap")
+    if cap is None:
+        return "  (market cap not on file)"
+    quote = cand.get("currency")
+    sym = _ccy(quote)
+    cap = float(cap)
+    size = (
+        f"{sym}{cap / 1e9:,.2f}bn" if abs(cap) >= 1e9 else f"{sym}{cap / 1e6:,.1f}m"
+    )
+    line = f"  Market cap {size}"
+
+    # Only warn when the two really differ. Comparing the normalised codes, so
+    # a GBp quote against GBP accounts stays quiet — same currency, and the
+    # stored market cap is in pounds, not pence (verified against GRG's own
+    # share count).
+    # .upper() folds the "GBp" quote code onto "GBP" — the value itself is in
+    # pounds, so the two are the same currency and must not trip the warning.
+    q_code = (quote or "GBP").upper().strip() or "GBP"
+    r_code = (cand.get("financial_currency") or "").upper().strip()
+    if r_code and r_code != q_code:
+        line += (
+            f"\n  NOTE: this market cap is in {q_code}, but the company reports "
+            f"its accounts in {r_code}, so the annual series below is in a "
+            f"DIFFERENT currency. Do not form a ratio across the two (P/E, "
+            f"market cap vs revenue, placing size vs equity) without converting "
+            f"first — and if you have no rate, say the comparison cannot be made "
+            f"rather than making it."
+        )
+    return line
+
+
+def _guidance_context(cand: dict) -> str:
+    """The ranker's structured guidance extraction, rendered for the vet.
+
+    The vet's FIRST named job is catching guidance quietly cut inside an upbeat
+    headline, and until now it re-derived that from raw announcement text while
+    this — per-statement metric/period/guided value/consensus/vs_prior/
+    vs_consensus, already extracted and stored by the ranker — sat unused in the
+    same candidate row.
+
+    NOT independent evidence: it is the same model reading the same document one
+    pass earlier, so the prompt asks the vet to verify and contradict it rather
+    than treat it as ground truth. That is also why it is placed after the
+    announcement text, not before it.
+    """
+    entries = _guidance_entries(cand)
+    if not entries:
+        # Distinguish the two, exactly as _gate_guidance does: the ranker
+        # emitting nothing is not the same as the announcement guiding nothing,
+        # and neither is evidence about the company.
+        if cand.get("guidance_checks") is None:
+            return "  (not extracted for this announcement — read the text yourself)"
+        return "  (the earlier read found no forward-looking statement)"
+    lines = []
+    for i, e in enumerate(entries, 1):
+        metric = e.get("metric") or "(unnamed metric)"
+        period = e.get("period") or "period unstated"
+        guided = e.get("guided_value") or "(no figure printed)"
+        lines.append(f"  {i}. {metric} ({period}): guided {guided}")
+        detail = f"     vs prior guidance: {e.get('vs_prior') or 'unknown'}"
+        detail += f"; vs consensus: {e.get('vs_consensus') or 'no_consensus_stated'}"
+        if e.get("consensus_value"):
+            detail += f" (consensus printed as {e['consensus_value']})"
+        lines.append(detail)
+    return "\n".join(lines)
+
+
 # Verdict/score agreement, enforced in _clean_vet_score AND stated in the prompt
 # below — which is why it is defined up here rather than next to its enforcer.
 # Both numbers used to be typed out by hand in two prose passages and one JSON
@@ -560,6 +644,26 @@ def _vet_messages(
         "(above/below/in_line) against the correct preceding-period base, "
         "not the prior-year figure — this is checked mechanically afterwards, "
         "so a guess is fine. "
+        "You are given the forward guidance an earlier automated read pulled "
+        "out of this same announcement, one statement per entry. Use it as a "
+        "checklist so no guidance statement goes unconsidered, NOT as a "
+        "finding: it came from the same model reading the same document, so it "
+        "can be wrong or incomplete, and where it disagrees with the text "
+        "above, the text wins and you should say so. Two things to weigh. "
+        "First, 'vs prior guidance' and 'vs consensus' are independent: "
+        "guidance can be reiterated AND below a consensus printed in the same "
+        "document, which means the company's own expectation has not moved "
+        "while the market's has moved past it — that combination is the "
+        "clearest form of the quiet cut you exist to catch, so look hardest "
+        "there. Second, 'no_consensus_stated' is the ordinary case and carries "
+        "no information in either direction; never read it as evidence that "
+        "guidance fails to meet expectations. "
+        "You are given the company's market cap. Use it to size things the "
+        "announcement states in absolute terms — a placing, a buyback, a "
+        "contract win, a write-down — because the same figure is transformative "
+        "for a small cap and immaterial for a large one, and 'heavy equity "
+        "dilution' cannot be judged without it. Mind the currency note if one "
+        "is present. "
         "You are also given the share price move over the 1 and 6 months "
         "BEFORE this announcement. Treat it as context, not as a verdict in "
         "either direction: a stock that has already run may have priced this "
@@ -605,6 +709,16 @@ Investegate AI summary
 Announcement text (verbatim, may be truncated) — this is the primary source;
 the summary above is a useful lead but can omit or misread material detail
   {body_text if body_text is not None else _vet_body_text(cand)}
+
+Forward guidance, as extracted from THIS announcement by an earlier automated
+read of it. Not an independent source — same document, same model, one pass
+earlier — so check it against the text above and say so in your rationale if it
+is wrong. "no_consensus_stated" is the common case and is NOT evidence that
+guidance misses expectations; most announcements print no consensus footnote.
+{_guidance_context(cand)}
+
+Company size (from our own database)
+{_size_context(cand)}
 
 Share price before this announcement (our own price history; the latest close
 predates today's news, so this is what the market already thought)
@@ -1128,9 +1242,12 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_risks, r.llm_action,
                r.llm_sentiment, r.guidance_checks, r.earnings_quality,
                m.sector, m.industry, m.country, m.ftse_index,
-               -- Reporting currency of annual_financials, for the vet prompt.
-               -- USD for the dollar filers (Shell, BP, AZN); see _ccy.
-               m.financial_currency,
+               -- Two DIFFERENT currencies, both needed by the vet prompt and
+               -- easy to confuse (see _size_context): financial_currency is the
+               -- accounts' reporting currency (USD for Shell/BP/AZN) and drives
+               -- the annual series; currency is the QUOTE currency and is what
+               -- market_cap below is denominated in.
+               m.financial_currency, m.currency,
                t.market_cap, t.net_debt
         FROM rns_announcements r
         JOIN ttm_financials t ON t.company_symbol = r.symbol
