@@ -1,8 +1,18 @@
 # The `one_off` shadow gate — plan
 
-Status: **NOT STARTED.** Written 2026-08-04 after the gate audit in
-`docs/rns-gate-block-plan.md` (see the 2026-08-04 section) found that the RNS
-vet's single most repeated objection has no gate at all.
+Status: **PHASE 1 SHIPPED 2026-08-04** (uncommitted this session — see
+`backend/gates.py::_gate_one_off`, registered `pool="wide"`, `mode="shadow"`,
+never `block`). All §6 controls re-verified against prod's actual stored
+`earnings_quality` JSON before writing `test_gates.py` (not re-derived from
+the numbers quoted in §1/§6 below) and came back exactly as this plan
+predicted — ELIX/LSEG/NWG `pass`, BA/CKN/RR `not_quantified`,
+LLOY/MRO/STX `adjudicated` at 13.0%/2.6%/26.0%, TW/RWA `self_referential`.
+Deploy NOT verified. §5's promotion criterion and the 6-month delete clause
+are unchanged and still apply — this only makes the sample start accruing.
+
+Written 2026-08-04 after the gate audit in `docs/rns-gate-block-plan.md` (see
+the 2026-08-04 section) found that the RNS vet's single most repeated
+objection has no gate at all.
 
 Read `docs/rns-gate-block-plan.md` first — this plan reuses its registry, its
 three-state contract, its shadow/armed distinction, and its §4 risk list.

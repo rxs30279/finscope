@@ -122,7 +122,7 @@ def test_matrix_shape_and_default_adjudicated_filter(client):
     body = r.json()
     assert set(body) >= {"generated_at", "window", "cohort", "show_all", "gates", "header", "rows"}
     assert [g["name"] for g in body["gates"]] == [
-        "sentiment", "guidance", "guidance_wide", "earnings_quality", "low_base",
+        "sentiment", "guidance", "guidance_wide", "earnings_quality", "low_base", "one_off",
     ]
     # row 2 (all-n/a) dropped by the default adjudicated-only filter
     assert [row["rns_id"] for row in body["rows"]] == [1]

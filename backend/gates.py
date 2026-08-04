@@ -417,12 +417,98 @@ def _gate_low_base(cand: dict) -> GateResult:
     return GateResult(state="pass", evidence=evidence)
 
 
+# ── Gate: one_off (shadow) ─────────────────────────────────────────────────
+# docs/rns-one-off-gate-plan.md. Across the 31 stored vet_rationale values, the
+# vet's single most repeated objection is "the headline is flattered by
+# something that will not repeat" (HSBA $2.2bn notable items, NWG £190m
+# notable items, CKN £5.9m acquisition add-backs, STAN $238m Solv India
+# gain) — and until now nothing gated on it. The data was already captured:
+# earnings_quality[].one_off_named, populated by the ranker since migration
+# 026 (rns_llm.py:586). The only reader, showcase._named_one_offs, just
+# print()s to the cron log — no rns_gate_evaluations row, nothing on /gates,
+# so it could never be calibrated.
+#
+# Phase 1 is a recorder, not a judge — this gate NEVER returns state="block",
+# not even in shadow mode, unlike low_base above. The measurements the plan
+# ran before writing this (2026-08-04, 30d window) explain why:
+#   (a) presence is 52% of ranked rows — far too common to ever be a blocker.
+#   (b) materiality parses on only 18% of named one-offs (both the line and
+#       the one-off text itself have to parse as money).
+#   (c) most of that 18% comes back ~100% because the line IS the one-off
+#       (TW.L cladding £222.2m of £222.2m) — a naive ratio gate would fire on
+#       these and look like it's working. Guarded off as self_referential.
+#   (e) recall is bounded by the RANKER, not this gate: NWG.L 9697081 has
+#       ZERO one_off_named entries despite the vet's central objection being
+#       "£190m notable items" — the vet reads the body, structured
+#       extraction missed it. Pinned as a known-wrong `pass` control so
+#       nobody "fixes" this gate by inferring unnamed one-offs (the prompt
+#       forbids that, and so must the gate).
+#
+# `kind` covers both "income" and "cost_or_charge" — _named_one_offs only
+# ever read "income", discarding the 62 of 122 (measurement (d)) that are
+# cost_or_charge, which is exactly where HSBA's restructuring/disposal
+# losses sit.
+_ONE_OFF_SELF_REFERENTIAL_PP = 2.0
+
+
+def _gate_one_off(cand: dict) -> GateResult:
+    from showcase import _parse_money
+
+    entries = cand.get("earnings_quality")
+    if not isinstance(entries, list) or not entries:
+        return GateResult(state="n/a", reason="field_absent")
+
+    named = [
+        e for e in entries
+        if isinstance(e, dict) and e.get("kind") in ("income", "cost_or_charge")
+        and str(e.get("one_off_named") or "").strip()
+    ]
+    evidence = {
+        "n_entries": len(entries),
+        "n_named": len(named),
+        "n_income": sum(1 for e in named if e.get("kind") == "income"),
+        "n_cost_or_charge": sum(1 for e in named if e.get("kind") == "cost_or_charge"),
+    }
+    if not named:
+        return GateResult(state="pass", evidence=evidence)
+
+    # Materiality ratio where computable — both the line and the one-off text
+    # itself have to parse as money (measurement (b): only 18% do).
+    computed = []
+    for e in named:
+        line_value = _parse_money(e.get("value"))
+        one_off_value = _parse_money(e.get("one_off_named"))
+        if not line_value or one_off_value is None:
+            continue
+        computed.append({
+            "item": e.get("item"), "period": e.get("period"), "kind": e.get("kind"),
+            "line_value": line_value, "one_off_value": one_off_value,
+            "ratio_pct": round(one_off_value / line_value * 100, 1),
+            "one_off_named": e.get("one_off_named"),  # raw text, for audit
+        })
+    evidence["computed"] = computed
+
+    if not computed:
+        return GateResult(state="n/a", reason="not_quantified", evidence=evidence)
+
+    # Guard the degenerate case (measurement (c)): a ratio within ~2pp of 100%
+    # means the line IS the one-off, not a fraction of it — not an
+    # adjudication, however clean it looks.
+    real = [c for c in computed
+            if abs(c["ratio_pct"] - 100.0) > _ONE_OFF_SELF_REFERENTIAL_PP]
+    if not real:
+        return GateResult(state="n/a", reason="self_referential", evidence=evidence)
+
+    return GateResult(state="n/a", reason="adjudicated", evidence=evidence)
+
+
 GATES: tuple[Gate, ...] = (
     Gate("sentiment", "Announcement direction must read positive.", "armed", _gate_sentiment),
     Gate("guidance", "Guidance not reiterated or lowered below a printed consensus.", "armed", _gate_guidance),
     Gate("guidance_wide", "Shadow: guidance merely in line with consensus, or below it on a first-time guide.", "shadow", _gate_guidance_wide),
     Gate("earnings_quality", "Bank loan-loss rate must not be rising.", "armed", _gate_earnings_quality),
     Gate("low_base", "Headline growth vs the immediately preceding period, seasonally adjudicated against the same period two years earlier.", "shadow", _gate_low_base, pool="vet"),
+    Gate("one_off", "Shadow: an earnings-quality line the announcement credits to a named one-off, and how material it is where quantifiable.", "shadow", _gate_one_off),
 )
 
 

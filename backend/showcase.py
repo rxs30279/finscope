@@ -1019,6 +1019,13 @@ def _named_one_offs(cand: dict) -> list[dict]:
     the base is not reliably printed in comparable form — "c.£225m" against
     "increased 38%" is not a computation. A named, quoted fact is worth
     surfacing to a reader even unquantified; it is not sound enough to block.
+
+    Deliberately kept alongside gates.py's `one_off` shadow gate rather than
+    folded into it (docs/rns-one-off-gate-plan.md §7.6): this prints
+    immediately to the cron log for the rows that reached flagging, which is
+    cheaper and faster to read than /gates; the gate is the calibratable
+    record over every ranked row, income AND cost_or_charge, that this
+    income-only print was never meant to be.
     """
     entries = cand.get("earnings_quality")
     if not isinstance(entries, list):

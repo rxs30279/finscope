@@ -174,6 +174,151 @@ def test_earnings_quality_gate_blocks_the_barc_case():
     assert r.evidence == _BARC_LLR
 
 
+# ── one_off (Phase 1, shadow recorder) ──────────────────────────────────────
+# docs/rns-one-off-gate-plan.md §6. Every fixture below is the real
+# earnings_quality JSON for the stated rns_id, read from prod on 2026-08-04 —
+# the plan requires controls be real stored rows, not invented ones.
+def test_one_off_gate_na_when_field_absent():
+    for entries in (None, [], "not a list"):
+        r = _gate("one_off").evaluate({"earnings_quality": entries})
+        assert r.state == "n/a"
+        assert r.reason == "field_absent"
+
+
+# ELIX.L 9699755 (vet 80, approved), LSEG.L 9694675 — no line names a one-off.
+_ELIX = [
+    {"item": "Revenue", "kind": "income", "value": "£89.0m", "period": "H1 2026",
+     "prior_value": "£71.2m (implied from 25% growth)", "one_off_named": None},
+    {"item": "Adjusted EBITDA", "kind": "income", "value": "£27.6m", "period": "H1 2026",
+     "prior_value": "£21.4m (implied from 29% growth)", "one_off_named": None},
+]
+_LSEG = [
+    {"item": "Total income (excl. recoveries)", "kind": "income", "value": "£4,799m",
+     "period": "H1 2026", "prior_value": "£4,489m", "one_off_named": None},
+]
+# NWG.L 9697081 — the vet's central objection was "£190m notable items", but
+# the ranker's own extraction never named it (one_off_named is null on every
+# entry). This MUST still read `pass` — it is a known-wrong recall gap
+# (measurement (e)), not something this gate should paper over by inferring
+# an unnamed one-off.
+_NWG = [
+    {"item": "Notable items within total income", "kind": "income", "value": "£190m",
+     "period": "H1 2026", "prior_value": "£23m", "one_off_named": None},
+]
+
+
+def test_one_off_gate_pass_when_nothing_named():
+    for entries in (_ELIX, _LSEG, _NWG):
+        r = _gate("one_off").evaluate({"earnings_quality": entries})
+        assert r.state == "pass"
+
+
+# BA.L 9694659 (2 income one-offs, approved and published) — named but the
+# text carries no parseable figure ("high level of customer advances").
+_BA = [
+    {"item": "Free cash flow", "kind": "income", "value": "£1,791m", "period": "H1 2026",
+     "prior_value": "£(368)m", "one_off_named": "high level of customer advances"},
+    {"item": "Operating profit (IFRS)", "kind": "income", "value": "£1,504m", "period": "H1 2026",
+     "prior_value": "£1,327m",
+     "one_off_named": "lower costs in relation to amortisation of acquired intangibles and adjusting items"},
+]
+# CKN.L 9699653 (1 cost one-off, approved) — named, no figure inside the text.
+_CKN = [
+    {"item": "Acquisition-related costs", "kind": "cost_or_charge", "value": "£5.9m",
+     "period": "H1 2026", "prior_value": "£1.9m", "one_off_named": "acquisition-related costs"},
+]
+# RR.L 9694691 (1 cost one-off, approved) — same shape, in cost_or_charge.
+_RR = [
+    {"item": "UK surplus advance corporation tax re-recognised", "kind": "cost_or_charge",
+     "value": "£181m", "period": "H1 2026", "prior_value": "£277m",
+     "one_off_named": "re-recognised UK surplus advance corporation tax "
+                       "(H1 2025: recognition of deferred tax assets on UK tax losses)"},
+]
+
+
+def test_one_off_gate_not_quantified_when_no_figure_parses():
+    # These three are the whole argument against a presence rule — a gate
+    # that blocked on naming alone would have suppressed three published
+    # stories (plan §6).
+    for entries in (_BA, _CKN, _RR):
+        r = _gate("one_off").evaluate({"earnings_quality": entries})
+        assert r.state == "n/a"
+        assert r.reason == "not_quantified"
+        assert r.evidence["n_named"] >= 1
+
+
+# LLOY.L 9694683 — £80m of a £617m impairment charge -> 13.0%.
+_LLOY = [
+    {"item": "Underlying impairment charge", "kind": "cost_or_charge", "value": "£617m",
+     "period": "H1 2026", "prior_value": "£442m",
+     "one_off_named": "£80 million net charge from updated multiple economic scenarios"},
+]
+# MRO.L 9697077 — £9m of a £347m adjusted operating profit -> 2.6%.
+_MRO = [
+    {"item": "Adjusted operating profit", "kind": "income", "value": "£347m", "period": "H1 2026",
+     "prior_value": "£310m",
+     "one_off_named": "Incident at Garden Grove facility in May reduced adjusted "
+                       "operating profit by £9 million"},
+]
+# STX.L 9694692 — $7.9M of $30.4M revenue -> 26.0%.
+_STX = [
+    {"item": "Total Revenue", "kind": "income", "value": "$30.4M", "period": "H1 2026",
+     "prior_value": "$21.5M",
+     "one_off_named": "the achievement of the $7.9M development milestone payment by ASK in China"},
+]
+
+
+def test_one_off_gate_adjudicates_a_real_fractional_ratio():
+    for entries, expect_pct in ((_LLOY, 13.0), (_MRO, 2.6), (_STX, 26.0)):
+        r = _gate("one_off").evaluate({"earnings_quality": entries})
+        assert r.state == "n/a"
+        assert r.reason == "adjudicated"
+        assert r.evidence["computed"][0]["ratio_pct"] == expect_pct
+
+
+# TW.L 9697075 cladding provision — £222.2m of £222.2m, the line IS the
+# one-off. RWA.L 9694660 — same shape, £1.1m of £1.1m.
+_TW = [
+    {"item": "Cladding fire safety provision increase", "kind": "cost_or_charge",
+     "value": "£222.2m", "period": "H1 2026", "prior_value": None,
+     "one_off_named": "£222.2 million increase in cladding fire safety provision"},
+]
+_RWA = [
+    {"item": "One-off charge (net)", "kind": "cost_or_charge", "value": "£1.1m",
+     "period": "H1 2026", "prior_value": None,
+     "one_off_named": "net £1.1m one-off charge, mostly relating to redundancy costs"},
+]
+
+
+def test_one_off_gate_self_referential_when_the_line_is_the_one_off():
+    for entries in (_TW, _RWA):
+        r = _gate("one_off").evaluate({"earnings_quality": entries})
+        assert r.state == "n/a"
+        assert r.reason == "self_referential"
+        assert r.evidence["computed"][0]["ratio_pct"] == 100.0
+
+
+def test_one_off_gate_reads_cost_or_charge_not_just_income():
+    # _named_one_offs (showcase.py) filters kind=='income' only; this gate
+    # must not repeat that — CKN and RR above are both cost_or_charge and
+    # must be visible (not_quantified, not silently dropped).
+    r = _gate("one_off").evaluate({"earnings_quality": _CKN})
+    assert r.evidence["n_cost_or_charge"] == 1
+    assert r.evidence["n_income"] == 0
+
+
+def test_one_off_gate_never_blocks():
+    # Phase 1 is a recorder, not a judge (plan §4) — unlike low_base, this
+    # gate must not return state="block" for ANY control, in any mode.
+    for entries in (_ELIX, _LSEG, _NWG, _BA, _CKN, _RR, _LLOY, _MRO, _STX, _TW, _RWA):
+        assert _gate("one_off").evaluate({"earnings_quality": entries}).state != "block"
+
+
+def test_one_off_gate_is_shadow_and_cannot_block_a_flag():
+    cand = {"keyword_hits": ["pos:1"], "earnings_quality": _LLOY}
+    assert blocking_reason(cand) is None
+
+
 # ── fail-open on a raising gate ─────────────────────────────────────────────────
 def test_gate_error_fails_open_rather_than_propagating():
     def _boom(cand):
@@ -194,11 +339,12 @@ def test_evaluate_all_runs_every_gate_regardless_of_outcome():
     results = evaluate_all(cand)
     names = [g.name for g, _ in results]
     assert names == ["sentiment", "guidance", "guidance_wide",
-                     "earnings_quality", "low_base"]
+                     "earnings_quality", "low_base", "one_off"]
     states = {g.name: r.state for g, r in results}
     assert states["sentiment"] == "block"
     assert states["earnings_quality"] == "block"
     assert states["low_base"] == "n/a"  # no low_base key on this cand -> not_vetted
+    assert states["one_off"] == "pass"  # one_off_named is None on _BARC_LLR
 
 
 def test_blocking_reason_stops_at_first_armed_block():
@@ -250,11 +396,15 @@ def test_record_gate_evaluations_writes_one_row_per_gate_per_candidate():
     written_gates = [call.args[1][1] for call in ex.call_args_list]
     # low_base is a VET-pool gate and must not appear — the sweep can only ever
     # produce not_vetted for it, landing on top of the verdict stage 3.5 wrote.
+    # one_off is pool="wide" (it only reads earnings_quality, which every
+    # ranked row carries), so it DOES appear here — that's the whole point of
+    # phase 1, making the calibration sample exist.
     assert written_gates == ["sentiment", "guidance", "guidance_wide",
-                             "earnings_quality"]
+                             "earnings_quality", "one_off"]
     assert res["candidates"] == 1
-    assert res["gate_rows_written"] == 4
+    assert res["gate_rows_written"] == 5
     assert "low_base" not in res["gates_run"]
+    assert "one_off" in res["gates_run"]
     # sentiment passed (llm_sentiment positive) -> state 'pass' in the params
     assert ex.call_args_list[0].args[1][2] == "pass"
 

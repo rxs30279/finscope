@@ -99,6 +99,7 @@ const GATE_LABEL: Record<string, string> = {
   guidance: "guid",
   earnings_quality: "bank",
   low_base: "base",
+  one_off: "1off",
 };
 
 // Same palette as HighImpactRnsTab's VET_STYLE — keep in sync.
