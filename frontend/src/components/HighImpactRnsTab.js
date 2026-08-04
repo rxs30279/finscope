@@ -141,13 +141,11 @@ function ScoreCell({
   size = 12,
   label = "Vet Score",
   title = "AI vet conviction, 0–100: how strong a 1–3 month case this is after the sceptical second read. 75+ is required to appear here.",
+  nullTitle = "Not vet-scored — flagged before the vet became a scorer (2026-08-03)",
 }) {
   if (value == null) {
     return (
-      <span
-        style={{ color: "#333" }}
-        title="Not vet-scored — flagged before the vet became a scorer (2026-08-03)"
-      >
+      <span style={{ color: "#333" }} title={nullTitle}>
         —
       </span>
     );
@@ -165,6 +163,51 @@ function ScoreCell({
     >
       {!bare && <><span style={{ color: "#fff" }}>{label}</span> </>}
       <span style={{ color: colour }}>{value}</span>
+    </span>
+  );
+}
+
+// Pass 1 — the RANKER's llm_score, shown alongside the vet's. The two measure
+// different things on purpose and must not be read as one number drifting:
+// llm_score is price-impact likelihood x magnitude (>= 60 earns a vet call),
+// vet_score is conviction in a 1-3 month case after the sceptical read (>= 75
+// publishes). Deliberately muted — the vet's score is the one that decides.
+//
+// Rendered secondary rather than equal because a reader comparing them wants
+// "did the second pass disagree?", not two competing headline numbers.
+function RankScore({ value, size = 12 }) {
+  if (value == null) return <span style={{ color: "#333" }} title="Never ranked">—</span>;
+  return (
+    <span
+      title={`Ranker score ${value}/100 — pass 1: likelihood x magnitude of a price move. 60+ earns a vet call. Not a conviction score.`}
+      style={{ fontFamily: "monospace", fontSize: size, fontWeight: 700, color: "#64748b" }}
+    >
+      {value}
+    </span>
+  );
+}
+
+// ▲/▼ when the vet moved a story materially off the ranker's read. Same
+// convention as /gates. Threshold is 10 points: below that the two passes are
+// saying the same thing in different units, and marking every 5-point wobble
+// as "disagreement" would make the marker meaningless.
+const VET_DISAGREE_PTS = 10;
+
+function VetDelta({ llm, vet }) {
+  if (llm == null || vet == null) return null;
+  const d = vet - llm;
+  if (Math.abs(d) < VET_DISAGREE_PTS) return null;
+  const up = d > 0;
+  return (
+    <span
+      title={
+        up
+          ? `Vet PROMOTED this: ranker ${llm} → vet ${vet} (+${d}). The sceptical read found a better case than the headline scan.`
+          : `Vet DEMOTED this: ranker ${llm} → vet ${vet} (${d}). The sceptical read found less than the headline scan.`
+      }
+      style={{ color: up ? "#10b981" : "#f87171", fontSize: 9, fontWeight: 700, marginLeft: 3 }}
+    >
+      {up ? "▲" : "▼"}
     </span>
   );
 }
@@ -411,7 +454,12 @@ function PendingCard({ entry, onApprove, onReject }) {
           {(entry.symbol || "").replace(".L", "")}
         </span>
         <IndexBadge index={entry.ftse_index} />
+        <span style={{ fontFamily: "monospace", fontSize: 11, color: "#64748b" }}>
+          rank <RankScore value={st.llm_score} size={11} />
+          <span style={{ margin: "0 4px", color: "#334155" }}>│</span>
+        </span>
         <ScoreCell value={st.vet_score} />
+        <VetDelta llm={st.llm_score} vet={st.vet_score} />
         {entry.fwd_multiple != null && <FwdMultipleCell r={entry} />}
         {vet && (
           <span title={st.vet_rationale || ""} style={{ color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 6px", fontSize: 10, fontWeight: 700, fontFamily: "monospace" }}>
@@ -436,6 +484,45 @@ function PendingCard({ entry, onApprove, onReject }) {
         <button onClick={() => onReject(entry.showcase_id)} style={btn("#f87171")}>Reject</button>
       </div>
     </div>
+  );
+}
+
+// A story the vet scored but withheld (status='shadow'). Rendered inline in the
+// main table so a 45 sits next to an 80 on the same day — that comparison is
+// the whole reason for surfacing them. Admin-only: `shadow` is empty for a
+// public visitor, so these rows simply do not exist on the public page.
+//
+// isWithheld is keyed on status, NOT on `vet_score < 75`. A row can be shadow
+// with a NULL score (the vet CALL failed), and an admin can publish a shadow row
+// manually — after which its status is 'approved' and it must stop being marked
+// withheld even though the score never changed.
+const isWithheld = (r) => (r.story || {}).status === "shadow";
+
+// NULL vet_score on a withheld row means the vet call FAILED, not that the story
+// scored zero. Kept visually distinct everywhere: presenting a failure as a low
+// score would poison the calibration sample these rows exist to provide.
+const vetFailed = (r) => isWithheld(r) && (r.story || {}).vet_score == null;
+
+function WithheldBadge({ r, size = 8.5 }) {
+  if (!isWithheld(r)) return null;
+  const failed = vetFailed(r);
+  return (
+    <span
+      title={
+        failed
+          ? "Withheld: the vet call failed, so no score was produced. Not a judgement on the story."
+          : `Withheld: vet scored ${(r.story || {}).vet_score}, below the 75 publish floor. Expand the row to read why. Not visible to the public.`
+      }
+      style={{
+        fontSize: size, fontWeight: 700, color: failed ? "#f87171" : "#f59e0b",
+        background: failed ? "rgba(248,113,113,0.12)" : "rgba(245,158,11,0.12)",
+        border: `1px solid ${failed ? "#f87171" : "#f59e0b"}55`,
+        borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap",
+        fontFamily: "monospace",
+      }}
+    >
+      {failed ? "VET FAILED" : "WITHHELD"}
+    </span>
   );
 }
 
@@ -487,7 +574,12 @@ function MobileCard({
   const [showMqvrInfo, setShowMqvrInfo] = useState(false);
   const caretColor = isOpen ? "#f97316" : "#93c5fd";
   return (
-    <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 6, overflow: "hidden" }}>
+    <div style={{
+      background: isWithheld(r) ? "#16120b" : "#111",
+      border: `1px solid ${isWithheld(r) ? "#3f2d1a" : "#1e1e1e"}`,
+      borderRadius: 6,
+      overflow: "hidden",
+    }}>
       <div onClick={onSelect} style={{ padding: "12px 14px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 8 }}>
           <button
@@ -525,6 +617,7 @@ function MobileCard({
             <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "#e5e5e5", fontWeight: 700, textDecoration: "none" }}>{r.symbol.replace(".L", "")}</Link>
             <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
               <IndexBadge index={r.ftse_index} full />
+              <WithheldBadge r={r} />
               {vet && (
                 <span style={{ fontSize: 8.5, fontWeight: 700, color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "capitalize" }}>
                   {st.vet_verdict}
@@ -532,9 +625,18 @@ function MobileCard({
               )}
             </div>
           </div>
+          {/* Both passes. Stacked VERTICALLY on purpose: the sparkline beside
+              this block is absolutely positioned off a hand-tuned offset, so
+              growing this column sideways would shift it. */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, marginLeft: 2, flexShrink: 0 }}>
             <span style={{ color: "#64748b", fontSize: 10, fontWeight: 700, letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "uppercase" }}>Vet Score</span>
-            <ScoreCell value={st.vet_score} bare size={20} />
+            <span style={{ display: "inline-flex", alignItems: "center" }}>
+              <ScoreCell value={st.vet_score} bare size={20} />
+              <VetDelta llm={st.llm_score} vet={st.vet_score} />
+            </span>
+            <span style={{ color: "#475569", fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", fontFamily: "monospace" }}>
+              rank <RankScore value={st.llm_score} size={9} />
+            </span>
           </div>
           <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(calc(-50% + 66px), -50%)", pointerEvents: "none" }}>
             <Sparkline points={r.spark} sinceCount={r.spark_since} sinceUp={changePct == null ? null : changePct >= 0} width={64} height={22} />
@@ -653,7 +755,23 @@ function MobileCard({
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 14 }}>
             <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
             <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
-            {vet && <AnalysisRow label={`AI vet · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+            {/* On a withheld row this IS the "why did it fail" text, so it is
+    labelled as such rather than as generic commentary. */}
+{vetFailed(r) ? (
+  <AnalysisRow
+    label="Vet call failed"
+    text="Withheld because the vet produced no score — an API failure, not a judgement on the story."
+    color="#f87171"
+  />
+) : (
+  vet && (
+    <AnalysisRow
+      label={isWithheld(r) ? `Why withheld · vet ${st.vet_score}` : `AI vet · ${st.vet_verdict}`}
+      text={st.vet_rationale}
+      color={isWithheld(r) ? "#f59e0b" : vet.color}
+    />
+  )
+)}
             {r.fwd_multiple != null && r.fwd_quote && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <AnalysisRow
@@ -711,6 +829,7 @@ function MobileCard({
 // ── columns ───────────────────────────────────────────────────────────────────
 const COLS = [
   { key: "name", label: "Stock", align: "left" },
+  { key: "rank", label: "Rank", align: "center" },
   { key: "ai", label: "Vet Score", align: "center" },
   { key: "price", label: "Price", align: "right" },
   { key: "pct_news", label: "% Change", align: "right" },
@@ -741,6 +860,11 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
 
   const [rows, setRows] = useState(() => (Array.isArray(initialRows) ? initialRows : []));
   const [pending, setPending] = useState([]);
+  // Vet-withheld rows (status='shadow'), admin-only — always [] for a public
+  // visitor. Held in its own state rather than merged into `rows` so the
+  // "N tracked" count keeps meaning "N published picks", and so the public
+  // payload and the admin view can never be confused for one another.
+  const [shadow, setShadow] = useState([]);
   const [loading, setLoading] = useState(!Array.isArray(initialRows));
   const [liveQuotes, setLiveQuotes] = useState({});
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
@@ -752,7 +876,14 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
   const [changeMode, setChangeMode] = useState("story");
   const [showChangeInfo, setShowChangeInfo] = useState(false);
 
-  const symbols = useMemo(() => rows.map((r) => r.symbol), [rows]);
+  // Withheld rows are included: a withheld story still needs a live price, since
+  // "what did it do afterwards" is the only way to find out whether the vet was
+  // right to withhold it. Empty for non-admins, so the public quote request is
+  // unchanged.
+  const symbols = useMemo(
+    () => [...new Set([...rows, ...shadow].map((r) => r.symbol))],
+    [rows, shadow],
+  );
 
   // Approved showcase (public) + pending candidates (admin only). The very
   // first run reuses the SSR-fetched `initialRows` instead of re-requesting
@@ -772,11 +903,17 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
         ? fetch(`${API}/showcase/pending`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
         : Promise.resolve([]),
     );
+    jobs.push(
+      isAdmin
+        ? fetch(`${API}/showcase/shadow`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
+        : Promise.resolve([]),
+    );
     Promise.all(jobs)
-      .then(([approved, pend]) => {
+      .then(([approved, pend, shad]) => {
         if (cancelled) return;
         if (approved !== null) setRows(Array.isArray(approved) ? approved : []);
         setPending(Array.isArray(pend) ? pend : []);
+        setShadow(Array.isArray(shad) ? shad : []);
         setLoading(false);
       })
       .catch(() => !cancelled && setLoading(false));
@@ -846,9 +983,19 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
     return ((p - r.low_52w) / span) * 100;
   };
 
+  // The table's rows: the public showcase, plus — for an admin — the stories
+  // the vet withheld, interleaved by date rather than parked in a separate
+  // block. Seeing a 45 sitting next to an 80 on the same day is the whole point
+  // of showing them; a segregated list makes exactly the comparison that
+  // matters (did the vet call this right?) harder, not easier.
+  //
+  // ADMIN-ONLY. `shadow` is empty for everyone else, so the public page is
+  // byte-for-byte what it was. If these should ever go public, that is a change
+  // to this one line — and to /api/showcase, which filters status='approved'
+  // server-side and is what the SSR payload actually uses.
   const sorted = useMemo(() => {
     const dateVal = (r) => (r.story?.published_at ? new Date(r.story.published_at).getTime() : null);
-    const arr = [...rows];
+    const arr = [...rows, ...shadow];
     arr.sort((a, b) => {
       const va = dateVal(a);
       const vb = dateVal(b);
@@ -858,7 +1005,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
       return vb - va;
     });
     return arr;
-  }, [rows]);
+  }, [rows, shadow]);
 
   const refetch = useCallback(() => setRefreshKey((n) => n + 1), []);
 
@@ -921,6 +1068,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
             {loading ? "loading…" : `${rows.length} tracked`}
             {isAdmin && pending.length > 0 ? ` · ${pending.length} pending` : ""}
+            {isAdmin && shadow.length > 0 ? ` · ${shadow.length} withheld` : ""}
           </span>
         }
       />
@@ -944,7 +1092,20 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
         </div>
       )}
 
-      {rows.length > 0 && (
+      {/* Admin: what the vet withheld is now interleaved into the table below,
+          marked WITHHELD. This banner just explains why rows appear here that a
+          public visitor cannot see. */}
+      {isAdmin && shadow.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "8px 12px", background: "#12100c", border: "1px solid #3f2d1a", borderRadius: 4, color: "#94a3b8", fontSize: 11, lineHeight: 1.5, maxWidth: 760 }}>
+          <span style={{ color: "#f59e0b", fontWeight: 700 }}>{shadow.length} withheld</span>{" "}
+          {shadow.length === 1 ? "story is" : "stories are"} shown below marked{" "}
+          <span style={{ color: "#f59e0b", fontWeight: 700, fontFamily: "monospace" }}>WITHHELD</span>{" "}
+          — they cleared the ranker at 60+ but scored under 75 on the vet&apos;s second read.
+          Expand a row to read why. Not visible to anyone but you.
+        </div>
+      )}
+
+      {sorted.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 10 }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: "monospace" }}>
             <span style={{ color: "#64748b", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
@@ -1019,7 +1180,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16, alignItems: "stretch" }}>
         <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-          {rows.length === 0 ? (
+          {sorted.length === 0 ? (
             <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 3, padding: "48px 24px", textAlign: "center", color: "#555", fontFamily: "monospace", fontSize: 13 }}>
               {loading ? "Loading…" : "No stories are being showcased yet."}
             </div>
@@ -1068,7 +1229,13 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                 <tbody>
                   {sorted.map((r, i) => {
                     const live = isLive(r);
-                    const baseBg = i % 2 === 0 ? "#1e293b" : "#162032";
+                    const withheld = isWithheld(r);
+                    // Withheld rows get their own darker stripe rather than the
+                    // published rows' blue, so the two are separable at a glance
+                    // while still sitting in one date-ordered list.
+                    const baseBg = withheld
+                      ? (i % 2 === 0 ? "#1c1710" : "#161209")
+                      : (i % 2 === 0 ? "#1e293b" : "#162032");
                     const st = r.story || {};
                     const isStoryOpen = openStory.has(r.showcase_id);
                     const vet = st.vet_verdict ? VET_STYLE[st.vet_verdict] : null;
@@ -1076,7 +1243,13 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                       <Fragment key={r.showcase_id}>
                         <tr
                           onClick={() => onSelect && onSelect(r.symbol)}
-                          style={{ cursor: "pointer", background: baseBg }}
+                          style={{
+                            cursor: "pointer",
+                            background: baseBg,
+                            // Muted, not hidden — still readable, but never
+                            // mistaken for a published pick when skimming.
+                            opacity: withheld ? 0.82 : 1,
+                          }}
                         >
                           {/* Stock — caret + ticker + name + index badge */}
                           <td style={{ ...S.td, paddingLeft: 22 }}>
@@ -1123,6 +1296,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                                 </Link>
                                 <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
                                   <IndexBadge index={r.ftse_index} full />
+                                  <WithheldBadge r={r} />
                                   {vet && (
                                     <span style={{ fontSize: 8.5, fontWeight: 700, color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "capitalize" }}>
                                       {st.vet_verdict}
@@ -1133,9 +1307,15 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                             </div>
                           </td>
 
-                          {/* AI significance score */}
+                          {/* Pass 1 — the ranker's score */}
+                          <td style={{ ...S.td, textAlign: "center" }}>
+                            <RankScore value={st.llm_score} />
+                          </td>
+
+                          {/* Pass 2 — the vet's score, the one that publishes */}
                           <td style={{ ...S.td, textAlign: "center" }}>
                             <ScoreCell value={st.vet_score} bare />
+                            <VetDelta llm={st.llm_score} vet={st.vet_score} />
                           </td>
 
                           {/* Price */}
@@ -1224,6 +1404,23 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                                 </a>
                                 {isAdmin && (
                                   <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
+                                    {/* Override the vet. Publishes to the PUBLIC
+                                        page, so it is confirmed — every other
+                                        button here is reversible, this one is
+                                        outward-facing. */}
+                                    {isWithheld(r) && (
+                                      <button
+                                        onClick={() => {
+                                          if (window.confirm(`Publish ${r.symbol.replace(".L", "")} to the public page, overriding the vet's score of ${st.vet_score ?? "none"}?`)) {
+                                            setStatus(r.showcase_id, "approved");
+                                          }
+                                        }}
+                                        title="Override the vet and publish this story to the public page"
+                                        style={btn("#10b981")}
+                                      >
+                                        Publish anyway
+                                      </button>
+                                    )}
                                     <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
                                   </span>
                                 )}
@@ -1233,7 +1430,23 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                               <div style={{ marginTop: 12, paddingLeft: 4, display: "flex", flexDirection: "column", gap: 14, whiteSpace: "normal", maxWidth: 760 }}>
                                 <AnalysisRow label="Thesis" text={st.llm_thesis} color="#60a5fa" />
                                 <AnalysisRow label="Risks" text={st.llm_risks} color="#f59e0b" />
-                                {vet && <AnalysisRow label={`AI vet · ${st.vet_verdict}`} text={st.vet_rationale} color={vet.color} />}
+                                {/* On a withheld row this IS the "why did it fail" text, so it is
+    labelled as such rather than as generic commentary. */}
+{vetFailed(r) ? (
+  <AnalysisRow
+    label="Vet call failed"
+    text="Withheld because the vet produced no score — an API failure, not a judgement on the story."
+    color="#f87171"
+  />
+) : (
+  vet && (
+    <AnalysisRow
+      label={isWithheld(r) ? `Why withheld · vet ${st.vet_score}` : `AI vet · ${st.vet_verdict}`}
+      text={st.vet_rationale}
+      color={isWithheld(r) ? "#f59e0b" : vet.color}
+    />
+  )
+)}
                                 {r.fwd_multiple != null && r.fwd_quote && (
                                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                                     <AnalysisRow
@@ -1327,7 +1540,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
         <LazySection minHeight={520}>
           <NewsPanel
             symbol={selectedNewsSymbol}
-            name={rows.find((r) => r.symbol === selectedNewsSymbol)?.name || (selectedNewsSymbol ? selectedNewsSymbol.replace(".L", "") : "")}
+            name={sorted.find((r) => r.symbol === selectedNewsSymbol)?.name || (selectedNewsSymbol ? selectedNewsSymbol.replace(".L", "") : "")}
             sideBySide={false}
           />
         </LazySection>

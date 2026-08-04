@@ -1466,6 +1466,27 @@ def list_pending():
     return _enrich(entries)
 
 
+@router.get("/shadow", dependencies=[Depends(require_admin_token)])
+def list_shadow():
+    """Admin — rows the vet scored but withheld (vet_score < HIGH_IMPACT_MIN_VET_SCORE).
+
+    Admin-only on purpose. These are the vet's own rejections, so putting them on
+    the public page would undo the thing the vet exists to do; the point here is
+    that its decisions are otherwise invisible — a shadow row appears in no UI at
+    all, only in the cron log. Ordered by vet_score DESC so the near-misses (the
+    band that actually decides whether 75 is the right floor) sort to the top.
+
+    A NULL vet_score means the vet call FAILED, not that the story scored zero
+    (see flag_high_impact_candidates). Those sort last and the UI labels them
+    separately — do not present them as low-conviction.
+    """
+    entries = _q(
+        "SELECT * FROM high_impact_rns WHERE status = 'shadow' "
+        "ORDER BY vet_score DESC NULLS LAST, flagged_at DESC"
+    )
+    return _enrich(entries)
+
+
 class StatusBody(BaseModel):
     status: str
 

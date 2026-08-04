@@ -772,6 +772,38 @@ def test_list_showcase_empty(client):
     assert r.json() == []
 
 
+def test_list_showcase_public_never_returns_shadow_rows(client):
+    """The public list must stay keyed on status='approved'. A shadow row is a
+    story the vet REJECTED — leaking it onto the public page would undo the one
+    thing the vet exists to do."""
+    with patch("main.query", return_value=[]) as q:
+        client.get("/api/showcase")
+    sql = q.call_args[0][0]
+    assert "status = 'approved'" in sql
+    assert "shadow" not in sql
+
+
+def test_list_shadow_is_admin_only(client):
+    """These are unpublished judgements about live companies. If the token guard
+    is ever dropped, every story the vet withheld becomes public — the exact
+    outcome the shadow status exists to prevent."""
+    r = client.get("/api/showcase/shadow", headers={"X-Admin-Token": "wrong"})
+    assert r.status_code in (401, 403)
+
+
+def test_list_shadow_selects_shadow_ordered_by_vet_score(client):
+    """Ordering is load-bearing, not cosmetic: the near-misses just under 75 are
+    the rows that inform whether the floor is set right, so they must sort first.
+    NULLS LAST keeps failed vet calls from squatting the top on a score they
+    never produced."""
+    with patch("main.query", return_value=[]) as q:
+        r = client.get("/api/showcase/shadow")
+    assert r.status_code == 200
+    sql = " ".join(q.call_args[0][0].split())
+    assert "status = 'shadow'" in sql
+    assert "ORDER BY vet_score DESC NULLS LAST" in sql
+
+
 # ── _vet_candidate wiring ─────────────────────────────────────────────────────
 def _vet_json(**kw):
     base = {"verdict": "caution", "confidence": "medium", "rationale": "low base",
