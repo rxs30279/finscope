@@ -40,6 +40,70 @@ def test_requires_admin_token():
     assert bare.get("/api/gates").status_code == 403
 
 
+# ── population facet ──────────────────────────────────────────────────────────
+# The 2026-08-04 audit found the header numbers were describing the SQL floors
+# rather than the gates: the guidance gate showed 9 lifetime blocks and not one
+# was load-bearing, because "evaluate wide, block narrow" records a verdict for
+# every ranked row including those that die at a floor before any gate runs.
+def _flaggable_row(rns_id, **over):
+    """A row that clears every non-gate floor, so it really reached the gates."""
+    row = _matrix_row(rns_id)
+    row.update({"llm_action": "watch", "llm_score": 78, "category": "final_results"})
+    row.update(over)
+    return row
+
+
+_BLOCKED = lambda i: [  # noqa: E731
+    {"rns_id": i, "gate": "guidance", "state": "block", "reason": "reiterated_vs_consensus_below",
+     "evidence": {"metric": "x"}, "mode": "armed"},
+]
+
+
+def test_population_all_counts_rows_no_gate_could_have_decided(client):
+    # Row 2 never reached a gate (no llm_action -> fails the action floor), but
+    # carries a stored block. The default view counts it, and says so.
+    rows = [_flaggable_row(1), _flaggable_row(2, llm_action=None)]
+    with patch.object(gates, "_q", side_effect=_fake_q(rows, _BLOCKED(1) + _BLOCKED(2))):
+        body = client.get("/api/gates").json()
+    assert body["population"] == "all"
+    assert body["cohort_n"] == 2
+    assert body["population_n"] == 2
+    assert body["reached_gates_n"] == 1       # always reported, even on "all"
+    assert body["header"]["guidance"]["n"] == 2
+    assert body["header"]["guidance"]["fire_rate"] == 1.0
+
+
+def test_population_reached_gates_narrows_the_denominator(client):
+    rows = [_flaggable_row(1), _flaggable_row(2, llm_action=None)]
+    with patch.object(gates, "_q", side_effect=_fake_q(rows, _BLOCKED(1) + _BLOCKED(2))):
+        body = client.get("/api/gates?population=reached_gates").json()
+    assert body["population"] == "reached_gates"
+    assert body["population_n"] == 1
+    assert body["header"]["guidance"]["n"] == 1
+    # Both rows are still DISPLAYED — this facet moves the denominator only.
+    assert len(body["rows"]) == 2
+
+
+def test_population_reached_gates_can_empty_the_stats_without_erroring(client):
+    # The real shape of the finding: every block on record died at a floor, so
+    # the honest fire rate is over n=0. Must not ZeroDivisionError.
+    rows = [_flaggable_row(1, llm_action=None)]
+    with patch.object(gates, "_q", side_effect=_fake_q(rows, _BLOCKED(1))):
+        body = client.get("/api/gates?population=reached_gates").json()
+    assert body["population_n"] == 0
+    assert body["header"]["guidance"]["n"] == 0
+    assert body["header"]["guidance"]["fire_rate"] is None
+    assert len(body["rows"]) == 1
+
+
+def test_unknown_population_falls_back_to_all(client):
+    rows = [_flaggable_row(1, llm_action=None)]
+    with patch.object(gates, "_q", side_effect=_fake_q(rows, _BLOCKED(1))):
+        body = client.get("/api/gates?population=nonsense").json()
+    assert body["population"] == "all"
+    assert body["header"]["guidance"]["n"] == 1
+
+
 def test_matrix_shape_and_default_adjudicated_filter(client):
     rows = [_matrix_row(1), _matrix_row(2)]
     evals = [

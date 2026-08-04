@@ -67,6 +67,10 @@ interface MatrixResponse {
   window: string;
   cohort: string;
   show_all: boolean;
+  population: string;
+  population_n: number;
+  cohort_n: number;
+  reached_gates_n: number;
   gates: GateInfo[];
   floor_labels: Record<string, string>;
   header: Record<string, GateHeaderStats>;
@@ -75,6 +79,11 @@ interface MatrixResponse {
 
 type Window_ = "latest" | "7d" | "30d";
 type Cohort = "category" | "in_universe" | "all";
+// Which rows the HEADER numbers are averaged over. Displayed rows never change.
+// "reached_gates" keeps only rows that cleared every non-gate floor, i.e. rows
+// where the gate actually decided something — see list_matrix's `population`
+// note in backend/gates.py for why the "all" numbers mislead.
+type Population = "all" | "reached_gates";
 
 // Mirrors showcase.py's HIGH_IMPACT_VET_ENTRY_SCORE — used to color the score
 // cell red instead of duplicating "score" in the floor column.
@@ -285,11 +294,14 @@ export default function GatesClient() {
   const [win, setWin] = useState<Window_>("latest");
   const [cohort, setCohort] = useState<Cohort>("category");
   const [showAll, setShowAll] = useState(false);
+  const [population, setPopulation] = useState<Population>("all");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const qs = new URLSearchParams({ window: win, cohort, show_all: String(showAll) });
+      const qs = new URLSearchParams({
+        window: win, cohort, show_all: String(showAll), population,
+      });
       const res = await fetch(`${API}/gates?${qs}`, { headers: adminHeaders() });
       if (res.status === 403) {
         setError("Admin token rejected — re-unlock with /?admin=<token>.");
@@ -307,7 +319,7 @@ export default function GatesClient() {
     } finally {
       setLoading(false);
     }
-  }, [win, cohort, showAll]);
+  }, [win, cohort, showAll, population]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -377,11 +389,47 @@ export default function GatesClient() {
           <button style={controlBtn(!showAll)} onClick={() => setShowAll(false)}>adjudicated only</button>
           <button style={controlBtn(showAll)} onClick={() => setShowAll(true)}>show all</button>
         </ControlGroup>
+        <ControlGroup label="stats over">
+          <button style={controlBtn(population === "all")} onClick={() => setPopulation("all")}>
+            every row
+          </button>
+          <button
+            style={controlBtn(population === "reached_gates")}
+            onClick={() => setPopulation("reached_gates")}
+            title="Only rows that cleared every non-gate floor, so the gate actually decided something. Approximate on long windows — floors are evaluated at request time, not as at the announcement."
+          >
+            reached the gates
+          </button>
+        </ControlGroup>
       </div>
 
       {/* ── Per-gate header stats ────────────────────────────────────────── */}
       {data && (
-        <div style={{ ...card, display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ ...card }}>
+          {/* The denominator, stated. A gate can only decide a row that cleared
+              every non-gate floor first, and on a normal day most rows do not —
+              so "fire rate" over every row measures the floors, not the gate. */}
+          <div style={{ fontFamily: "monospace", fontSize: 11, color: colors.textDim, marginBottom: 10 }}>
+            {data.population === "reached_gates" ? (
+              <>
+                stats over the <strong style={{ color: colors.text }}>{data.population_n}</strong> of{" "}
+                {data.cohort_n} rows that reached the gates — the rest died at a
+                score/leverage/margin/dedupe floor first, so no gate decided them.{" "}
+                <span style={{ color: colors.amber }}>
+                  Floors are evaluated now, not as at the announcement; treat long windows as approximate.
+                </span>
+              </>
+            ) : (
+              <>
+                stats over all <strong style={{ color: colors.text }}>{data.cohort_n}</strong> rows in the
+                cohort, of which only{" "}
+                <strong style={{ color: colors.text }}>{data.reached_gates_n}</strong> reached a gate — the
+                rest died at a score/leverage/margin/dedupe floor first, so these numbers describe the
+                floors as much as the gates. Switch to “reached the gates” for what the gates decided.
+              </>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           {data.gates.map((g) => {
             const h = data.header[g.name];
             const harm =
@@ -428,6 +476,7 @@ export default function GatesClient() {
               </div>
             );
           })}
+          </div>
         </div>
       )}
 

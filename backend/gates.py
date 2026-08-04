@@ -801,7 +801,8 @@ _LATEST_SESSION_CLAUSE = """
 
 
 @router.get("", dependencies=[Depends(require_admin_token)])
-def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool = False):
+def list_matrix(window: str = "latest", cohort: str = "category",
+                show_all: bool = False, population: str = "all"):
     """The gate matrix: one row per candidate (newest first), one column per
     gate, plus 1d/1w returns and a per-gate header (fire rate, amber rate,
     blocked-vs-passed excess). Private — see /gates in the frontend.
@@ -813,6 +814,35 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
     show_all: include rows where every gate came back n/a (default False —
               most rows on a quiet day carry nothing for any gate to judge,
               and a page that's mostly blank teaches you to stop opening it)
+    population: which rows the HEADER statistics are computed over. Displayed
+              rows are unaffected either way.
+              all           — every row in the cohort (default, unchanged).
+              reached_gates — only rows that cleared every non-gate floor and
+                              so actually reached blocking_reason() inside
+                              flag_high_impact_candidates.
+
+    Why `population` exists (2026-08-04). "Evaluate wide, block narrow" means
+    record_gate_evaluations writes a verdict for every ranked Tier A/B row,
+    including rows that die at the score or leverage floor before any gate can
+    matter. A stored `block` on such a row is a diagnostic record, not a
+    decision the gate made. Averaging them together produced a genuinely
+    misleading page: on the audit that prompted this, the guidance gate showed
+    9 lifetime blocks and NONE of them was load-bearing — 7 scored below the
+    vet entry floor and the other 2 were excluded by dedup and by
+    leverage/margin. Fire rate, amber rate and blocked-vs-passed excess were
+    all being computed over a population where the gate could not bind, which
+    is the plan's own §4 "calibrating on the wide pool" warning happening in
+    practice. This does not change a single stored verdict; it only lets the
+    denominator match the question.
+
+    CAVEAT, and it is not small: _public_flag_fails runs at REQUEST time
+    against today's dedupe window and the CURRENT ttm_financials row, not the
+    state at announcement time. Over a 30d window a symbol flagged after the
+    announcement now reads `dedup` when it did not then, and a company whose
+    margin has since moved can cross the floor either way. Good enough for "was
+    this row anywhere near flaggable"; NOT a point-in-time reconstruction, and
+    it must not be quoted as one. Making it exact means stamping the floor
+    outcome at evaluation time, which is a schema change.
     """
     from showcase import HIGH_IMPACT_CATEGORIES, HIGH_IMPACT_DEDUPE_DAYS, PEER_MARGIN_MIN_GROUP
 
@@ -852,12 +882,54 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
             "evidence": e["evidence"], "mode": e["mode"],
         }
 
-    # Fire rate / amber rate are measured over the whole cohort for this
+    # Symbols with another flag in the dedupe window — same rule
+    # flag_high_impact_candidates uses (NOT EXISTS ... flagged_at >= NOW() - N
+    # days). A row's own entry doesn't count against it: only rows with a NULL
+    # vet_verdict get checked, and a row already in high_impact_rns has one.
+    # The status filter must stay in step with the candidate SQL: shadow rows
+    # (vetted, below the publish floor) do not consume a symbol's dedupe window,
+    # or a 62 on Monday would lock out a 90 on Wednesday.
+    #
+    # Computed here rather than after the display filter because `population`
+    # below needs the floor diagnostics for every row in the cohort, not just
+    # the displayed ones. Widening the symbol set is harmless — it is a
+    # membership test, and a superset costs one slightly larger IN list.
+    symbols = list({r["symbol"] for r in rows})
+    recently_flagged = {
+        row["symbol"] for row in _q(
+            "SELECT DISTINCT symbol FROM high_impact_rns "
+            "WHERE symbol = ANY(%s) AND status <> 'shadow' "
+            "AND flagged_at >= NOW() - (%s || ' days')::interval",
+            (symbols, HIGH_IMPACT_DEDUPE_DAYS),
+        )
+    } if symbols else set()
+
+    # A row with a vet_verdict cleared every floor by definition — it reached
+    # the vet, which is downstream of the gates.
+    flag_fails: dict[int, list] = {
+        r["rns_id"]: ([] if r.get("vet_verdict") else _public_flag_fails(r, recently_flagged))
+        for r in rows
+    }
+
+    # Captured before the show_all filter below rebinds `rows`.
+    cohort_n = len(rows)
+    reached = [r for r in rows if not flag_fails[r["rns_id"]]]
+    # Always reported, whichever population is selected — the gap between this
+    # and cohort_n is the point, and a reader on the default view needs to see
+    # it to know the default is worth switching away from.
+    reached_n = len(reached)
+    if population == "reached_gates":
+        stat_rows = reached
+    else:
+        population = "all"
+        stat_rows = rows
+
+    # Fire rate / amber rate are measured over the whole `population` for this
     # window, BEFORE the "adjudicated only" display filter below — a gate's
     # health is about what it saw, not what a reader chose to look at.
     header: dict[str, dict] = {}
     for g in GATES:
-        row_gates = [by_row.get(r["rns_id"], {}).get(g.name, {}) for r in rows]
+        row_gates = [by_row.get(r["rns_id"], {}).get(g.name, {}) for r in stat_rows]
         states = [rg.get("state") for rg in row_gates]
         n = len(states)
         na_reasons = Counter(rg.get("reason") for rg in row_gates if rg.get("state") == "n/a" and rg.get("reason"))
@@ -875,23 +947,6 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
             r for r in rows
             if any(by_row.get(r["rns_id"], {}).get(g.name, {}).get("state") in ("pass", "block") for g in GATES)
         ]
-
-    # Symbols with another flag in the dedupe window — same rule
-    # flag_high_impact_candidates uses (NOT EXISTS ... flagged_at >= NOW() - N
-    # days). A row's own entry doesn't count against it: only rows with a NULL
-    # vet_verdict get checked below, and a row already in high_impact_rns has one.
-    # The status filter must stay in step with the candidate SQL: shadow rows
-    # (vetted, below the publish floor) do not consume a symbol's dedupe window,
-    # or a 62 on Monday would lock out a 90 on Wednesday.
-    symbols = list({r["symbol"] for r in rows})
-    recently_flagged = {
-        row["symbol"] for row in _q(
-            "SELECT DISTINCT symbol FROM high_impact_rns "
-            "WHERE symbol = ANY(%s) AND status <> 'shadow' "
-            "AND flagged_at >= NOW() - (%s || ' days')::interval",
-            (symbols, HIGH_IMPACT_DEDUPE_DAYS),
-        )
-    } if symbols else set()
 
     bench_get = _benchmark_return_cache()
     out_rows = []
@@ -914,9 +969,7 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
             # "never vetted" from "vetted and rejected", which vet_score alone
             # cannot when the vet call itself failed (NULL score, shadow row).
             "showcase_status": r.get("showcase_status"),
-            "public_flag_fail": (
-                [] if r.get("vet_verdict") else _public_flag_fails(r, recently_flagged)
-            ),
+            "public_flag_fail": flag_fails[r["rns_id"]],
             "gates": by_row.get(r["rns_id"], {}),
             "returns": _row_returns(r["symbol"], r["published_at"], r["ftse_index"], bench_get),
         })
@@ -924,10 +977,17 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
     # Blocked-vs-passed mean 1d excess, over the displayed rows (where returns
     # were actually computed) — a gate whose blocked rows outperform its
     # passed rows is doing harm, and this is the number that would show it.
+    #
+    # `population` applies here too, or the header would mix denominators: fire
+    # rate over the load-bearing rows and return impact over everything. The
+    # show_all filter costs nothing here — it only drops rows where EVERY gate
+    # is n/a, and such a row contributes to neither list by construction.
+    stat_ids = {r["rns_id"] for r in stat_rows}
+    ret_rows = [o for o in out_rows if o["rns_id"] in stat_ids]
     for g in GATES:
-        blocked = [o["returns"]["excess_1d"] for o in out_rows
+        blocked = [o["returns"]["excess_1d"] for o in ret_rows
                    if o["gates"].get(g.name, {}).get("state") == "block" and o["returns"]["excess_1d"] is not None]
-        passed = [o["returns"]["excess_1d"] for o in out_rows
+        passed = [o["returns"]["excess_1d"] for o in ret_rows
                   if o["gates"].get(g.name, {}).get("state") == "pass" and o["returns"]["excess_1d"] is not None]
         header[g.name]["blocked_mean_excess_1d"] = round(sum(blocked) / len(blocked), 2) if blocked else None
         header[g.name]["passed_mean_excess_1d"] = round(sum(passed) / len(passed), 2) if passed else None
@@ -937,6 +997,14 @@ def list_matrix(window: str = "latest", cohort: str = "category", show_all: bool
         "window": window,
         "cohort": cohort,
         "show_all": show_all,
+        "population": population,
+        # How many rows the header numbers rest on, and how many the cohort
+        # holds in total. A large gap is the finding, not a footnote: it is the
+        # difference between what a gate saw and what it could ever have
+        # decided.
+        "population_n": len(stat_rows),
+        "cohort_n": cohort_n,
+        "reached_gates_n": reached_n,
         "gates": [{"name": g.name, "description": g.description, "mode": g.mode} for g in GATES],
         "floor_labels": _FLOOR_LABEL,
         "header": header,
