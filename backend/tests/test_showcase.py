@@ -1077,3 +1077,102 @@ def test_vet_prompt_carries_price_context_and_neutral_framing():
     # would be calibrating a direction on zero evidence.
     system = showcase._vet_messages(_cand(), [])[0]["content"]
     assert "context, not as a verdict in either direction" in system
+
+
+# ── Reporting currency ────────────────────────────────────────────────────────
+_USD_ANNUAL = [
+    {"fiscal_year": 2024, "period_end_date": "2024-12-31",
+     "revenue": 284_000_000_000, "operating_income": 30_000_000_000,
+     "net_income": 16_000_000_000, "eps_diluted": 2.63,
+     "fcf": 20_000_000_000, "net_debt": 5_000_000_000,
+     "total_equity": 180_000_000_000},
+]
+
+
+def test_vet_prompt_renders_annuals_in_the_reporting_currency():
+    """A dollar filer's series must not be labelled in pounds.
+
+    annual_financials is denominated in company_metadata.financial_currency,
+    which is USD for Shell/BP/AZN. Rendering it as "£284,000.0m" put a figure
+    in front of the model that appears nowhere in the announcement it is being
+    told to check the series against.
+    """
+    user = showcase._vet_messages(
+        _cand(financial_currency="USD"), _USD_ANNUAL
+    )[1]["content"]
+    assert "revenue $284,000.0m" in user
+    assert "£284,000.0m" not in user
+    assert "net debt $5,000.0m" in user
+    # EPS: the x100 pence conversion is a GBP convention. $2.63 is not 263.0p.
+    assert "diluted EPS $2.63" in user
+    assert "263.0p" not in user
+    # The block states its own units, so the model can spot a mismatch against
+    # an announcement that quotes something else.
+    assert "reported in\nUSD ($)" in user
+
+
+def test_vet_prompt_gbp_still_renders_pounds_and_pence():
+    user = showcase._vet_messages(
+        _cand(financial_currency="GBP"),
+        [{"fiscal_year": 2024, "period_end_date": "2024-03-31",
+          "revenue": 359_745_000, "eps_diluted": 0.167}],
+    )[1]["content"]
+    assert "revenue £359.7m" in user
+    assert "diluted EPS 16.7p" in user
+
+
+def test_vet_prompt_unmapped_currency_uses_the_bare_code():
+    # "$" alone cannot separate USD from CAD/AUD, so anything outside the
+    # symbol map must name itself.
+    user = showcase._vet_messages(
+        _cand(financial_currency="CAD"), _USD_ANNUAL
+    )[1]["content"]
+    assert "revenue CAD 284,000.0m" in user
+    assert "$284,000.0m" not in user
+
+
+def test_vet_prompt_missing_currency_is_labelled_an_assumption():
+    # GBP is the right default for a UK-listed universe, but it is a guess and
+    # the prompt says so rather than passing it off as fact.
+    user = showcase._vet_messages(_cand(), _USD_ANNUAL)[1]["content"]
+    assert "revenue £284,000.0m" in user
+    assert "reporting currency not on file, assumed" in user
+
+
+# ── Score bands ───────────────────────────────────────────────────────────────
+def test_vet_prompt_score_bands_agree_with_the_publish_floor():
+    """The bands must not straddle HIGH_IMPACT_MIN_VET_SCORE.
+
+    Regression on a real contradiction: the system prompt called 60-79
+    "positive but carrying a catch a reader must be told" while the JSON block
+    called 75+ "you found nothing a reader would need warning about". 75 is the
+    publish floor, so the one boundary that decides publication was described
+    two incompatible ways.
+    """
+    msgs = showcase._vet_messages(_cand(), [])
+    system, user = msgs[0]["content"], msgs[1]["content"]
+    pub = showcase.HIGH_IMPACT_MIN_VET_SCORE
+    ex_cap = showcase._VET_VERDICT_SCORE_CAP["exclude"]
+    ca_cap = showcase._VET_VERDICT_SCORE_CAP["caution"]
+
+    # Bands are contiguous and derived from the thresholds they must match.
+    assert f"{pub} and above means" in system
+    assert f"60-{pub - 1} means positive but carrying a catch" in system
+    assert f"{ex_cap + 1}-59 means unproven" in system
+    assert f"{ex_cap} and below means" in system
+    # The JSON block describes the same boundary the same way.
+    assert f"A score of {pub}+ asserts you found no" in user
+    assert f"60-{pub - 1} is\n              the band for a positive case that DOES carry" in user
+    # The old wording, in either passage, is the bug.
+    assert "80+" not in system
+    assert "60-79" not in system and "60-79" not in user
+
+    # A 'caution' can never reach the publish floor — the caps and the floor
+    # are one system, so if that ceases to hold the prompt above is misleading
+    # about what the verdict costs.
+    assert ca_cap < pub
+    assert ex_cap < pub
+    # Prompt caps and the Python enforcement are the same numbers.
+    assert f"cannot carry a score above {ex_cap}" in system
+    assert f"a 'caution' cannot exceed {ca_cap}" in system
+    assert f"exclude <= {ex_cap}" in user and f"caution <= {ca_cap}" in user

@@ -286,10 +286,44 @@ def _annual_history(symbol: Optional[str], before=None, years: int = 5) -> list[
     return list(reversed(rows))
 
 
-def _fmt_money_m(v) -> str:
+# Reporting currency of the annual_financials series. company_metadata's
+# financial_currency is USD for the multinationals that file in dollars (Shell,
+# BP, AZN) — prices.py:592 draws exactly this distinction for market cap, and
+# news.py already threads it into its own prompt. Hardcoding "£" here mislabelled
+# every one of those rows inside a prompt that then instructs the model to
+# compare the series against the announcement's own figures "carefully": the
+# announcement says $40,000m, the context said £40,000.0m, and nothing told the
+# model they were the same number.
+#
+# Symbol only where it is unambiguous. "$" alone cannot separate USD from
+# CAD/AUD, so anything outside this map renders as a bare code ("CAD 40.0m").
+_CCY_SYMBOL = {"GBP": "£", "USD": "$", "EUR": "€"}
+
+
+def _ccy(currency: Optional[str]) -> str:
+    """Prefix for a money figure in `currency`. Falls back to "£" when the
+    reporting currency is not on file — the universe is UK-listed, so GBP is the
+    right assumption, and _annual_lines labels it as an assumption rather than
+    letting it pass as fact."""
+    code = (currency or "").upper().strip()
+    if not code:
+        return "£"
+    return _CCY_SYMBOL.get(code) or f"{code} "
+
+
+def _ccy_label(currency: Optional[str]) -> str:
+    """How the annual block announces its own units to the model."""
+    code = (currency or "").upper().strip()
+    if not code:
+        return "GBP (£) — reporting currency not on file, assumed"
+    sym = _CCY_SYMBOL.get(code)
+    return f"{code} ({sym})" if sym else code
+
+
+def _fmt_money_m(v, ccy: str = "£") -> str:
     if v is None:
         return "n/a"
-    return f"£{float(v) / 1e6:,.1f}m"
+    return f"{ccy}{float(v) / 1e6:,.1f}m"
 
 
 def _fmt_pct1(v) -> str:
@@ -305,7 +339,23 @@ def _fmt_shares_m(v) -> str:
     return f"{float(v) / 1e6:,.1f}m"
 
 
-def _fmt_net_debt_m(v) -> str:
+def _fmt_eps(v, currency: Optional[str] = None) -> str:
+    """Diluted EPS in the unit the company's own announcement quotes it in.
+
+    Stored as a per-share amount in the reporting currency (0.167 = 16.7p for a
+    GBP filer). The x100 pence conversion is a GBP convention: applied to a
+    dollar filer it renders $3.50 as "350.0p", a figure that appears nowhere in
+    the announcement the model is being asked to check the series against.
+    """
+    if v is None:
+        return "n/a"
+    code = (currency or "GBP").upper().strip() or "GBP"
+    if code == "GBP":
+        return f"{float(v) * 100:.1f}p"
+    return f"{_ccy(code)}{float(v):.2f}"
+
+
+def _fmt_net_debt_m(v, ccy: str = "£") -> str:
     """Net cash reads as net cash, never as negative net debt.
 
     Mirrors rns_llm._format_net_debt. "net debt £-198.6m" is a double negative
@@ -321,11 +371,11 @@ def _fmt_net_debt_m(v) -> str:
         return "net debt n/a"
     nd = float(v)
     if nd < 0:
-        return f"net cash {_fmt_money_m(-nd)}"
-    return f"net debt {_fmt_money_m(nd)}"
+        return f"net cash {_fmt_money_m(-nd, ccy)}"
+    return f"net debt {_fmt_money_m(nd, ccy)}"
 
 
-def _annual_lines(hist: list[dict]) -> str:
+def _annual_lines(hist: list[dict], currency: Optional[str] = None) -> str:
     """Render the annual series as prompt lines the vet can do arithmetic on.
 
     Two lines per year rather than one. The single-line version carried only
@@ -338,19 +388,19 @@ def _annual_lines(hist: list[dict]) -> str:
     """
     if not hist:
         return "  (no stored annual financials for this company)"
+    ccy = _ccy(currency)
     lines = []
     for h in hist:
-        eps = h.get("eps_diluted")
-        eps_s = f"{float(eps) * 100:.1f}p" if eps is not None else "n/a"
+        eps_s = _fmt_eps(h.get("eps_diluted"), currency)
         lines.append(
-            f"  FY ended {h['period_end_date']}: revenue {_fmt_money_m(h.get('revenue'))}, "
-            f"operating income {_fmt_money_m(h.get('operating_income'))}, "
-            f"net income {_fmt_money_m(h.get('net_income'))}, diluted EPS {eps_s}"
+            f"  FY ended {h['period_end_date']}: revenue {_fmt_money_m(h.get('revenue'), ccy)}, "
+            f"operating income {_fmt_money_m(h.get('operating_income'), ccy)}, "
+            f"net income {_fmt_money_m(h.get('net_income'), ccy)}, diluted EPS {eps_s}"
         )
         lines.append(
-            f"      FCF {_fmt_money_m(h.get('fcf'))}, "
-            f"{_fmt_net_debt_m(h.get('net_debt'))}, "
-            f"equity {_fmt_money_m(h.get('total_equity'))}, "
+            f"      FCF {_fmt_money_m(h.get('fcf'), ccy)}, "
+            f"{_fmt_net_debt_m(h.get('net_debt'), ccy)}, "
+            f"equity {_fmt_money_m(h.get('total_equity'), ccy)}, "
             f"diluted shares {_fmt_shares_m(h.get('shares_diluted'))}, "
             f"op margin {_fmt_pct1(h.get('operating_margin'))}, "
             f"net margin {_fmt_pct1(h.get('net_income_margin'))}, "
@@ -443,12 +493,31 @@ def _price_context(symbol: Optional[str], before=None) -> str:
     return f"  1 month {_fmt_pct(p.get('chg_1m'))}, 6 months {_fmt_pct(p.get('chg_6m'))}"
 
 
+# Verdict/score agreement, enforced in _clean_vet_score AND stated in the prompt
+# below — which is why it is defined up here rather than next to its enforcer.
+# Both numbers used to be typed out by hand in two prose passages and one JSON
+# schema block, and they drifted: see the band comment in _vet_messages.
+_VET_VERDICT_SCORE_CAP = {"exclude": 40, "caution": 74}
+
+
 def _vet_messages(
     cand: dict,
     annual: Optional[list[dict]] = None,
     body_text: Optional[str] = None,
     price_context: Optional[str] = None,
 ) -> list[dict]:
+    # Score bands, derived from the thresholds they have to agree with rather
+    # than typed out. The bug this closes: the system prompt called 60-79
+    # "positive but carrying a catch a reader must be told" while the JSON block
+    # eight lines later called 75+ "you found nothing a reader would need
+    # warning about" — a direct contradiction, and it sat exactly on
+    # HIGH_IMPACT_MIN_VET_SCORE, the one boundary that decides publication.
+    # It drifted there when the publish floor moved off the entry score on
+    # 2026-08-03 and only some of the prose followed. Interpolating means the
+    # next threshold move cannot reopen it.
+    _pub = HIGH_IMPACT_MIN_VET_SCORE
+    _ex_cap = _VET_VERDICT_SCORE_CAP["exclude"]
+    _ca_cap = _VET_VERDICT_SCORE_CAP["caution"]
     system = (
         "You are a sceptical UK equity analyst vetting positive-looking RNS "
         "announcements for a 1-3 month long showcase of good investment cases. "
@@ -505,13 +574,17 @@ def _vet_messages(
         "made every deduction the checks above call for. It is NOT a measure "
         "of how much the share price is likely to move: a large move on a "
         "story you distrust scores LOW, and a modest, well-founded improvement "
-        "in a sound business scores well. Anchor it: 80+ means you would be "
-        "comfortable putting this in front of a reader as a good case with no "
-        "caveat you feel uneasy about; 60-79 means positive but carrying a "
-        "catch a reader must be told; below 40 means the positive framing does "
-        "not survive the checks. Fill verdict and rationale FIRST and let them "
-        "constrain the number — an 'exclude' verdict cannot carry a score above "
-        "40, and a 'caution' cannot exceed 74, whatever the headline says. "
+        "in a sound business scores well. Anchor it on these bands, which do "
+        f"not overlap: {_pub} and above means you would be comfortable putting "
+        "this in front of a reader as a good case, with no catch left "
+        f"unresolved; 60-{_pub - 1} means positive but carrying a catch the "
+        f"reader must be told; {_ex_cap + 1}-59 means unproven — the checks "
+        "above could not be completed on the material that decides the case; "
+        f"{_ex_cap} and below means the positive framing does not survive the "
+        "checks. Fill verdict and rationale FIRST and let them constrain the "
+        "number — an 'exclude' verdict cannot carry a score above "
+        f"{_ex_cap}, and a 'caution' cannot exceed {_ca_cap}, whatever the "
+        "headline says. "
         "Score down for what you could not check, not up: if the announcement "
         "text is unavailable, the base period cannot be established, or the "
         "figures needed are absent, the case is unproven and belongs below 50. "
@@ -537,10 +610,13 @@ Share price before this announcement (our own price history; the latest close
 predates today's news, so this is what the market already thought)
 {price_context if price_context is not None else "  (no price history)"}
 
-Historical annual financials (from our own database; NOTE: "revenue" here is
-TOTAL revenue, which can differ from the company's preferred headline metric
-such as net operating income — compare bases carefully)
-{_annual_lines(annual or [])}
+Historical annual financials (from our own database, reported in
+{_ccy_label(cand.get('financial_currency'))}. NOTE: "revenue" here is TOTAL
+revenue, which can differ from the company's preferred headline metric such as
+net operating income — compare bases carefully. Check the announcement's own
+currency before comparing any figure against this series; a UK-listed company
+may report in dollars or euros)
+{_annual_lines(annual or [], cand.get('financial_currency'))}
 
 Return a JSON object with exactly these fields, IN THIS ORDER — decide the
 verdict and write the rationale before you choose the score, so the number
@@ -551,10 +627,12 @@ follows the reasoning rather than the reasoning excusing the number:
   rationale   one or two sentences naming the specific catch, or why it's clean
   score       integer 0-100 — conviction that this is a genuinely positive
               1-3 month investment case, AFTER every deduction above. Not a
-              price-move forecast. Must agree with verdict: exclude <= 40,
-              caution <= 74, and a score of 75+ asserts you found nothing a
-              reader would need warning about. An unreadable announcement or an
-              unestablished base period belongs below 50.
+              price-move forecast. Must agree with verdict: exclude <= {_ex_cap},
+              caution <= {_ca_cap}. A score of {_pub}+ asserts you found no
+              catch a reader would still need warning about; 60-{_pub - 1} is
+              the band for a positive case that DOES carry such a catch. An
+              unreadable announcement or an unestablished base period belongs
+              below 50.
   low_base    an object (null fields where not stated — never estimate):
                 period                   "H1"|"H2"|"Q1"|"Q2"|"Q3"|"Q4"|null
                 metric                   "revenue"|"operating_income"|
@@ -596,9 +674,6 @@ Return JSON only — no preamble, no code fence."""
 # arithmetic is hard, which are the long ones. Watch the [showcase_vet] line in
 # the cron log: a cap is not a target, it bills what is generated.
 _VET_MAX_COMPLETION_TOKENS = int(os.environ.get("SHOWCASE_VET_MAX_TOKENS", "8000"))
-
-
-_VET_VERDICT_SCORE_CAP = {"exclude": 40, "caution": 74}
 
 
 def _clean_vet_score(raw, verdict: Optional[str]) -> Optional[int]:
@@ -1053,6 +1128,9 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_risks, r.llm_action,
                r.llm_sentiment, r.guidance_checks, r.earnings_quality,
                m.sector, m.industry, m.country, m.ftse_index,
+               -- Reporting currency of annual_financials, for the vet prompt.
+               -- USD for the dollar filers (Shell, BP, AZN); see _ccy.
+               m.financial_currency,
                t.market_cap, t.net_debt
         FROM rns_announcements r
         JOIN ttm_financials t ON t.company_symbol = r.symbol
