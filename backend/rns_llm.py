@@ -151,23 +151,45 @@ def _use_thinking(category: Optional[str]) -> bool:
 # waits, not in saturating the API, and a run that gets itself rate-limited
 # would trade a fast batch for a batch full of errors. Set to 1 to rank serially.
 #
-# Raised 5 -> 12 on 2026-07-31. Reasoning-mode calls are far slower than the
-# ~6.5s/call this was sized against: the recovery run that day measured 16 rows
+# History, because the number has moved twice and each move had a reason that
+# has since expired:
+#
+# 5 -> 12 on 2026-07-31. Reasoning-mode calls are far slower than the ~6.5s/call
+# this was originally sized against: the recovery run that day measured 16 rows
 # in 439s at 5 workers = ~137s per call. At that latency a 48-row morning takes
-# 48 * 137 / 5 = 22 min, and the batch starts ~07:01 against an 07:30 digest —
-# so the morning of 07-31 genuinely had not finished when the email went out.
-# 12 workers puts it at ~9 min (done ~07:11, ingest and summaries included),
-# which also clears the 07:12 send time [[project-email-digest]] is aiming at.
+# 48 * 137 / 5 = 22 min against an 07:30 digest, and the morning of 07-31
+# genuinely had not finished when the email went out. 12 put it at ~9 min.
 #
-# 12 is a ceiling set by the DB pool, not by ambition: _rank_one borrows at most
-# one connection at a time per thread, so 12 concurrent borrowers leaves 8 spare
-# in db.py's pool of 20. Going much past that needs DB_POOL_MAX raised in step.
-# Cost is unaffected — same tokens, just sent in parallel.
+# 12 -> 5 on 2026-08-04, because that justification died hours after it was
+# written: RNS_THINKING went to "off" the same afternoon, so _use_thinking()
+# now short-circuits False for every row and NOTHING in the ranker reasons. The
+# 137s/call regime the 12 was sized for no longer exists; at the ~6.5s baseline
+# a 48-row morning is ~62s at 5 workers, which clears the ~07:12 send with
+# minutes to spare. Note that 6.5s is the PRE-reasoning figure, not a
+# measurement of the current fast path — fast mode was only ever measured for
+# tokens (114-156), never for latency. If a morning runs long, that untested
+# assumption is the first thing to check.
 #
-# Rate limiting is the untested risk. If a morning comes back with errors in the
-# cron log, set RNS_RANK_WORKERS=5 in the Dokploy env to roll back without a
-# deploy (the var is otherwise unset, so this default is what applies).
-_RANK_WORKERS = max(1, int(os.environ.get("RNS_RANK_WORKERS", "12")))
+# Why come down at all, when the batch fits either way — two costs that were
+# worth paying for a 22-minute batch and are not worth paying for a 1-minute
+# one. Rate limiting is the bigger one and is still untested at 12. The other is
+# the DB pool: _rank_one borrows at most one connection per thread, so 12
+# concurrent borrowers left only 8 spare in db.py's pool of 20, and 5 leaves 15.
+#
+# Prefix caching is a THIRD, much weaker reason — worth recording mainly so it
+# is not rediscovered and overweighted. The ranker's system prompt is ~3,690
+# tokens and byte-identical across rows, so it is one big cacheable prefix; N
+# workers starting together all miss it because none has populated it yet, which
+# is 25% of a 48-row morning at 12 workers versus 10% at 5. But DeepSeek's cache
+# persists across requests for hours, so on a morning where the prompt has not
+# changed the prefix is already warm and every worker hits from the start. The
+# cold start only really bites on the first batch after a prompt edit. Worth a
+# few miss-tokens, not worth a decision on its own.
+#
+# Cost is unaffected either way — same tokens, just sent more or less in
+# parallel. Set RNS_RANK_WORKERS in the Dokploy env to override without a deploy
+# (the var is otherwise unset, so this default applies); 1 ranks serially.
+_RANK_WORKERS = max(1, int(os.environ.get("RNS_RANK_WORKERS", "5")))
 
 _client = None
 
