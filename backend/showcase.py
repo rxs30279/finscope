@@ -178,15 +178,46 @@ def _exec(sql, params=None) -> int:
         pool.putconn(conn)
 
 
+# LSE closing auction. An announcement released after this has NOT moved that
+# day's closing price, so the same-day close is still a clean pre-news baseline.
+# Released at or before it, the close already contains the reaction.
+_LSE_CLOSE_LOCAL = "16:30"
+
+
 def _story_close(symbol: str, published_at) -> Optional[float]:
-    """Close (pence) on or before the story date — the baseline for % since news."""
+    """Close (pence) from BEFORE the story broke — the baseline for % since news.
+
+    Keyed on the announcement's own release time, not on when this runs.
+
+    The previous rule was `date <= published_at::date`, which is only correct
+    while the flag happens before that day's close — true for a same-morning
+    cron, false the moment a row is flagged a day late. Then the announcement
+    day had already traded, so the query returned the close that CONTAINS the
+    story's own move and "% since news" measured the move from its own endpoint.
+    Five stored rows were wrong this way; CMCX.L 2026-07-01 rose 458 -> 650 on
+    the day and read as flat, and SYNT.L fell hard so its baseline FLATTERED it.
+    Direction of the error follows the direction of the move, so it is not
+    noise that averages out.
+
+    07:00 London is the standard RNS slot (1,646 of ~2,100 rows in a 30-day
+    window), but the spread across the day is real, so the boundary is the
+    release time rather than a blanket "always take the previous close" —
+    a genuinely post-close announcement did not move that day's close.
+    """
     rows = _q(
         """
-        SELECT close FROM price_history
-        WHERE symbol = %s AND date <= %s::date
-        ORDER BY date DESC LIMIT 1
+        WITH s AS (SELECT (%s AT TIME ZONE 'Europe/London') AS local_ts)
+        SELECT p.close
+        FROM price_history p, s
+        WHERE p.symbol = %s
+          AND (
+              p.date < s.local_ts::date
+              OR (p.date = s.local_ts::date AND s.local_ts::time > %s::time)
+          )
+        ORDER BY p.date DESC
+        LIMIT 1
         """,
-        (symbol, published_at),
+        (published_at, symbol, _LSE_CLOSE_LOCAL),
     )
     return float(rows[0]["close"]) if rows and rows[0]["close"] is not None else None
 

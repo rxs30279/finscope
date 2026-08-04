@@ -764,6 +764,47 @@ def test_status_bad_value(client):
     assert r.status_code == 422
 
 
+# ── _story_close baseline ─────────────────────────────────────────────────────
+def test_story_close_excludes_the_announcement_days_own_close():
+    """The baseline must come from before the story broke. The old rule
+    (date <= published_at::date) only held while the flag ran before that day's
+    close; a row flagged a day late got the close CONTAINING its own move, so
+    "% since news" measured the move from its own endpoint. CMCX.L rose
+    458 -> 650 on its story day and read as flat."""
+    with patch.object(showcase, "_q", return_value=[{"close": 620.0}]) as q:
+        showcase._story_close("ELIX.L", datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc))
+    sql = " ".join(q.call_args[0][0].split())
+    # The same-day close is admissible ONLY after the close time.
+    assert "p.date < s.local_ts::date" in sql
+    assert "s.local_ts::time > %s::time" in sql
+    # Regression guard on the exact rule that caused the bug.
+    assert "date <= %s::date" not in sql
+
+
+def test_story_close_boundary_is_the_lse_close_in_london_time():
+    """published_at is UTC and the table spans BST and GMT, so a fixed offset
+    would be an hour wrong for half the year. The cutoff is also the real
+    closing-auction time — an announcement released after it genuinely did not
+    move that day's close, and treating it as if it had would swap in a stale
+    baseline a full session early."""
+    assert showcase._LSE_CLOSE_LOCAL == "16:30"
+    with patch.object(showcase, "_q", return_value=[]) as q:
+        showcase._story_close("X.L", datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc))
+    sql = " ".join(q.call_args[0][0].split())
+    assert "AT TIME ZONE 'Europe/London'" in sql
+    params = q.call_args[0][1]
+    # The full timestamp is passed, not a date — the time of day IS the input.
+    assert params[0] == datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc)
+    assert params[1] == "X.L"
+    assert params[2] == showcase._LSE_CLOSE_LOCAL
+
+
+def test_story_close_returns_none_when_no_price_history():
+    """No baseline is better than a wrong one — _enrich leaves the % blank."""
+    with patch.object(showcase, "_q", return_value=[]):
+        assert showcase._story_close("NEW.L", datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc)) is None
+
+
 # ── list endpoint ─────────────────────────────────────────────────────────────
 def test_list_showcase_empty(client):
     with patch("main.query", return_value=[]):
