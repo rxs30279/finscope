@@ -701,18 +701,36 @@ def _benchmark_return_cache():
         key = (seg, entry_date, exit_date)
         if key in cache:
             return cache[key]
-        rows = _q(
-            """
-            SELECT AVG(p2.close / NULLIF(p1.close, 0) - 1) AS ret
-            FROM price_history p1
-            JOIN price_history p2 ON p2.symbol = p1.symbol AND p2.date = %s
-            JOIN company_metadata m ON m.symbol = p1.symbol AND m.is_active
-            WHERE p1.date = %s
-              AND (CASE WHEN COALESCE(m.ftse_index,'') ILIKE '%%AIM%%'
-                        THEN 'AIM' ELSE 'Main' END) = %s
-            """,
-            (exit_date, entry_date, seg),
-        )
+        if entry_date == exit_date:
+            # 1d horizon: entry and exit are the same trading day (raw is
+            # open->close intraday, per the comment above), so p1/p2 close-to-
+            # close would join each symbol's row to itself and read 0 for
+            # every row, always — not "no move", a structural no-op. Match
+            # `raw`'s own-day open->close instead.
+            rows = _q(
+                """
+                SELECT AVG(p1.close / NULLIF(p1.open, 0) - 1) AS ret
+                FROM price_history p1
+                JOIN company_metadata m ON m.symbol = p1.symbol AND m.is_active
+                WHERE p1.date = %s
+                  AND (CASE WHEN COALESCE(m.ftse_index,'') ILIKE '%%AIM%%'
+                            THEN 'AIM' ELSE 'Main' END) = %s
+                """,
+                (entry_date, seg),
+            )
+        else:
+            rows = _q(
+                """
+                SELECT AVG(p2.close / NULLIF(p1.close, 0) - 1) AS ret
+                FROM price_history p1
+                JOIN price_history p2 ON p2.symbol = p1.symbol AND p2.date = %s
+                JOIN company_metadata m ON m.symbol = p1.symbol AND m.is_active
+                WHERE p1.date = %s
+                  AND (CASE WHEN COALESCE(m.ftse_index,'') ILIKE '%%AIM%%'
+                            THEN 'AIM' ELSE 'Main' END) = %s
+                """,
+                (exit_date, entry_date, seg),
+            )
         val = float(rows[0]["ret"]) if rows and rows[0]["ret"] is not None else None
         cache[key] = val
         return val
