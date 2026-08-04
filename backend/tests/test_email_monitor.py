@@ -16,7 +16,10 @@ from main import app
 
 
 def _msg(email_id, event_types, sent_at=None, last_event_at=None, provider="resend",
-         recipient="someone@example.com", subject="RNS Digest"):
+         recipient="someone@example.com", subject="RNS Digest", counts=None):
+    """One grouped row. Serves both read models: `event_types` is what
+    _MSGS_SQL returns (for /emails), `event_counts` what _METRICS_SQL returns.
+    Counts default to one event per type; pass `counts` to model repeats."""
     now = datetime(2026, 7, 30, 9, 0, tzinfo=timezone.utc)
     return {
         "email_id": email_id,
@@ -29,8 +32,10 @@ def _msg(email_id, event_types, sent_at=None, last_event_at=None, provider="rese
         # In real data the send IS the first event, so mirror that by default;
         # the no-sent cases override it explicitly.
         "first_event_at": sent_at,
+        "email_created_at": sent_at,
         "last_event_at": last_event_at or now,
         "event_types": event_types,
+        "event_counts": {t: (counts or {}).get(t, 1) for t in (event_types or [])},
     }
 
 
@@ -176,14 +181,37 @@ def test_metrics_counts_messages_not_events_and_rolls_up_totals(monkeypatch):
         _msg("m4", ["email.sent", "email.delivery_delayed", "email.delivered"], sent_at=_at(1)),
     ])
     out = email_monitor.daily_metrics(days=3)
-    assert out["totals"] == {
-        "messages": 4, "delivered": 3, "opened": 2, "clicked": 1,
-        "bounced": 1, "failed": 0, "complained": 0, "delayed": 1,
-    }
+    t = out["totals"]
+    assert (t["messages"], t["delivered"], t["opened"], t["clicked"]) == (4, 3, 2, 1)
+    assert (t["bounced"], t["failed"], t["complained"], t["delayed"]) == (1, 0, 0, 1)
     # delivered/bounced are of everything sent; opened/clicked of what landed
     assert out["rates"]["delivered"] == 75.0
     assert out["rates"]["bounced"] == 25.0
     assert out["rates"]["opened"] == round(100 * 2 / 3, 1)
+
+
+def test_metrics_counts_repeats_on_the_events_basis_only(monkeypatch):
+    """The Resend reconciliation, in miniature: 13 click events over 4 messages
+    on 3 Aug, one recipient clicking 10 times. Unique stays 4 (a rate you can
+    quote), events reads 13 (what Resend's own chart draws)."""
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        _msg("keen", ["email.sent", "email.delivered", "email.opened", "email.clicked"],
+             sent_at=_at(0), counts={"email.clicked": 10, "email.opened": 4}),
+        _msg("m2", ["email.sent", "email.delivered", "email.clicked"],
+             sent_at=_at(0), counts={"email.clicked": 3}),
+        _msg("m3", ["email.sent", "email.delivered"], sent_at=_at(0)),
+    ])
+    out = email_monitor.daily_metrics(days=2)
+    t = out["totals"]
+    assert (t["clicked"], t["clicked_events"]) == (2, 13)
+    assert (t["opened"], t["opened_events"]) == (1, 4)
+    # Series that don't repeat land identically on both bases.
+    assert (t["delivered"], t["delivered_events"]) == (3, 3)
+
+    today = out["points"][-1]
+    assert (today["clicked"], today["clicked_events"]) == (2, 13)
+    # Rates stay on unique whichever basis the chart is drawing.
+    assert out["rates"]["clicked"] == round(100 * 2 / 3, 1)
 
 
 def test_metrics_buckets_by_send_day_not_event_day(monkeypatch):
@@ -212,10 +240,7 @@ def test_metrics_does_not_invent_a_send_from_a_late_open(monkeypatch):
     ])
     out = email_monitor.daily_metrics(days=3)
     # Sent 12 days ago, so it belongs to no column in a 3-day window at all.
-    assert out["totals"] == {
-        "messages": 0, "delivered": 0, "opened": 0, "clicked": 0,
-        "bounced": 0, "failed": 0, "complained": 0, "delayed": 0,
-    }
+    assert all(v == 0 for k, v in out["totals"].items())
     assert all(p["messages"] == 0 for p in out["points"])
 
 
@@ -233,6 +258,26 @@ def test_metrics_lookback_reaches_past_the_charted_window(monkeypatch):
     assert seen["params"]["days"] == 15 + email_monitor._COHORT_LOOKBACK_DAYS
 
 
+def test_metrics_dates_a_pre_webhook_message_by_email_created_at(monkeypatch):
+    """The residual real case: sophieclaw1@pm.me opened the 21 Jul digest on
+    3 Aug. That
+    message was sent before the webhook was configured (21 Jul 09:43), so it has
+    NO sent or delivered row anywhere — no lookback can recover events that were
+    never captured. Derived from its events it dates itself to the open and
+    lands a 62nd message on a day that sent 61, undelivered. `email_created_at`
+    rides on the open row itself and says 21 Jul."""
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        {**_msg("orphan", ["email.opened"], sent_at=None, last_event_at=_at(0, hour=17)),
+         "first_event_at": _at(0, hour=17), "email_created_at": _at(2)},
+    ])
+    out = email_monitor.daily_metrics(days=5)
+    days_with_mail = [p["day"] for p in out["points"] if p["messages"]]
+    assert days_with_mail == [_at(2).astimezone(email_monitor._UK_TZ).date().isoformat()]
+    # And it must NOT be counted against today, where it would read as an
+    # undelivered send and dent that day's deliverability.
+    assert out["points"][-1]["messages"] == 0
+
+
 def test_metrics_falls_back_to_first_event_not_last(monkeypatch):
     """For the messages with no email.sent row at all, the earliest event is a
     fair proxy for the send; the latest is whenever someone last touched it."""
@@ -244,6 +289,25 @@ def test_metrics_falls_back_to_first_event_not_last(monkeypatch):
     out = email_monitor.daily_metrics(days=5)
     days_with_mail = [p["day"] for p in out["points"] if p["messages"]]
     assert days_with_mail == [_at(2).astimezone(email_monitor._UK_TZ).date().isoformat()]
+
+
+def test_metrics_and_status_both_exclude_the_ses_simulator():
+    """bounce@/complaint@simulator.amazonses.com is how SES bounce handling is
+    proved to work, so those rows are deliberate — but in an aggregate they are
+    indistinguishable from real trouble. As of 2026-08-04 the 21 Jul smoke test
+    was the entire bounce and complaint history: it reported 99.7%
+    deliverability against a true 100%, and a spam complaint that never
+    happened. The filter is shared so the chart and /status can't disagree.
+
+    Excluded from the ROLLUPS only — /emails still lists the test per-message,
+    because "what happened to this exact send" is a fair question about it."""
+    import email_events
+
+    assert email_events.SIMULATOR_DOMAIN == "simulator.amazonses.com"
+    # IS DISTINCT FROM, not <>, so a NULL recipient_domain isn't swept up too.
+    assert "IS DISTINCT FROM" in email_events.EXCLUDE_SIMULATOR_SQL
+    assert email_events.EXCLUDE_SIMULATOR_SQL in email_monitor._METRICS_SQL
+    assert email_events.EXCLUDE_SIMULATOR_SQL not in email_monitor._MSGS_SQL
 
 
 def test_metrics_nulls_engagement_before_it_was_tracked(monkeypatch):
@@ -265,9 +329,12 @@ def test_metrics_nulls_engagement_before_it_was_tracked(monkeypatch):
     assert old_point["clicked"] is None
     assert out["engagement"]["fully_tracked"] is False
     assert out["engagement"]["messages"] == 0   # untracked days excluded from the base
+    assert old_point["opened_events"] is None   # both bases, or the toggle lies
+    assert old_point["clicked_events"] is None
     # The chip/legend total has to equal the sum of the drawn points, or it
     # claims opens the chart never shows.
     assert out["totals"]["opened"] == 0
+    assert out["totals"]["opened_events"] == 0
     assert sum(p["opened"] or 0 for p in out["points"]) == out["totals"]["opened"]
     assert out["rates"]["opened"] is None       # no tracked delivered to divide by
 

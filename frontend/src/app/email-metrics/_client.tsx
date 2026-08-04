@@ -27,19 +27,16 @@ type SeriesKey =
   | "complained"
   | "delayed";
 
-interface DayPoint {
-  day: string; // ISO date, UK day
-  messages: number;
-  delivered: number;
-  bounced: number;
-  failed: number;
-  complained: number;
-  delayed: number;
-  // null (not 0) on days before engagement was being recorded — see the
-  // engagement note below and _ENGAGEMENT_TRACKED_FROM in email_monitor.py.
-  opened: number | null;
-  clicked: number | null;
-}
+// Every series arrives on both bases: `delivered` counts unique messages,
+// `delivered_events` counts raw events. Opens and clicks are the ones that
+// actually diverge — see the Basis toggle below.
+type CountKey = SeriesKey | `${SeriesKey}_events`;
+
+// Values are null (not 0) on days before engagement was being recorded — see
+// the engagement note below and _ENGAGEMENT_TRACKED_FROM in email_monitor.py.
+type DayPoint = { day: string; messages: number } & Record<CountKey, number | null>;
+
+type Basis = "unique" | "events";
 
 interface MetricsResponse {
   days: number;
@@ -47,7 +44,7 @@ interface MetricsResponse {
   end: string;
   series: SeriesKey[];
   points: DayPoint[];
-  totals: Record<"messages" | SeriesKey, number>;
+  totals: Record<"messages" | CountKey, number>;
   rates: Partial<Record<SeriesKey, number | null>>;
   engagement: {
     tracked_from: string;
@@ -89,12 +86,40 @@ const SERIES_BY_KEY = Object.fromEntries(SERIES.map((s) => [s.key, s])) as Recor
 // rather than hiding behind a folded-away toggle.
 const DEFAULT_SERIES: SeriesKey[] = ["delivered", "opened", "clicked", "bounced"];
 
+// Unique is the default because it's the only basis on which the rate tiles
+// mean anything — "51.9% opened" is a share of recipients, whereas events over
+// delivered is a clicks-per-email figure that can pass 100%. Events is offered
+// because it's what Resend's own Metrics chart draws, and reconciling the two
+// is otherwise guesswork: on 3 Aug our 4 clicked was Resend's 13, being 13
+// click events across 4 messages.
+const BASIS_OPTIONS: { value: Basis; label: string; hint: string }[] = [
+  { value: "unique", label: "Unique", hint: "Messages that reached this event — one message opened four times counts once" },
+  { value: "events", label: "Total events", hint: "Every event, repeats included — the basis Resend's own chart uses" },
+];
+
+/** The point/totals key for a series on the active basis. */
+const countKey = (key: SeriesKey, basis: Basis): CountKey =>
+  basis === "events" ? (`${key}_events` as CountKey) : key;
+
+// Series where zero is the healthy default rather than a measurement. One
+// bounce in a fortnight shouldn't drag a red line along the axis for fifteen
+// days — that reads as a continuously-tracked quantity that happens to sit at
+// zero, when it's really a single event. These are plotted as marks on the days
+// they actually happened and drawn nowhere else.
+//
+// Delivered/opened/clicked are NOT in here on purpose: a zero there is a real
+// reading (a weekend with no send), and the dive to the axis is the signal.
+const INCIDENT_SERIES: SeriesKey[] = ["bounced", "failed", "complained", "delayed"];
+const isIncident = (key: SeriesKey) => INCIDENT_SERIES.includes(key);
+
 const _isValidDays = (v: unknown): v is number =>
   typeof v === "number" && DAY_OPTIONS.includes(v);
 const _isValidProvider = (v: unknown): v is string =>
   typeof v === "string" && PROVIDER_OPTIONS.some((p) => p.value === v);
 const _isValidSeries = (v: unknown): v is SeriesKey[] =>
   Array.isArray(v) && v.every((k) => typeof k === "string" && k in SERIES_BY_KEY);
+const _isValidBasis = (v: unknown): v is Basis =>
+  v === "unique" || v === "events";
 
 function fmtDay(iso: string): string {
   const d = new Date(`${iso}T00:00:00`);
@@ -225,11 +250,13 @@ function ChartTooltip({
   payload,
   label,
   visible,
+  basis,
 }: {
   active?: boolean;
   payload?: { dataKey?: string | number; value?: number | null }[];
   label?: string;
   visible: SeriesKey[];
+  basis: Basis;
 }) {
   if (!active || !payload?.length) return null;
   const point = (payload[0] as unknown as { payload?: DayPoint }).payload;
@@ -252,11 +279,18 @@ function ChartTooltip({
       </div>
       {visible.map((key) => {
         const s = SERIES_BY_KEY[key];
-        const v = point ? point[key] : null;
+        const v = point ? point[countKey(key, basis)] : null;
+        // A blank means two different things depending on the series, and
+        // showing the wrong one is worse than showing nothing: an incident was
+        // blanked because it was zero, engagement because it was never
+        // recorded. Only the latter is an absence of knowledge.
+        const blank = v === null || v === undefined;
         return (
           <div key={key} style={{ display: "flex", gap: 10, justifyContent: "space-between" }}>
             <span style={{ color: s.color }}>{s.label}</span>
-            <span style={{ color: colors.text }}>{v === null || v === undefined ? "not tracked" : v}</span>
+            <span style={{ color: blank && !isIncident(key) ? colors.textDim : colors.text }}>
+              {blank ? (isIncident(key) ? 0 : "not tracked") : v}
+            </span>
           </div>
         );
       })}
@@ -275,6 +309,9 @@ export default function EmailMetricsClient() {
   const [domain, setDomain] = useState("");
   const [provider, setProvider] = useState("");
   const [visible, setVisible] = useState<SeriesKey[]>(DEFAULT_SERIES);
+  // Purely a view over data already in hand — both bases ship on every point,
+  // so switching redraws without a refetch.
+  const [basis, setBasis] = useState<Basis>("unique");
   // The response only lists domains that survived the current filters, so a
   // domain-filtered fetch would otherwise shrink the dropdown to the one option
   // already selected and strand the user there. Keep the last unfiltered list.
@@ -290,13 +327,14 @@ export default function EmailMetricsClient() {
     if (typeof s.domain === "string") setDomain(s.domain);
     if (_isValidProvider(s.provider)) setProvider(s.provider);
     if (_isValidSeries(s.series) && s.series.length) setVisible(s.series);
+    if (_isValidBasis(s.basis)) setBasis(s.basis);
     setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    saveEmailMetricsState({ days, domain, provider, series: visible });
-  }, [hydrated, days, domain, provider, visible]);
+    saveEmailMetricsState({ days, domain, provider, series: visible, basis });
+  }, [hydrated, days, domain, provider, visible, basis]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -329,6 +367,23 @@ export default function EmailMetricsClient() {
     if (!isAdmin || !hydrated) return;
     load();
   }, [isAdmin, hydrated, load]);
+
+  // Blank the incident series' zeros so they render as marks on the days they
+  // happened instead of a line pinned to the axis. Done at the drawing layer
+  // only — the payload keeps its honest zeros, and the tooltip below reads a
+  // blanked incident back as "0", never as "not tracked".
+  const chartData = useMemo(() => {
+    if (!data) return [];
+    return data.points.map((p) => {
+      const row = { ...p };
+      for (const key of INCIDENT_SERIES) {
+        for (const k of [key, `${key}_events`] as CountKey[]) {
+          if (row[k] === 0) row[k] = null;
+        }
+      }
+      return row;
+    });
+  }, [data]);
 
   const domainOptions = useMemo(() => {
     // A filtered-to domain that has since dropped out of the window would
@@ -455,12 +510,55 @@ export default function EmailMetricsClient() {
           </div>
         </div>
 
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            alignItems: "center",
+            marginBottom: 16,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: "monospace",
+              fontSize: 10,
+              color: colors.textDim,
+              textTransform: "uppercase",
+              letterSpacing: 1,
+            }}
+          >
+            Count
+          </span>
+          <div style={{ display: "inline-flex", border: `1px solid ${colors.border}`, borderRadius: 2 }}>
+            {BASIS_OPTIONS.map((b) => (
+              <button
+                key={b.value}
+                onClick={() => setBasis(b.value)}
+                title={b.hint}
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: 11,
+                  cursor: "pointer",
+                  border: "none",
+                  padding: "5px 12px",
+                  background: basis === b.value ? colors.accentBg : "transparent",
+                  color: basis === b.value ? colors.accent : colors.textDim,
+                  fontWeight: basis === b.value ? 700 : 400,
+                }}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
           {SERIES.map((s) => (
             <SeriesChip
               key={s.key}
               series={s}
-              total={totals?.[s.key] ?? 0}
+              total={totals?.[countKey(s.key, basis)] ?? 0}
               active={visible.includes(s.key)}
               onClick={() =>
                 setVisible((cur) =>
@@ -482,7 +580,7 @@ export default function EmailMetricsClient() {
                 without it the first day's tick label overflows the plot area and
                 Recharts silently drops it — the window's opening day loses its
                 label while still being drawn. */}
-            <AreaChart data={data.points} margin={{ top: 10, right: 8, bottom: 0, left: 22 }}>
+            <AreaChart data={chartData} margin={{ top: 10, right: 8, bottom: 0, left: 22 }}>
               <defs>
                 {SERIES.map((s) => (
                   <linearGradient key={s.key} id={`fill-${s.key}`} x1="0" y1="0" x2="0" y2="1">
@@ -509,7 +607,7 @@ export default function EmailMetricsClient() {
                 tickLine={false}
               />
               <Tooltip
-                content={<ChartTooltip visible={visible} />}
+                content={<ChartTooltip visible={visible} basis={basis} />}
                 cursor={{ stroke: colors.border, strokeWidth: 1 }}
               />
               {/* Draw in SERIES order so the biggest line (delivered) is painted
@@ -518,15 +616,21 @@ export default function EmailMetricsClient() {
                 <Area
                   key={s.key}
                   type="linear"
-                  dataKey={s.key}
+                  dataKey={countKey(s.key, basis)}
                   name={s.label}
                   stroke={s.color}
                   strokeWidth={1.8}
-                  fill={`url(#fill-${s.key})`}
-                  dot={false}
+                  // Incidents are marks, not volumes — a fill down to the axis
+                  // would re-imply the quantity the blanking just removed.
+                  fill={isIncident(s.key) ? "none" : `url(#fill-${s.key})`}
+                  // A lone non-null point between two gaps draws NO line
+                  // segment, so without this a one-off bounce renders as
+                  // nothing at all. Dots are what make the marks visible.
+                  dot={isIncident(s.key) ? { r: 3, fill: s.color, strokeWidth: 0 } : false}
                   activeDot={{ r: 3, strokeWidth: 0 }}
                   isAnimationActive={false}
-                  // Nulls are "not tracked", not zero — leave the gap visible.
+                  // Gaps are meaningful in both directions here: untracked
+                  // engagement, and incident-free days. Never bridge them.
                   connectNulls={false}
                 />
               ))}
@@ -553,6 +657,10 @@ export default function EmailMetricsClient() {
             <div style={{ color: colors.textMuted }}>
               {domain || "All recipient domains"}{" "}
               <span style={{ color: colors.textDim }}>({data.totals.messages})</span>
+              <span style={{ color: colors.textDim }}>
+                {" "}
+                · counting {basis === "events" ? "total events" : "unique messages"}
+              </span>
             </div>
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
               {SERIES.filter((s) => visible.includes(s.key)).map((s) => (
@@ -586,10 +694,28 @@ export default function EmailMetricsClient() {
         )}
         Days are UK days. Every event is counted against the day its message was{" "}
         <strong style={{ color: colors.textMuted }}>sent</strong>, not the day the event arrived, so
-        a column&rsquo;s opens are a share of that same column&rsquo;s delivered. Each series counts
-        messages, not events — one message opened four times is one open. Deliverability, bounce,
-        fail, complaint and delay rates are of everything sent; open and click rates are of what was
-        delivered.
+        a column&rsquo;s opens are a share of that same column&rsquo;s delivered. Deliverability,
+        bounce, fail, complaint and delay rates are of everything sent; open and click rates are of
+        what was delivered.
+        <div style={{ marginTop: 8 }}>
+          Bounces, failures, complaints and delays are drawn as{" "}
+          <strong style={{ color: colors.textMuted }}>dots on the days they happened</strong> rather
+          than as lines, since zero is their normal state and a flat line along the axis would imply
+          a quantity being tracked rather than an incident. Delivered, opened and clicked keep their
+          zeros — there, a dive to the axis is a real reading (a weekend with no send).
+        </div>
+        <div style={{ marginTop: 8 }}>
+          The rate tiles always use <strong style={{ color: colors.textMuted }}>unique</strong>{" "}
+          regardless of the Count toggle — a share-of-delivered built from event counts is a
+          per-email figure, not a rate, and can exceed 100%.
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <strong style={{ color: colors.textMuted }}>Comparing against Resend:</strong> its chart
+          counts events, so switch Count to “Total events” first. Expect a residual gap even then —
+          Resend buckets by the day an event arrived, this page by the day the message was sent, so
+          an open that lands overnight sits in a different column on each. On 3 Aug that was 13
+          click events at Resend against 16 here, the same clicks split differently.
+        </div>
       </div>
     </div>
   );

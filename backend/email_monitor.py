@@ -23,6 +23,10 @@ from fastapi import APIRouter, Depends
 
 from admin_auth import require_admin_token
 from db import query
+# Shared with /status's deliverability card so the two can't disagree about what
+# counts as real mail. Defined in the ingestion module because it describes the
+# table's contents, not this read model.
+from email_events import EXCLUDE_SIMULATOR_SQL
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
@@ -58,7 +62,6 @@ _MSGS_SQL = """
         MAX(subject)                                                    AS subject,
         MIN(occurred_at) FILTER (WHERE event_type = 'email.sent')       AS sent_at,
         MAX(occurred_at) FILTER (WHERE event_type = 'email.delivered')  AS delivered_at,
-        MIN(occurred_at)                                                AS first_event_at,
         MAX(occurred_at)                                                AS last_event_at,
         ARRAY_AGG(DISTINCT event_type)                                  AS event_types
     FROM email_events
@@ -95,9 +98,7 @@ def _load_messages(days: int) -> list[dict]:
     for r in rows:
         status, was_delayed, opened, clicked = _classify(r.get("event_types"))
         out.append({
-            # first_event_at exists for the metrics cohorting only — leaving it
-            # out keeps this endpoint's payload exactly as it was.
-            **{k: v for k, v in r.items() if k not in ("event_types", "first_event_at")},
+            **{k: v for k, v in r.items() if k != "event_types"},
             "status": status,
             "was_delayed": was_delayed,
             "opened": opened,
@@ -165,9 +166,20 @@ def list_messages(
 
 # ── Daily metrics (the `/email-metrics` chart) ─────────────────────────────────
 
-# Each series counts MESSAGES that ever reached that event, not events — a
-# message opened four times is one open, matching how `opened`/`clicked` are
-# already reported per-message on /emails.
+# Every series is counted BOTH ways and the page toggles between them:
+#
+#   unique — messages that ever reached this event. One message opened four
+#            times is one open. This is what "open rate" conventionally means
+#            and the only basis on which a share-of-delivered is honest.
+#   events — raw event count, which is what Resend's own Metrics chart draws.
+#            Reconciled 2026-08-04: our 4 clicked against Resend's 13 on 3 Aug
+#            was 13 click events spread over 4 messages, one recipient alone
+#            clicking 10 times across 6 links. Opens repeat too, but far less
+#            (~1.4x against ~3.3x on clicks).
+#
+# Delivered/bounced/failed rarely repeat, so the two bases nearly coincide
+# there; the toggle still applies to every series so a single switch doesn't
+# leave the chart mixing bases.
 _SERIES_EVENT = {
     "delivered": "email.delivered",
     "opened": "email.opened",
@@ -199,6 +211,42 @@ _ENGAGEMENT_TRACKED_FROM = date(2026, 7, 31)
 # late-open lag; anything older simply drops out, which is the correct outcome.
 _COHORT_LOOKBACK_DAYS = 30
 
+# The metrics read model. Separate from _MSGS_SQL because that one collapses a
+# message to a DISTINCT set of event types, which is exactly the information the
+# unique/events toggle needs back: `event_counts` is a {event_type: n} map.
+# Two passes over the same window rather than one clever one — the per-type
+# rollup can't also carry per-message MAX(provider), and at this volume (~2k
+# events over a charted fortnight) the second scan costs nothing.
+_METRICS_SQL = f"""
+    WITH windowed AS (
+        SELECT * FROM email_events
+        WHERE occurred_at >= NOW() - (%(days)s || ' days')::INTERVAL
+          AND {EXCLUDE_SIMULATOR_SQL}
+    ),
+    per_type AS (
+        SELECT email_id, event_type, COUNT(*) AS n
+        FROM windowed GROUP BY email_id, event_type
+    ),
+    per_msg AS (
+        SELECT
+            email_id,
+            MAX(provider)                                              AS provider,
+            MAX(recipient_domain)                                      AS recipient_domain,
+            MIN(email_created_at)                                      AS email_created_at,
+            MIN(occurred_at) FILTER (WHERE event_type = 'email.sent')  AS sent_at,
+            MIN(occurred_at)                                           AS first_event_at,
+            MAX(occurred_at)                                           AS last_event_at
+        FROM windowed GROUP BY email_id
+    )
+    SELECT
+        m.email_id, m.provider, m.recipient_domain, m.email_created_at,
+        m.sent_at, m.first_event_at, m.last_event_at,
+        JSONB_OBJECT_AGG(t.event_type, t.n) AS event_counts
+    FROM per_msg m JOIN per_type t USING (email_id)
+    GROUP BY m.email_id, m.provider, m.recipient_domain, m.email_created_at,
+             m.sent_at, m.first_event_at, m.last_event_at
+"""
+
 
 def _cohort_day(msg: dict) -> date | None:
     """The UK date a message went out — every event on it, however late, is
@@ -206,11 +254,25 @@ def _cohort_day(msg: dict) -> date | None:
     rates readable: `opened` on 04 Aug is a share of THAT morning's delivered,
     rather than of whatever happened to be delivered the day the open landed.
 
-    Falls back to the FIRST event, not the last: for the handful of messages
-    with no `email.sent` row at all, the earliest thing that happened to them is
-    a fair proxy for the send, while the latest is whenever someone last touched
-    the mail — days or weeks adrift."""
-    ts = msg.get("sent_at") or msg.get("first_event_at") or msg.get("last_event_at")
+    Keys on `email_created_at` — the provider's own record of when it built the
+    message — in preference to the timestamp of the `email.sent` EVENT. The two
+    agree for ordinary mail, but the event can be missing entirely: anything
+    sent before the webhook was configured on 21 Jul 09:43 has no sent or
+    delivered row at all, and surfaces only if someone later opens it. Derived
+    from events, such a message dates itself to the open (sophieclaw1@pm.me
+    opened the 21 Jul digest on 3 Aug, landing a 62nd message on a day that sent
+    61). `email_created_at` rides on every row including that one — 1363 of 1363
+    populated, checked 2026-08-04 — and correctly says 21 Jul.
+
+    The remaining fallbacks are for safety only, cheapest-lie-first: the sent
+    event, then the earliest event of any kind. Never the LAST event, which is
+    whenever someone last touched the mail — days or weeks adrift."""
+    ts = (
+        msg.get("email_created_at")
+        or msg.get("sent_at")
+        or msg.get("first_event_at")
+        or msg.get("last_event_at")
+    )
     if not isinstance(ts, datetime):
         return None
     if ts.tzinfo is None:
@@ -243,26 +305,41 @@ def daily_metrics(
     domain: str | None = None,
     _admin: None = Depends(require_admin_token),
 ) -> dict:
-    """Per-day message counts for the `/email-metrics` chart.
+    """Per-day counts for the `/email-metrics` chart.
 
     Every day in the window is emitted, including days with no send at all —
     the digest is weekdays-only, so dropping empty days would quietly close the
     weekend gaps and make a five-day cadence look continuous.
+
+    Each series appears twice on every point and in `totals`: `<series>` counts
+    unique messages, `<series>_events` counts raw events (see _SERIES_EVENT).
+    `rates` stays on the unique basis in both cases — a share-of-delivered
+    computed from event counts isn't a rate and can exceed 100%.
     """
     days = max(1, min(days, 90))
     today = datetime.now(timezone.utc).astimezone(_UK_TZ).date()
     window = [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
     first_day = window[0]
 
-    # Look back well past the charted window: _MSGS_SQL filters on event time
+    # Look back well past the charted window: the SQL filters on event time
     # while the buckets below key on SEND time, so a message needs its own
     # sent/delivered rows in scope to be cohorted correctly even when only its
     # late engagement falls inside the window. See _COHORT_LOOKBACK_DAYS.
     # Cohorts outside `window` are dropped after classification.
-    rows = query(_MSGS_SQL, {"days": days + _COHORT_LOOKBACK_DAYS})
+    rows = query(_METRICS_SQL, {"days": days + _COHORT_LOOKBACK_DAYS})
 
-    buckets = {d: {"day": d.isoformat(), "messages": 0, **{s: 0 for s in _SERIES_EVENT}} for d in window}
-    totals = {"messages": 0, **{s: 0 for s in _SERIES_EVENT}}
+    # Each bucket carries both bases side by side (`opened` unique,
+    # `opened_events` raw), so the page's toggle is a dataKey swap rather than
+    # a refetch — and the two can never drift out of step with each other.
+    def _blank() -> dict:
+        return {
+            "messages": 0,
+            **{s: 0 for s in _SERIES_EVENT},
+            **{f"{s}_events": 0 for s in _SERIES_EVENT},
+        }
+
+    buckets = {d: {"day": d.isoformat(), **_blank()} for d in window}
+    totals = _blank()
     domains: dict[str, int] = {}
 
     for r in rows:
@@ -273,14 +350,17 @@ def daily_metrics(
         day = _cohort_day(r)
         if day is None or day not in buckets:
             continue
-        types = set(r.get("event_types") or [])
+        counts = r.get("event_counts") or {}
         bucket = buckets[day]
         bucket["messages"] += 1
         totals["messages"] += 1
         for series, event_type in _SERIES_EVENT.items():
-            if event_type in types:
+            n = int(counts.get(event_type) or 0)
+            if n:
                 bucket[series] += 1
                 totals[series] += 1
+            bucket[f"{series}_events"] += n
+            totals[f"{series}_events"] += n
         dom = r.get("recipient_domain")
         if dom:
             domains[dom] = domains.get(dom, 0) + 1
@@ -291,10 +371,9 @@ def daily_metrics(
     # window whose visible points only ever add up to 95.
     for day, bucket in buckets.items():
         if day < _ENGAGEMENT_TRACKED_FROM:
-            totals["opened"] -= bucket["opened"]
-            totals["clicked"] -= bucket["clicked"]
-            bucket["opened"] = None
-            bucket["clicked"] = None
+            for key in ("opened", "clicked", "opened_events", "clicked_events"):
+                totals[key] -= bucket[key]
+                bucket[key] = None
 
     tracked = [d for d in window if d >= _ENGAGEMENT_TRACKED_FROM]
     engagement_base = sum(buckets[d]["messages"] for d in tracked)

@@ -347,6 +347,7 @@ export interface EmailMetricsState {
   domain: string; // "" = all recipient domains
   provider: string; // "" = all
   series: string[]; // series keys currently drawn
+  basis: string; // "unique" (messages) | "events" (raw event count)
 }
 
 export const loadEmailMetricsState = (): Partial<EmailMetricsState> => {

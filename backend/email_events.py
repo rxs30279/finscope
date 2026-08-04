@@ -63,6 +63,26 @@ _DETAIL_KEYS = ("bounce", "failed", "click", "complaint")
 # than which link was clicked.
 _CLICK_KEEP = ("link", "timestamp")
 
+# The AWS SES mailbox simulator. Sending to bounce@ / complaint@ / success@ on
+# this domain is *how* you prove bounce and complaint handling works, so these
+# rows exist on purpose — but they are synthetic, and once they are inside an
+# aggregate nothing distinguishes them from real deliverability trouble.
+#
+# Verified 2026-08-04: the 21 Jul smoke test is the ENTIRE bounce and complaint
+# history on this table (7 rows, 3 messages). Counting it reported 99.7%
+# deliverability against a true 100%, and put a spam complaint — the most
+# reputation-sensitive signal there is — on the chart for an event that never
+# happened. So every ROLLUP excludes it.
+#
+# Deliberately NOT excluded from the per-message list on /emails: that view
+# answers "what happened to this exact send", and a test you deliberately
+# performed is a legitimate answer there. Rows are never deleted either.
+SIMULATOR_DOMAIN = "simulator.amazonses.com"
+
+# Drop-in for a WHERE clause. IS DISTINCT FROM, not <>, so rows with a NULL
+# recipient_domain survive the filter instead of being silently discarded.
+EXCLUDE_SIMULATOR_SQL = f"recipient_domain IS DISTINCT FROM '{SIMULATOR_DOMAIN}'"
+
 
 # ── Signature verification (Standard Webhooks / Svix, stdlib only) ────────────
 
@@ -294,6 +314,9 @@ def recent_summary(days: int = 7) -> dict:
     nothing without knowing it was 6 of 9 Microsoft recipients against 0 of 45
     everyone else, which is the shape that identifies provider-side throttling.
 
+    Excludes the SES mailbox simulator — see EXCLUDE_SIMULATOR_SQL. Without it
+    a smoke test reads as a live bounce and a live spam complaint.
+
     Counts distinct messages, NOT events. One email emits several events
     (sent → delivered, or sent → delivery_delayed → delivered), so an
     event-denominated rate silently dilutes as more event types are subscribed
@@ -312,6 +335,7 @@ def recent_summary(days: int = 7) -> dict:
                MAX(occurred_at) AS latest_event
         FROM email_events
         WHERE occurred_at >= NOW() - (%(days)s || ' days')::INTERVAL
+          AND """ + EXCLUDE_SIMULATOR_SQL + """
         GROUP BY recipient_domain
         """,
         {"problems": list(_PROBLEM_EVENTS), "days": days},
