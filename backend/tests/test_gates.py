@@ -67,6 +67,60 @@ def test_guidance_gate_blocks_the_luce_case():
     assert r.evidence == _LUCE_CHECK
 
 
+# KLR.L 9702412 — reiterated "in line with recently UPGRADED market
+# expectations" alongside an H1 beat, a raised dividend and a record order book.
+_KLR_CHECK = {
+    "metric": "Full year 2026 performance", "period": "FY2026",
+    "guided_value": "in line with recently upgraded market expectations",
+    "consensus_value": "Revenue £3,337m, underlying operating profit £242m",
+    "vs_prior": "reiterated", "vs_consensus": "in_line",
+}
+# CLI.L 9702416 — first guide of the year, ~32% below the consensus it printed.
+_CLI_CHECK = {
+    "metric": "Full year EPS", "period": "FY2026",
+    "guided_value": "4.6 to 5.5 pence per share",
+    "consensus_value": "6.8 pence per share",
+    "vs_prior": "new", "vs_consensus": "below",
+}
+
+
+def test_guidance_gate_no_longer_blocks_reiterated_in_line():
+    r = _gate("guidance").evaluate({"guidance_checks": [_KLR_CHECK]})
+    assert r.state == "n/a"
+    assert r.reason == "unarmed_reiterated_in_line"
+
+
+def test_guidance_wide_shadow_gate_records_the_klr_case():
+    r = _gate("guidance_wide").evaluate({"guidance_checks": [_KLR_CHECK]})
+    assert r.state == "block"
+    assert r.reason == "reiterated_in_line"
+    assert r.evidence == _KLR_CHECK
+
+
+def test_guidance_gate_will_not_pass_a_guide_below_a_printed_consensus():
+    # The CLI.L defect: the armed rule's vs_prior restriction does not cover
+    # `new`, and the gate reported `pass` — "adjudicated, nothing wrong" — on a
+    # 32% miss. Out of the armed rule's scope is not a clean bill of health.
+    r = _gate("guidance").evaluate({"guidance_checks": [_CLI_CHECK]})
+    assert r.state == "n/a"
+    assert r.reason == "unarmed_below_consensus_other_vs_prior"
+    r = _gate("guidance_wide").evaluate({"guidance_checks": [_CLI_CHECK]})
+    assert r.state == "block"
+
+
+def test_guidance_gate_still_passes_a_genuinely_clean_row():
+    # SYNT.L 9702422 — raised, above consensus. The fix above must not turn
+    # every out-of-scope vs_prior into amber, or `pass` stops meaning anything.
+    cand = {"guidance_checks": [{"vs_prior": "raised", "vs_consensus": "above"}]}
+    assert _gate("guidance").evaluate(cand).state == "pass"
+    assert _gate("guidance_wide").evaluate(cand).state == "pass"
+
+
+def test_guidance_wide_is_shadow_and_cannot_block_a_flag():
+    cand = {"keyword_hits": ["pos:1"], "guidance_checks": [_KLR_CHECK]}
+    assert blocking_reason(cand) is None
+
+
 # ── earnings_quality (bank loan-loss rate) ──────────────────────────────────────
 _BANK = {"sector": "Financial Services", "industry": "Banks - Diversified"}
 _BARC_LLR = {
@@ -139,7 +193,8 @@ def test_evaluate_all_runs_every_gate_regardless_of_outcome():
     cand = {"category": "profit_warning", **_BANK, "earnings_quality": [_BARC_LLR]}
     results = evaluate_all(cand)
     names = [g.name for g, _ in results]
-    assert names == ["sentiment", "guidance", "earnings_quality", "low_base"]
+    assert names == ["sentiment", "guidance", "guidance_wide",
+                     "earnings_quality", "low_base"]
     states = {g.name: r.state for g, r in results}
     assert states["sentiment"] == "block"
     assert states["earnings_quality"] == "block"
@@ -192,18 +247,48 @@ def test_record_gate_evaluations_writes_one_row_per_gate_per_candidate():
     with patch.object(gates, "_q", return_value=rows), \
          patch.object(gates, "_exec", return_value=1) as ex:
         res = gates.record_gate_evaluations(hours=48)
-    assert res == {"candidates": 1, "gate_rows_written": 4}  # one write per gate
     written_gates = [call.args[1][1] for call in ex.call_args_list]
-    assert written_gates == ["sentiment", "guidance", "earnings_quality", "low_base"]
+    # low_base is a VET-pool gate and must not appear — the sweep can only ever
+    # produce not_vetted for it, landing on top of the verdict stage 3.5 wrote.
+    assert written_gates == ["sentiment", "guidance", "guidance_wide",
+                             "earnings_quality"]
+    assert res["candidates"] == 1
+    assert res["gate_rows_written"] == 4
+    assert "low_base" not in res["gates_run"]
     # sentiment passed (llm_sentiment positive) -> state 'pass' in the params
     assert ex.call_args_list[0].args[1][2] == "pass"
+
+
+def test_record_gate_evaluations_never_touches_a_vet_pool_gate():
+    # The regression that emptied low_base's calibration sample for its entire
+    # life: 185 of 185 stored evaluations read n/a/not_vetted because this sweep
+    # ran after the vet and overwrote every real verdict.
+    rows = [{"id": 1, "symbol": "ABC.L", "category": "final_results",
+             "llm_score": 60, "llm_sentiment": "positive", "llm_thesis": None,
+             "keyword_hits": [], "guidance_checks": None, "earnings_quality": None,
+             "sector": "Industrials", "industry": "x"}]
+    with patch.object(gates, "_q", return_value=rows), \
+         patch.object(gates, "_exec", return_value=1) as ex:
+        gates.record_gate_evaluations(hours=48)
+    assert not any(call.args[1][1] == "low_base" for call in ex.call_args_list)
+
+
+def test_upsert_refuses_to_overwrite_a_verdict_with_not_vetted():
+    # Second line of defence behind the pool split, for re-runs and backfills.
+    # The guard lives in SQL, so assert on the statement the call would make.
+    gate = _gate("low_base")
+    with patch.object(gates, "_exec", return_value=1) as ex:
+        gates._upsert_evaluation(1, gate, GateResult(state="n/a", reason="not_vetted"))
+    sql, params = ex.call_args.args
+    assert "WHERE EXCLUDED.reason IS DISTINCT FROM" in sql
+    assert params[-2:] == ("not_vetted", "not_vetted")
 
 
 def test_record_gate_evaluations_no_candidates_writes_nothing():
     with patch.object(gates, "_q", return_value=[]), \
          patch.object(gates, "_exec") as ex:
         res = gates.record_gate_evaluations(hours=48)
-    assert res == {"candidates": 0, "gate_rows_written": 0}
+    assert res["candidates"] == 0 and res["gate_rows_written"] == 0
     ex.assert_not_called()
 
 

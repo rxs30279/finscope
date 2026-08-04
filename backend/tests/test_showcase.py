@@ -378,13 +378,40 @@ def test_disqualifying_guidance_allows_raised_without_consensus():
     ]}) is None
 
 
-def test_disqualifying_guidance_also_catches_reiterated_in_line():
-    # Over 7 LUCE runs the model split 4 "below" / 3 "in_line" on the same
-    # figure (">£40m" is a floor; £40.7m is 1.75% above). Gating on "below"
-    # alone would fire on barely half the runs, so an unraised guide that
-    # merely matches a printed consensus counts too — it is no catalyst either.
+def test_disqualifying_guidance_no_longer_arms_reiterated_in_line():
+    # DISARMED 2026-08-04. It was 8 of the 9 guidance blocks ever recorded and
+    # no return horizon had ever judged it, and KLR.L 9702412 showed it cannot
+    # tell "reiterated against a consensus just UPGRADED to meet it" (an H1
+    # beat with a record order book) from the stale-consensus non-catalyst it
+    # was built for. It now lives in the shadow guidance_wide gate instead.
     entry = {"vs_prior": "reiterated", "vs_consensus": "in_line"}
-    assert showcase._disqualifying_guidance({"guidance_checks": [entry]}) == entry
+    assert showcase._disqualifying_guidance({"guidance_checks": [entry]}) is None
+    assert showcase._unarmed_disqualifying_guidance({"guidance_checks": [entry]}) == (
+        "reiterated_in_line", entry,
+    )
+
+
+def test_unarmed_guidance_catches_a_first_time_guide_below_consensus():
+    # CLI.L 9702416 — FY EPS guided 4.6-5.5p against a printed 6.8p consensus,
+    # a ~32% miss, labelled `new` because it was the first guide of the year.
+    # The armed rule's vs_prior restriction lets it through; before this it came
+    # back as a clean `pass`, which is worse than not adjudicating it at all.
+    entry = {"vs_prior": "new", "vs_consensus": "below",
+             "guided_value": "4.6 to 5.5 pence per share",
+             "consensus_value": "6.8 pence per share"}
+    assert showcase._disqualifying_guidance({"guidance_checks": [entry]}) is None
+    assert showcase._unarmed_disqualifying_guidance({"guidance_checks": [entry]}) == (
+        "below_consensus_other_vs_prior", entry,
+    )
+
+
+def test_unarmed_guidance_leaves_a_genuinely_clean_row_alone():
+    # SYNT.L 9702422 — raised guidance, above consensus. Neither rule may touch
+    # it, or the armed gate stops reporting `pass` on rows that deserve one.
+    assert showcase._unarmed_disqualifying_guidance({"guidance_checks": [
+        {"vs_prior": "raised", "vs_consensus": "above"},
+        {"vs_prior": "new", "vs_consensus": "no_consensus_stated"},
+    ]}) is None
 
 
 def test_disqualifying_guidance_allows_reiterated_with_no_consensus():
@@ -410,25 +437,52 @@ def test_disqualifying_guidance_fails_safe_on_unusable_input():
         assert showcase._disqualifying_guidance(cand) is None
 
 
-def test_gate_on_the_seven_observed_luce_samples():
-    """LUCE 9689898 scored 7x at temperature 0.2 — the actual labels returned.
+def _luce_cand(vs_consensus):
+    return {"guidance_checks": [
+        {"metric": "Adjusted Operating Profit", "period": "FY2026",
+         "guided_value": "> £40m", "consensus_value": "£40.7m",
+         "vs_prior": "reiterated", "vs_consensus": vs_consensus},
+        {"metric": "Adjusted Operating Profit", "period": "FY2027",
+         "guided_value": "to exceed current market expectations",
+         "consensus_value": "£42.3m",
+         "vs_prior": "new", "vs_consensus": "above"},
+    ]}
 
-    vs_prior was "reiterated" every time; vs_consensus split 4 below / 3
-    in_line. The gate must fire on all seven, because the score did not: it
-    came back 75 six times and 85 once, never below the flag threshold.
+
+# LUCE 9689898 scored 7x at temperature 0.2 — the actual labels returned.
+# vs_prior was "reiterated" every time; vs_consensus split 4 below / 3 in_line.
+# The gate had to fire on all seven, because the score did not: it came back 75
+# six times and 85 once, never below the flag threshold.
+_LUCE_OBSERVED = ["below", "below", "in_line", "in_line", "below", "below", "in_line"]
+
+
+def test_armed_gate_on_the_seven_observed_luce_samples():
+    """This is the price of disarming in_line, stated as a number.
+
+    The armed rule now fires on the 4 "below" runs and not the 3 "in_line"
+    ones, so LUCE itself would be blocked 4 times in 7 rather than 7 in 7 — on
+    a row where the model's label wobbled over one figure (">£40m" is a floor
+    and £40.7m is 1.75% above it), not over anything about the announcement.
+    That is a real regression in coverage of the case this whole gate came
+    from, accepted because the in_line rule was 8 of 9 lifetime blocks with
+    zero return evidence, and because the run below keeps the record.
     """
-    observed = ["below", "below", "in_line", "in_line", "below", "below", "in_line"]
-    for vs_consensus in observed:
-        cand = {"guidance_checks": [
-            {"metric": "Adjusted Operating Profit", "period": "FY2026",
-             "guided_value": "> £40m", "consensus_value": "£40.7m",
-             "vs_prior": "reiterated", "vs_consensus": vs_consensus},
-            {"metric": "Adjusted Operating Profit", "period": "FY2027",
-             "guided_value": "to exceed current market expectations",
-             "consensus_value": "£42.3m",
-             "vs_prior": "new", "vs_consensus": "above"},
-        ]}
-        assert showcase._disqualifying_guidance(cand) is not None
+    fired = [showcase._disqualifying_guidance(_luce_cand(c)) is not None
+             for c in _LUCE_OBSERVED]
+    assert fired.count(True) == 4
+    assert all(showcase._disqualifying_guidance(_luce_cand(c)) is not None
+               for c in ("below",))
+
+
+def test_armed_plus_shadow_still_covers_all_seven_luce_samples():
+    # Nothing about LUCE became invisible — the 3 in_line runs move to the
+    # shadow gate, which is what makes the disarm reversible on evidence.
+    for vs_consensus in _LUCE_OBSERVED:
+        cand = _luce_cand(vs_consensus)
+        assert (
+            showcase._disqualifying_guidance(cand) is not None
+            or showcase._unarmed_disqualifying_guidance(cand) is not None
+        )
 
 
 def test_gate_never_fires_on_the_seven_observed_ulvr_samples():

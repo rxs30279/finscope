@@ -56,6 +56,12 @@ class Gate:
     description: str
     mode: Literal["armed", "shadow"]
     fn: Callable[[dict], GateResult]
+    # Which population this gate can actually be evaluated over. "wide" = every
+    # ranked Tier A/B row, so record_gate_evaluations' sweep can write it.
+    # "vet" = only rows that reached the LLM vet, because the gate reads fields
+    # only the vet call produces; the sweep must SKIP these or it overwrites the
+    # real verdict with an uninformative one (see record_gate_evaluations).
+    pool: Literal["wide", "vet"] = "wide"
 
     def evaluate(self, cand: dict) -> GateResult:
         try:
@@ -84,10 +90,13 @@ def _gate_sentiment(cand: dict) -> GateResult:
 # ── Gate: guidance ─────────────────────────────────────────────────────────────
 # See showcase._disqualifying_guidance for the LUCE case this exists to catch.
 def _gate_guidance(cand: dict) -> GateResult:
-    from showcase import _disqualifying_guidance
+    from showcase import (
+        _disqualifying_guidance, _guidance_entries, _guidance_states_consensus,
+        _unarmed_disqualifying_guidance,
+    )
 
-    checks = cand.get("guidance_checks")
-    if not isinstance(checks, list) or not any(isinstance(e, dict) for e in checks):
+    entries = _guidance_entries(cand)
+    if not entries:
         return GateResult(state="n/a", reason="field_absent")
 
     hit = _disqualifying_guidance(cand)
@@ -98,15 +107,55 @@ def _gate_guidance(cand: dict) -> GateResult:
             evidence=hit,
         )
 
+    # `pass` claims "adjudicated, nothing wrong", so it must not be returned for
+    # a row an UNARMED rule flags — that is precisely how CLI.L 9702416 came
+    # back clean while guiding ~32% below the consensus it printed. The armed
+    # rule not covering an entry is a scope limit, not a clean bill of health,
+    # and collapsing the two is the same mistake this module's docstring was
+    # written about. The shadow gate below carries the verdict; this only
+    # withholds the green light.
+    unarmed = _unarmed_disqualifying_guidance(cand)
+    if unarmed:
+        rule, entry = unarmed
+        return GateResult(state="n/a", reason=f"unarmed_{rule}", evidence=entry)
+
     # Adjudicable means at least one entry printed a consensus figure this
     # gate could compare against — the common case (no consensus footnote at
     # all) is the ~91% amber rate the plan measured, not a pass.
-    adjudicable = any(
-        isinstance(e, dict) and e.get("vs_consensus") not in (None, "no_consensus_stated")
-        for e in checks
+    if any(_guidance_states_consensus(e) for e in entries):
+        return GateResult(state="pass", evidence={"n_entries": len(entries)})
+    return GateResult(state="n/a", reason="no_consensus_stated")
+
+
+# ── Gate: guidance_wide (shadow) ──────────────────────────────────────────────
+# The two guidance rules that are deliberately not armed — see the long note
+# above showcase._GUIDANCE_UNARMED_IN_LINE_VS_PRIOR. One of them (reiterated +
+# in_line) WAS armed until 2026-08-04 and accounts for 8 of the 9 guidance
+# blocks ever recorded, so this gate is also the record of what the armed gate
+# would still be doing, kept in a form a return horizon can eventually judge.
+#
+# Promotion criterion (the plan's §4 requires one to be stated at landing, not
+# at review): a rule here is armed only once it has >= 20 adjudicated rows in a
+# single llm_model era, faceted by score band, whose blocked-vs-passed mean 1d
+# excess is negative on the score>=60 facet — the population the armed gate
+# actually runs against. Anything less and it goes back to shadow.
+def _gate_guidance_wide(cand: dict) -> GateResult:
+    from showcase import (
+        _guidance_entries, _guidance_states_consensus,
+        _unarmed_disqualifying_guidance,
     )
-    if adjudicable:
-        return GateResult(state="pass", evidence={"n_entries": len(checks)})
+
+    entries = _guidance_entries(cand)
+    if not entries:
+        return GateResult(state="n/a", reason="field_absent")
+
+    unarmed = _unarmed_disqualifying_guidance(cand)
+    if unarmed:
+        rule, entry = unarmed
+        return GateResult(state="block", reason=rule, evidence=entry)
+
+    if any(_guidance_states_consensus(e) for e in entries):
+        return GateResult(state="pass", evidence={"n_entries": len(entries)})
     return GateResult(state="n/a", reason="no_consensus_stated")
 
 
@@ -370,9 +419,10 @@ def _gate_low_base(cand: dict) -> GateResult:
 
 GATES: tuple[Gate, ...] = (
     Gate("sentiment", "Announcement direction must read positive.", "armed", _gate_sentiment),
-    Gate("guidance", "Guidance not raised against a printed consensus it fails to clear.", "armed", _gate_guidance),
+    Gate("guidance", "Guidance not reiterated or lowered below a printed consensus.", "armed", _gate_guidance),
+    Gate("guidance_wide", "Shadow: guidance merely in line with consensus, or below it on a first-time guide.", "shadow", _gate_guidance_wide),
     Gate("earnings_quality", "Bank loan-loss rate must not be rising.", "armed", _gate_earnings_quality),
-    Gate("low_base", "Headline growth vs the immediately preceding period, seasonally adjudicated against the same period two years earlier.", "shadow", _gate_low_base),
+    Gate("low_base", "Headline growth vs the immediately preceding period, seasonally adjudicated against the same period two years earlier.", "shadow", _gate_low_base, pool="vet"),
 )
 
 
@@ -437,6 +487,21 @@ _EVAL_SQL = """
 """
 
 
+# A verdict of n/a because the row never reached the vet carries no information
+# about the announcement — it is a statement about which pipeline stage ran. It
+# must therefore never overwrite a verdict that DID adjudicate something.
+#
+# This is not hypothetical. Between the low_base gate shipping and 2026-08-04 it
+# destroyed 100% of that gate's output: showcase.flag_high_impact_candidates
+# wrote the real evaluation at ~06:06-06:11 each morning and the wide sweep
+# (stage 3.6, four hours later) upserted `not_vetted` straight over it, leaving
+# 185 of 185 stored evaluations reading not_vetted and the gate's Phase 5
+# calibration sample permanently empty. The `pool` field on Gate now keeps the
+# sweep away from vet-pool gates; this guard is the second line, covering
+# re-runs, backfills and any future caller that doesn't know the rule.
+_UNINFORMATIVE_REASON = "not_vetted"
+
+
 def _upsert_evaluation(rns_id, gate: Gate, result: GateResult) -> int:
     return _exec(
         """
@@ -447,11 +512,14 @@ def _upsert_evaluation(rns_id, gate: Gate, result: GateResult) -> int:
             state = EXCLUDED.state, reason = EXCLUDED.reason,
             evidence = EXCLUDED.evidence, mode = EXCLUDED.mode,
             evaluated_at = EXCLUDED.evaluated_at
+        WHERE EXCLUDED.reason IS DISTINCT FROM %s
+           OR rns_gate_evaluations.reason IS NOT DISTINCT FROM %s
         """,
         (
             rns_id, gate.name, result.state, result.reason,
             Json(result.evidence) if result.evidence is not None else None,
             gate.mode, datetime.now(timezone.utc),
+            _UNINFORMATIVE_REASON, _UNINFORMATIVE_REASON,
         ),
     )
 
@@ -462,14 +530,53 @@ def record_gate_evaluations(hours: int = 48) -> dict:
     a re-run (or the morning cron re-covering an overlapping window) just
     refreshes the same rows. Returns a counts dict for cron logs.
 
-    low_base always comes back n/a/not_vetted here — this sweep's rows never
-    carry a `low_base` key (see record_low_base_evaluation)."""
+    Vet-pool gates (low_base) are SKIPPED. This sweep's rows never carry a
+    `low_base` key, so evaluating it here can only ever produce n/a/not_vetted —
+    which is not a harmless no-op, because this stage runs AFTER stage 3.5 and
+    the upsert would land on top of the real verdict the vet just wrote. That
+    is what emptied the gate's calibration sample for its entire life; see
+    _UNINFORMATIVE_REASON."""
     rows = _q(_EVAL_SQL, (hours,))
+    wide = [g for g in GATES if g.pool == "wide"]
     written = 0
     for row in rows:
-        for gate, result in evaluate_all(row):
-            written += _upsert_evaluation(row["id"], gate, result)
-    return {"candidates": len(rows), "gate_rows_written": written}
+        for gate in wide:
+            written += _upsert_evaluation(row["id"], gate, gate.evaluate(row))
+    return {
+        "candidates": len(rows),
+        "gates_run": [g.name for g in wide],
+        "gate_rows_written": written,
+    }
+
+
+def backfill_low_base_evaluations() -> dict:
+    """Re-record the low_base gate from the vet output stored on
+    high_impact_rns.low_base (migration 028).
+
+    The clobber above destroyed the gate's evaluations but not its INPUTS —
+    those were persisted onto the flag row itself precisely because "the gate's
+    own evidence only survives on rows it manages to adjudicate" (showcase.py).
+    So the verdicts are recoverable for every row flagged since migration 028,
+    which is the only calibration sample this gate has ever had."""
+    rows = _q(
+        """
+        SELECT h.rns_id, h.low_base, r.symbol, r.category,
+               m.sector, m.industry
+        FROM high_impact_rns h
+        JOIN rns_announcements r ON r.id = h.rns_id
+        LEFT JOIN company_metadata m ON m.symbol = r.symbol
+        WHERE h.low_base IS NOT NULL
+        """
+    )
+    counts: Counter = Counter()
+    for row in rows:
+        cand = {k: row[k] for k in ("symbol", "category", "sector", "industry")}
+        cand["low_base"] = row["low_base"]
+        gate = next(g for g in GATES if g.name == "low_base")
+        result = gate.evaluate(cand)
+        _upsert_evaluation(row["rns_id"], gate, result)
+        counts[f"{result.state}:{result.reason or '-'}"] += 1
+    return {"rows": len(rows), "outcomes": dict(counts)}
 
 
 def record_low_base_evaluation(rns_id: int, cand: dict) -> int:

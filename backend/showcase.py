@@ -737,9 +737,14 @@ def _parse_low_base(raw) -> dict:
 # 3 "in_line" — ">£40m" is a floor and the £40.7m consensus is only 1.75% above
 # it, so both labels are defensible and the model cannot be relied on to pick
 # one. Gating on "below" alone would therefore fire on barely half the runs.
-# Including "in_line" makes it fire 7/7 and is sound on its own terms: a guide
-# the company has NOT raised, which the announcement's own printed consensus
-# shows it does not exceed, is not a positive catalyst.
+# Including "in_line" made it fire 7/7 and was defended on its own terms: a
+# guide the company has NOT raised, which the announcement's own printed
+# consensus shows it does not exceed, is not a positive catalyst. That rule was
+# DISARMED on 2026-08-04 and moved to the shadow `guidance_wide` gate — see the
+# KLR.L note below. The armed rule is now "below" alone, which means it fires on
+# roughly half the LUCE runs rather than 7/7; that is the accepted cost of not
+# enforcing an uncalibrated rule, and the shadow gate records what it would
+# have done in the meantime.
 #
 # Still deliberately narrow. "raised" never disqualifies, so ULVR — which
 # restates a pre-existing 4-6% range while explicitly upgrading its outlook —
@@ -750,22 +755,81 @@ def _parse_low_base(raw) -> dict:
 # _clean_guidance_checks assigns to labels it didn't recognise, so treating it
 # as disqualifying would silently drop rows on a parsing miss.
 _GUIDANCE_DISQUALIFYING_VS_PRIOR = ("reiterated", "lowered")
-_GUIDANCE_DISQUALIFYING_VS_CONSENSUS = ("below", "in_line")
+_GUIDANCE_DISQUALIFYING_VS_CONSENSUS = ("below",)
+
+# ── The two rules that are NOT armed ──────────────────────────────────────────
+# Both were found by the 2026-08-04 audit of that morning's nine llm_score>=60
+# rows, and both are recorded by the shadow `guidance_wide` gate rather than
+# added to the armed rule above, because §4 of the plan doc is explicit that
+# each armed gate compounds the block's aggregate false-block rate and that
+# nothing gets armed on n=1.
+#
+#  1. reiterated/lowered + in_line. Armed until 2026-08-04 on the reasoning
+#     quoted above, and it is 8 of the 9 guidance blocks ever recorded — i.e.
+#     almost the entire fire rate of this gate rests on a rule no return
+#     horizon has ever judged. KLR.L 9702412 is why it came out: it printed
+#     "in line with recently UPGRADED market expectations" alongside an H1
+#     beat, a raised dividend and a record order book. `vs_consensus: in_line`
+#     cannot distinguish a guide reiterated against a consensus just raised to
+#     meet it from one reiterated against a stale consensus, and only the
+#     latter is the non-catalyst this rule was built on.
+#
+#  2. below, with any other vs_prior. The vs_prior restriction is what let
+#     CLI.L 9702416 through — FY EPS guided 4.6-5.5p against a printed 6.8p
+#     consensus, a ~32% miss, labelled `new` because it was the first guide of
+#     the year. Guidance that misses a printed consensus is a miss whatever it
+#     did relative to prior guidance, but arming that is a widening, and this
+#     module widens on evidence.
+_GUIDANCE_UNARMED_IN_LINE_VS_PRIOR = ("reiterated", "lowered")
+# Rule 2's vs_prior set is enumerated rather than written as "not reiterated or
+# lowered", so that "unknown" — the fail-safe _clean_guidance_checks assigns to
+# labels it did not recognise — stays out of it. This gate is shadow, so an
+# "unknown" firing here could not drop a row today; but it would quietly seed
+# the calibration sample with parsing misses, and the promotion criterion reads
+# that sample.
+_GUIDANCE_UNARMED_BELOW_VS_PRIOR = ("raised", "new")
+
+
+def _guidance_entries(cand: dict) -> list:
+    checks = cand.get("guidance_checks")
+    if not isinstance(checks, list):
+        return []
+    return [e for e in checks if isinstance(e, dict)]
+
+
+def _guidance_states_consensus(entry: dict) -> bool:
+    """Did this entry print a consensus figure to compare against at all?"""
+    return entry.get("vs_consensus") not in (None, "no_consensus_stated")
 
 
 def _disqualifying_guidance(cand: dict) -> Optional[dict]:
     """Return the first guidance entry that should block flagging, else None."""
-    checks = cand.get("guidance_checks")
-    if not isinstance(checks, list):
-        return None
-    for entry in checks:
-        if not isinstance(entry, dict):
-            continue
+    for entry in _guidance_entries(cand):
         if (
             entry.get("vs_consensus") in _GUIDANCE_DISQUALIFYING_VS_CONSENSUS
             and entry.get("vs_prior") in _GUIDANCE_DISQUALIFYING_VS_PRIOR
         ):
             return entry
+    return None
+
+
+def _unarmed_disqualifying_guidance(cand: dict) -> Optional[tuple[str, dict]]:
+    """First entry an UNARMED guidance rule would disqualify, as (rule, entry).
+
+    Blocks nothing on its own — it feeds the shadow `guidance_wide` gate, and
+    it also stops the armed gate reporting `pass` on a row one of these rules
+    flags, which is how CLI.L's 32% consensus miss came back as "adjudicated,
+    nothing wrong".
+    """
+    for entry in _guidance_entries(cand):
+        vs_c, vs_p = entry.get("vs_consensus"), entry.get("vs_prior")
+        if vs_c == "in_line" and vs_p in _GUIDANCE_UNARMED_IN_LINE_VS_PRIOR:
+            return "reiterated_in_line", entry
+        if (
+            vs_c in _GUIDANCE_DISQUALIFYING_VS_CONSENSUS
+            and vs_p in _GUIDANCE_UNARMED_BELOW_VS_PRIOR
+        ):
+            return "below_consensus_other_vs_prior", entry
     return None
 
 
