@@ -144,6 +144,117 @@ def test_summary_ignores_status_filter_but_honours_provider_and_search(monkeypat
     assert out_ses_only["summary"] == {"delivered": 1}
 
 
+# ── Daily metrics ───────────────────────────────────────────────────────────────
+
+def _at(days_ago: int, hour: int = 7) -> datetime:
+    """A UTC timestamp `days_ago` UK-days before now, at the digest hour."""
+    today = datetime.now(timezone.utc).astimezone(email_monitor._UK_TZ).date()
+    day = today - timedelta(days=days_ago)
+    return datetime(day.year, day.month, day.day, hour, 30, tzinfo=email_monitor._UK_TZ)
+
+
+def test_metrics_emits_every_day_in_the_window_including_empty_ones(monkeypatch):
+    """The digest is weekdays-only — dropping days with no send would close the
+    weekend gaps and make a five-day cadence look continuous."""
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        _msg("m1", ["email.sent", "email.delivered"], sent_at=_at(0)),
+    ])
+    out = email_monitor.daily_metrics(days=5)
+    assert len(out["points"]) == 5
+    assert [p["messages"] for p in out["points"]] == [0, 0, 0, 0, 1]
+    assert out["points"][-1]["day"] == out["end"]
+
+
+def test_metrics_counts_messages_not_events_and_rolls_up_totals(monkeypatch):
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        _msg("m1", ["email.sent", "email.delivered", "email.opened", "email.clicked"], sent_at=_at(0)),
+        _msg("m2", ["email.sent", "email.delivered", "email.opened"], sent_at=_at(0)),
+        _msg("m3", ["email.sent", "email.bounced"], sent_at=_at(0)),
+        _msg("m4", ["email.sent", "email.delivery_delayed", "email.delivered"], sent_at=_at(1)),
+    ])
+    out = email_monitor.daily_metrics(days=3)
+    assert out["totals"] == {
+        "messages": 4, "delivered": 3, "opened": 2, "clicked": 1,
+        "bounced": 1, "failed": 0, "complained": 0, "delayed": 1,
+    }
+    # delivered/bounced are of everything sent; opened/clicked of what landed
+    assert out["rates"]["delivered"] == 75.0
+    assert out["rates"]["bounced"] == 25.0
+    assert out["rates"]["opened"] == round(100 * 2 / 3, 1)
+
+
+def test_metrics_buckets_by_send_day_not_event_day(monkeypatch):
+    """A late open belongs to the cohort it was sent with, otherwise the open
+    rate on a given column isn't a share of that column's delivered."""
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        _msg("m1", ["email.sent", "email.delivered", "email.opened"],
+             sent_at=_at(2), last_event_at=_at(0)),
+    ])
+    out = email_monitor.daily_metrics(days=5)
+    days_with_mail = [p["day"] for p in out["points"] if p["messages"]]
+    assert days_with_mail == [_at(2).astimezone(timezone.utc).astimezone(email_monitor._UK_TZ).date().isoformat()]
+
+
+def test_metrics_nulls_engagement_before_it_was_tracked(monkeypatch):
+    """Zero would read as "nobody opened it"; the truth is nothing was recorded
+    (opens/clicks were only subscribed on the webhook on 2026-07-30)."""
+    before = email_monitor._ENGAGEMENT_TRACKED_FROM - timedelta(days=1)
+    sent_at = datetime(before.year, before.month, before.day, 7, 30, tzinfo=email_monitor._UK_TZ)
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        # An open DID land on this cohort (some arrived after tracking went on
+        # mid-day), but the day is only half-tracked, so it must not be counted.
+        _msg("old", ["email.sent", "email.delivered", "email.opened"], sent_at=sent_at),
+    ])
+    today = datetime.now(timezone.utc).astimezone(email_monitor._UK_TZ).date()
+    out = email_monitor.daily_metrics(days=(today - before).days + 1)
+
+    old_point = next(p for p in out["points"] if p["day"] == before.isoformat())
+    assert old_point["delivered"] == 1          # deliverability is real back there
+    assert old_point["opened"] is None          # engagement is not
+    assert old_point["clicked"] is None
+    assert out["engagement"]["fully_tracked"] is False
+    assert out["engagement"]["messages"] == 0   # untracked days excluded from the base
+    # The chip/legend total has to equal the sum of the drawn points, or it
+    # claims opens the chart never shows.
+    assert out["totals"]["opened"] == 0
+    assert sum(p["opened"] or 0 for p in out["points"]) == out["totals"]["opened"]
+    assert out["rates"]["opened"] is None       # no tracked delivered to divide by
+
+
+def test_metrics_provider_and_domain_filters(monkeypatch):
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        _msg("m1", ["email.sent"], sent_at=_at(0), provider="resend", recipient="a@gmail.com"),
+        _msg("m2", ["email.sent"], sent_at=_at(0), provider="ses", recipient="b@gmail.com"),
+        _msg("m3", ["email.sent"], sent_at=_at(0), provider="resend", recipient="c@hotmail.com"),
+    ])
+    assert email_monitor.daily_metrics(days=2, provider="ses")["totals"]["messages"] == 1
+    assert email_monitor.daily_metrics(days=2, domain="gmail.com")["totals"]["messages"] == 2
+    assert email_monitor.daily_metrics(days=2)["domains"] == [
+        {"domain": "gmail.com", "messages": 2},
+        {"domain": "hotmail.com", "messages": 1},
+    ]
+
+
+def test_metrics_endpoint_requires_admin_token():
+    bare = TestClient(app)
+    assert bare.get("/api/emails/metrics").status_code == 403
+
+
+def test_metrics_route_is_not_swallowed_by_the_email_id_route(client, monkeypatch):
+    """`/metrics` has to be registered ahead of `/{email_id}`, or it resolves to
+    a timeline lookup for a message literally called "metrics" — which returns
+    200 with an empty event list, so only the body shape catches the mistake."""
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [
+        _msg("m1", ["email.sent", "email.delivered"], sent_at=_at(0)),
+    ])
+    r = client.get("/api/emails/metrics", params={"days": 7})
+    assert r.status_code == 200
+    body = r.json()
+    assert "email_id" not in body                    # not the timeline route
+    assert body["days"] == 7 and len(body["points"]) == 7
+    assert body["totals"]["delivered"] == 1
+
+
 # ── Timeline ────────────────────────────────────────────────────────────────────
 
 def test_timeline_queries_by_email_id_ascending(monkeypatch):

@@ -335,6 +335,38 @@ export const saveAudienceState = (state: AudienceFilterState): void => {
   } catch {}
 };
 
+// /email-metrics admin page state (window, recipient-domain filter, provider,
+// and which series are drawn). Unlike EMAILS_STATE_KEY's status filter this is
+// closer to a chart preference than an investigation, but it stays in
+// sessionStorage for the same reason: a 1-day window restored a fortnight later
+// would show a near-empty chart and read as an outage.
+export const EMAIL_METRICS_STATE_KEY = "stock_screener_email_metrics_state_v1";
+
+export interface EmailMetricsState {
+  days: number;
+  domain: string; // "" = all recipient domains
+  provider: string; // "" = all
+  series: string[]; // series keys currently drawn
+}
+
+export const loadEmailMetricsState = (): Partial<EmailMetricsState> => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(EMAIL_METRICS_STATE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const saveEmailMetricsState = (state: EmailMetricsState): void => {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(EMAIL_METRICS_STATE_KEY, JSON.stringify(state));
+  } catch {}
+};
+
 // Scroll offset per list page, so leaving a long list and coming back doesn't
 // dump the user at the top again. sessionStorage because a remembered position
 // is only meaningful while the list it indexes into is still the one you were

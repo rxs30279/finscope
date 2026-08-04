@@ -1,4 +1,5 @@
-"""Read-only email delivery monitor — the query layer behind `/emails`.
+"""Read-only email delivery monitor — the query layer behind `/emails` and the
+daily chart on `/email-metrics`.
 
 A Resend-style per-message view over `email_events` (migrations 018 + 020),
 which already carries everything this needs: `provider` lets a message be
@@ -15,7 +16,8 @@ smell by bolting a third concern onto either file.
 Read-only: nothing here writes to `email_events`. See
 docs/email-monitor-page-plan.md for the full design rationale.
 """
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends
 
@@ -23,6 +25,11 @@ from admin_auth import require_admin_token
 from db import query
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
+
+# Days are UK days, not UTC days: the digest goes out at 07:30 Europe/London
+# (email_rns_digest._UK_TZ), so a UTC bucket would split a single BST send
+# across two columns for nobody's benefit.
+_UK_TZ = ZoneInfo("Europe/London")
 
 # Status is by precedence, not recency — deliberately unlike Resend, which
 # collapses `sent -> delivery_delayed -> delivered` into "Delivered" and lets
@@ -150,6 +157,151 @@ def list_messages(
         "total": len(displayed),
         "summary": summary,
         "messages": page,
+    }
+
+
+# ── Daily metrics (the `/email-metrics` chart) ─────────────────────────────────
+
+# Each series counts MESSAGES that ever reached that event, not events — a
+# message opened four times is one open, matching how `opened`/`clicked` are
+# already reported per-message on /emails.
+_SERIES_EVENT = {
+    "delivered": "email.delivered",
+    "opened": "email.opened",
+    "clicked": "email.clicked",
+    "bounced": "email.bounced",
+    "failed": "email.failed",
+    "complained": "email.complained",
+    "delayed": "email.delivery_delayed",
+}
+
+# Opens and clicks were only subscribed on the Resend webhook at ~15:00 on
+# 2026-07-30, so `email_events` holds ZERO engagement rows before then even
+# though Resend itself was tracking all along — and no backfill is possible
+# (Replay only re-sends deliveries for event types that were subscribed at the
+# time). Charting those days as 0 would read as "nobody opened it", which is
+# false, so days before this date report opened/clicked as null and the chart
+# breaks the line instead of drawing a floor. The 30th is excluded because it
+# is half-tracked: its 07:30 cohort was live for only part of its open window.
+_ENGAGEMENT_TRACKED_FROM = date(2026, 7, 31)
+
+
+def _cohort_day(msg: dict) -> date | None:
+    """The UK date a message went out — every event on it, however late, is
+    attributed here. Cohort-by-send-day (not by event day) is what makes the
+    rates readable: `opened` on 04 Aug is a share of THAT morning's delivered,
+    rather than of whatever happened to be delivered the day the open landed."""
+    ts = msg.get("sent_at") or msg.get("last_event_at")
+    if not isinstance(ts, datetime):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(_UK_TZ).date()
+
+
+def _rates(totals: dict, engagement_delivered: int) -> dict:
+    """Deliverability is of everything sent; engagement is of what actually
+    landed — an open rate diluted by undeliverable addresses measures the list,
+    not the mail. Engagement takes its own denominator because the untracked
+    stretch has to come out of both halves of the fraction, not just the top."""
+    sent = totals.get("messages") or 0
+    pct = lambda n, d: round(100 * n / d, 1) if d else None  # noqa: E731
+    return {
+        "delivered": pct(totals.get("delivered") or 0, sent),
+        "bounced": pct(totals.get("bounced") or 0, sent),
+        "failed": pct(totals.get("failed") or 0, sent),
+        "complained": pct(totals.get("complained") or 0, sent),
+        "delayed": pct(totals.get("delayed") or 0, sent),
+        "opened": pct(totals.get("opened") or 0, engagement_delivered),
+        "clicked": pct(totals.get("clicked") or 0, engagement_delivered),
+    }
+
+
+@router.get("/metrics")
+def daily_metrics(
+    days: int = 15,
+    provider: str | None = None,
+    domain: str | None = None,
+    _admin: None = Depends(require_admin_token),
+) -> dict:
+    """Per-day message counts for the `/email-metrics` chart.
+
+    Every day in the window is emitted, including days with no send at all —
+    the digest is weekdays-only, so dropping empty days would quietly close the
+    weekend gaps and make a five-day cadence look continuous.
+    """
+    days = max(1, min(days, 90))
+    today = datetime.now(timezone.utc).astimezone(_UK_TZ).date()
+    window = [today - timedelta(days=i) for i in range(days - 1, -1, -1)]
+    first_day = window[0]
+
+    # One extra day of events: a message sent just outside the window can still
+    # be the parent of an event inside it, and _MSGS_SQL filters on event time
+    # while the buckets below key on send time. Cohorts outside `window` are
+    # dropped after classification.
+    rows = query(_MSGS_SQL, {"days": days + 1})
+
+    buckets = {d: {"day": d.isoformat(), "messages": 0, **{s: 0 for s in _SERIES_EVENT}} for d in window}
+    totals = {"messages": 0, **{s: 0 for s in _SERIES_EVENT}}
+    domains: dict[str, int] = {}
+
+    for r in rows:
+        if provider and r.get("provider") != provider:
+            continue
+        if domain and r.get("recipient_domain") != domain:
+            continue
+        day = _cohort_day(r)
+        if day is None or day not in buckets:
+            continue
+        types = set(r.get("event_types") or [])
+        bucket = buckets[day]
+        bucket["messages"] += 1
+        totals["messages"] += 1
+        for series, event_type in _SERIES_EVENT.items():
+            if event_type in types:
+                bucket[series] += 1
+                totals[series] += 1
+        dom = r.get("recipient_domain")
+        if dom:
+            domains[dom] = domains.get(dom, 0) + 1
+
+    # Null out engagement before it was being recorded — see the constant — and
+    # take those days out of the opened/clicked totals too. A total the chart
+    # can't draw is worse than no total: the legend would claim 105 opens over a
+    # window whose visible points only ever add up to 95.
+    for day, bucket in buckets.items():
+        if day < _ENGAGEMENT_TRACKED_FROM:
+            totals["opened"] -= bucket["opened"]
+            totals["clicked"] -= bucket["clicked"]
+            bucket["opened"] = None
+            bucket["clicked"] = None
+
+    tracked = [d for d in window if d >= _ENGAGEMENT_TRACKED_FROM]
+    engagement_base = sum(buckets[d]["messages"] for d in tracked)
+    engagement_delivered = sum(buckets[d]["delivered"] for d in tracked)
+
+    return {
+        "days": days,
+        "start": first_day.isoformat(),
+        "end": today.isoformat(),
+        "series": list(_SERIES_EVENT),
+        "points": [buckets[d] for d in window],
+        "totals": totals,
+        "rates": _rates(totals, engagement_delivered),
+        # Engagement rates recomputed over the tracked days only, so the
+        # headline open rate isn't halved by the untracked stretch.
+        "engagement": {
+            "tracked_from": _ENGAGEMENT_TRACKED_FROM.isoformat(),
+            "fully_tracked": first_day >= _ENGAGEMENT_TRACKED_FROM,
+            "messages": engagement_base,
+            "delivered": engagement_delivered,
+            "opened": totals["opened"],
+            "clicked": totals["clicked"],
+        },
+        "domains": [
+            {"domain": d, "messages": n}
+            for d, n in sorted(domains.items(), key=lambda kv: (-kv[1], kv[0]))
+        ],
     }
 
 

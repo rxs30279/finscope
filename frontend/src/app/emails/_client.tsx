@@ -393,6 +393,13 @@ export default function EmailsClient() {
         right={
           <>
             <a
+              href="/email-metrics"
+              style={{ color: colors.textMuted, fontFamily: "monospace", fontSize: 11, textDecoration: "none" }}
+              title="Daily delivery + engagement chart"
+            >
+              Metrics →
+            </a>
+            <a
               href="/audience"
               style={{ color: colors.textMuted, fontFamily: "monospace", fontSize: 11, textDecoration: "none" }}
               title="Subscriber list"
