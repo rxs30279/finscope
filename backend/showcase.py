@@ -577,6 +577,113 @@ def _guidance_context(cand: dict) -> str:
     return "\n".join(lines)
 
 
+# ── Sequential base, computed from pass 1 ────────────────────────────────────
+# docs/rns-sequential-base-plan.md. The vet's own low_base object (below) is
+# filled by the vet itself and can go unattempted — FRES.L 9702443 scored 45
+# because the vet said the preceding half "cannot be verified" when the FRES
+# announcement's own H1'25 revenue (captured correctly) and the FY25 total
+# (already in this prompt's annual block) were enough to derive it: 4,561.2 -
+# 1,936.2 = 2,625.0, giving +28.9%. gates._gate_low_base computed exactly that
+# a few milliseconds after the vet scored the row — the answer was in the
+# database before the score was saved.
+#
+# So this block is computed BEFORE the vet call, from pass 1's
+# earnings_quality (rns_llm.py — ranker runs on ~1,000 rows/month vs the vet's
+# ~107), and handed to the vet as a fact rather than left for the vet to
+# derive under time/token pressure. Revenue only — see the plan §3 note on why
+# adjusted-vs-statutory makes profit measures unsafe to map onto
+# annual_financials (CTEC prints adjusted operating profit $262m beside
+# reported $115m for the same period; subtracting one from the other produced
+# a -97.2% garbage answer once already). There is no "adjusted revenue", so
+# revenue is the one line safely comparable across the two sources.
+_REVENUE_ITEM_RE = re.compile(r"\b(revenue|turnover)\b", re.I)
+_REVENUE_EXCLUDE_RE = re.compile(r"\bcost\b", re.I)
+
+
+def _sequential_base_from_earnings_quality(cand: dict) -> Optional[dict]:
+    """Build a low_base-shaped input from pass 1's earnings_quality and run it
+    through gates.compute_sequential_base — the same arithmetic the gate uses,
+    reused rather than re-derived. Returns the compute_sequential_base success
+    dict, or None on anything it cannot establish. Silence, never a guess: a
+    missing or unparseable extraction must degrade to today's behaviour.
+
+    Deliberately silent (returns None) when the matching revenue entry itself
+    carries a named one-off — verified against HSBA.L 9702338's stored
+    earnings_quality (2026-08-04), where the Revenue entry ($37.7bn/$34.1bn,
+    period "1H26") is tagged one_off_named "net favourable impact of notable
+    items of $0.8bn and one-off property asset disposal gain of $0.2bn". A raw
+    sequential read of a revenue line the announcement itself says is
+    one-off-flattered is not a clean comparison, and the plan's own worked
+    example (§5) requires HSBA stay silent for exactly this row. ELIX's
+    Revenue entry, by contrast, carries no one_off_named and is a good case.
+    This is a fact read off the extraction, not a guess about story
+    relevance.
+    """
+    from gates import compute_sequential_base, _normalize_period
+
+    entries = cand.get("earnings_quality")
+    if not isinstance(entries, list):
+        return None
+
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        item = str(e.get("item") or "")
+        if not _REVENUE_ITEM_RE.search(item) or _REVENUE_EXCLUDE_RE.search(item):
+            continue
+        if str(e.get("one_off_named") or "").strip():
+            continue
+        period = _normalize_period(e.get("period"))
+        if period not in ("H1", "H2"):
+            continue
+        if _parse_money(e.get("value")) is None or _parse_money(e.get("prior_value")) is None:
+            continue
+
+        lb = {
+            "period": period,
+            "metric": "revenue",
+            "current_value": e.get("value"),
+            "prior_year_value": e.get("prior_value"),
+        }
+        base = compute_sequential_base({**cand, "low_base": lb})
+        if base.get("ok"):
+            return base
+    return None
+
+
+def _sequential_base_context(cand: dict) -> str:
+    """Render the Python-computed sequential comparison for the vet prompt, or
+    "" when nothing was establishable — the caller omits the whole block
+    rather than print an empty header."""
+    base = _sequential_base_from_earnings_quality(cand)
+    if not base:
+        return ""
+    ccy = _ccy(cand.get("financial_currency"))
+    period = base["period"]
+    half_word = "H1" if period == "H1" else "H2"
+    preceding_word = "H2" if period == "H1" else "H1"
+    direction = "ABOVE" if base["delta_pct"] >= 0 else "BELOW"
+    lines = [
+        "Sequential comparison (computed by us from figures pass-1 extracted "
+        "from this announcement — not by you)",
+        f"  {half_word} revenue {_fmt_money_m(base['current_value'], ccy)} is "
+        f"{abs(base['delta_pct']):.1f}% {direction} the preceding half.",
+    ]
+    if base["basis"] == "derived_from_fy_total":
+        lines.append(
+            f"  Preceding half ({preceding_word}, prior fiscal year) = "
+            f"{_fmt_money_m(base['preceding_value'], ccy)}, derived as the "
+            f"latest full fiscal year's total revenue minus the prior-year "
+            f"{half_word} figure of {_fmt_money_m(base['prior_year_value'], ccy)} "
+            f"printed in this announcement."
+        )
+    lines.append(
+        "  If either input looks wrong against the text, say so and disregard "
+        "this."
+    )
+    return "\n".join(lines)
+
+
 # Verdict/score agreement, enforced in _clean_vet_score AND stated in the prompt
 # below — which is why it is defined up here rather than next to its enforcer.
 # Both numbers used to be typed out by hand in two prose passages and one JSON
@@ -625,7 +732,14 @@ def _vet_messages(
         "operating income vs total revenue), compare like-for-like or say the "
         "comparison isn't clean rather than forcing it. If the base period "
         "cannot be established from the data provided, say so in the rationale "
-        "and use low confidence. "
+        "and use low confidence. Where a 'Sequential comparison' block appears "
+        "below, it was computed by us from figures already extracted from this "
+        "announcement — use it rather than deriving your own sequential read, "
+        "and do not mark the score down for an unverifiable sequential trend "
+        "on the line it covers. If it looks wrong against the text, say so and "
+        "disregard it — it is not authoritative over the announcement itself. "
+        "Where it is absent, the instructions above stand and you derive the "
+        "comparison yourself. "
         "Separately, fill the low_base object by COPYING figures as printed — "
         "never calculate the preceding-period base yourself. Identify the "
         "period of the headline figure you are assessing (H1/H2/Q1-Q4) and "
@@ -695,6 +809,9 @@ def _vet_messages(
         "Uncertainty is never a reason to hedge upward. "
         "Return STRICT JSON only."
     )
+    seq_block = _sequential_base_context(cand)
+    seq_section = f"\n{seq_block}\n" if seq_block else ""
+
     user = f"""Announcement
   Company:    {cand.get('company_name') or '?'} ({cand.get('symbol') or '?'})
   Sector:     {cand.get('sector') or '?'}
@@ -731,7 +848,7 @@ net operating income — compare bases carefully. Check the announcement's own
 currency before comparing any figure against this series; a UK-listed company
 may report in dollars or euros)
 {_annual_lines(annual or [], cand.get('financial_currency'))}
-
+{seq_section}
 Return a JSON object with exactly these fields, IN THIS ORDER — decide the
 verdict and write the rationale before you choose the score, so the number
 follows the reasoning rather than the reasoning excusing the number:

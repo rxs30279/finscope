@@ -725,3 +725,76 @@ def test_record_low_base_evaluation_not_vetted_when_no_low_base_key():
     args = ex.call_args[0][1]
     assert args[2] == "n/a"
     assert args[3] == "not_vetted"
+
+
+# ── _normalize_period (docs/rns-sequential-base-plan.md §2, step 2) ──────────
+# earnings_quality's period field is free text, unlike the vet's own low_base
+# object which is asked for the canonical form directly. Forms below are the
+# ones actually observed: CGEO.L 9702442's own stored row uses "2Q26" and
+# "1H26" side by side.
+def test_normalize_period_recognises_observed_forms():
+    cases = {
+        "H1 2026": "H1", "1H26": "H1", "H1": "H1", "h1 2026": "H1",
+        "H2 2025": "H2", "2H25": "H2",
+        "Q2 2026": "Q2", "2Q26": "Q2",
+        "Q1": "Q1", "1Q26": "Q1", "Q4 2025": "Q4",
+    }
+    for raw, expected in cases.items():
+        assert gates._normalize_period(raw) == expected, raw
+
+
+def test_normalize_period_none_on_junk():
+    for raw in (None, "", "FY2026", "H3", "full year", 42, "the second half"):
+        assert gates._normalize_period(raw) is None, raw
+
+
+# ── compute_sequential_base (plan §2, step 3) ─────────────────────────────────
+# Factored out of _gate_low_base so showcase._sequential_base_from_earnings_
+# quality can reuse the same Route 1/Route 2 arithmetic and mis-copy guard
+# ahead of the vet call. These mirror the low_base gate tests above but assert
+# on the raw dict rather than a GateResult, and check the "ok": False reason
+# vocabulary the gate depends on.
+def test_compute_sequential_base_reasons_match_gate_reasons():
+    assert gates.compute_sequential_base({})["reason"] == "not_vetted"
+    assert gates.compute_sequential_base(
+        {"low_base": {"period": "FY2026"}}
+    )["reason"] == "missing_period"
+    assert gates.compute_sequential_base(
+        {"low_base": {"period": "H1", "current_value": "significant"}}
+    )["reason"] == "unparseable_value"
+    assert gates.compute_sequential_base(
+        {"low_base": {"period": "Q2", "current_value": "$117.3m"}}
+    )["reason"] == "quarter_unsupported"
+
+
+def test_compute_sequential_base_route1_ok_on_the_capd_shape():
+    base = gates.compute_sequential_base({"low_base": {
+        "period": "Q2", "current_value": "$117.3m", "preceding_period_value": "$101.7m",
+    }})
+    assert base["ok"] is True
+    assert base["basis"] == "printed_preceding_period"
+    assert base["delta_pct"] > 0
+
+
+def test_compute_sequential_base_route2_ok_on_the_jneo_shape():
+    with patch("showcase._annual_history", return_value=[{"revenue": 60.5e6}]):
+        base = gates.compute_sequential_base({"low_base": {
+            "period": "H1", "metric": "revenue",
+            "current_value": "£37.6m", "prior_year_value": "£30.0m",
+        }})
+    assert base["ok"] is True
+    assert base["basis"] == "derived_from_fy_total"
+    assert abs(base["preceding_value"] - 30.5e6) < 1
+    assert 22 < base["delta_pct"] < 24
+
+
+def test_gate_low_base_still_matches_compute_sequential_base_on_success():
+    # The wrapper must not diverge from what it now delegates to.
+    lb = {"period": "H1", "metric": "revenue",
+          "current_value": "£37.6m", "prior_year_value": "£30.0m"}
+    with patch("showcase._annual_history", return_value=[{"revenue": 60.5e6}]):
+        base = gates.compute_sequential_base({"low_base": lb})
+        result = _gate("low_base").evaluate({"low_base": lb})
+    assert result.state == "pass"
+    assert result.evidence["delta_pct"] == base["delta_pct"]
+    assert result.evidence["preceding_value"] == base["preceding_value"]

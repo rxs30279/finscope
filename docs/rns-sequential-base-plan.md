@@ -1,6 +1,26 @@
 # Plan — hand the vet a Python-computed sequential base
 
-**Status:** not started. Written 2026-08-04.
+**Status:** built 2026-08-04, backend suite green, NOT deploy-verified (§8
+still to run against the live container). Written 2026-08-04.
+
+**Implementation notes, for anyone reading this after the fact:**
+- §7's open question ("HSBA-style rows where revenue is extractable but the
+  story is about another metric") got resolved during the build, on real
+  data: HSBA.L 9702338's stored Revenue entry carries a non-null
+  `one_off_named` ("net favourable impact of notable items of $0.8bn and
+  one-off property asset disposal gain of $0.2bn"), while ELIX's does not.
+  `showcase._sequential_base_from_earnings_quality` skips any revenue entry
+  with a named one-off — a fact read off the extraction, not a guess about
+  what the story is about — and that alone reproduces the required silence on
+  the HSBA fixture without any category/headline heuristic.
+- `compute_sequential_base(cand)` in gates.py is the factored-out arithmetic
+  (§4 step 3); `_gate_low_base` is now a thin wrapper over it, unchanged
+  behaviour, verified by test.
+- The vet prompt block never states an exact fiscal year for the "preceding
+  half" (`_low_base_fy_series` only ever returns bare values, not years) —
+  it reads "the latest full fiscal year's total revenue" instead of
+  "FY2025". Accurate, just less specific than the worked example in §5;
+  revisit only if the vet's rationale text turns out to need the label.
 **Goal:** stop the vet marking a story down for a comparison it could have made.
 
 ---

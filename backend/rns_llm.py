@@ -569,6 +569,15 @@ do not pick a score and then justify it:
                    the announcement itself quantifies — what the reported
                    result is MADE OF, as distinct from the forward guidance
                    above. Empty array if it quantifies none.
+                     ALWAYS INCLUDE TOP-LINE REVENUE/TURNOVER. On any
+                   results or trading-update announcement, emit an entry for
+                   the headline revenue/turnover figure with its prior-period
+                   comparator even when nothing about it is remarkable and
+                   the story is about a different line (margin, one-off,
+                   profit) — a downstream sequential-trend check needs this
+                   figure on every row, not just the ones where revenue is
+                   the story. Still governed by the rules below: no prior
+                   figure invented if the announcement does not print one.
                      RATES COUNT AS LINES. Where the announcement prints a
                    normalised rate next to an absolute figure — a bank's loan
                    loss rate or cost of risk in bps, an impairment ratio, a

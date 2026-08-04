@@ -28,6 +28,7 @@ import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -217,6 +218,36 @@ _LOW_BASE_HALVES = ("H1", "H2")
 _LOW_BASE_PERIODS = ("H1", "H2", "Q1", "Q2", "Q3", "Q4")
 _LOW_BASE_METRICS = ("revenue", "operating_income", "net_income")
 
+# Period strings in earnings_quality are free text — "H1 2026", "1H26", "2Q26"
+# and "Q2 2026" all occur (see docs/rns-sequential-base-plan.md §3, and CGEO's
+# own stored row uses "2Q26" and "1H26" side by side). The vet's OWN low_base
+# object is asked for the canonical H1/H2/Q1-4 form directly and needs no
+# normalising; this is only for text the ranker wrote for a different purpose.
+# Matches the digit adjacent to H/Q either side, since which side the digit
+# falls on is inconsistent between filers. Returns None on anything that
+# doesn't contain a recognisable half/quarter marker — never a guess.
+_HALF_RE = re.compile(r"\bH\s*([12])\b", re.I)
+_HALF_ALT_RE = re.compile(r"\b([12])\s*H(?:\d|\b)", re.I)
+_QUARTER_RE = re.compile(r"\bQ\s*([1-4])\b", re.I)
+_QUARTER_ALT_RE = re.compile(r"\b([1-4])\s*Q(?:\d|\b)", re.I)
+
+
+def _normalize_period(raw) -> Optional[str]:
+    """"H1 2026" / "1H26" / "H1" -> "H1"; "2Q26" / "Q2 2026" -> "Q2". None on
+    anything unrecognised."""
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip().upper()
+    if not s:
+        return None
+    m = _HALF_RE.search(s) or _HALF_ALT_RE.search(s)
+    if m:
+        return f"H{m.group(1)}"
+    m = _QUARTER_RE.search(s) or _QUARTER_ALT_RE.search(s)
+    if m:
+        return f"Q{m.group(1)}"
+    return None
+
 # ── Seasonality ───────────────────────────────────────────────────────────────
 # A sequential comparison is seasonality-contaminated and, taken alone, is not
 # evidence of anything. Greggs earns ~62% of its operating profit in H2, so its
@@ -280,20 +311,38 @@ def _low_base_fy_series(symbol: Optional[str], metric: str, n: int = 2) -> list:
     return out
 
 
-def _gate_low_base(cand: dict) -> GateResult:
+def compute_sequential_base(cand: dict) -> dict:
+    """Arithmetic core of the low_base gate, factored out (plan §2 step 3,
+    docs/rns-sequential-base-plan.md) so both the gate and
+    showcase._sequential_base_from_earnings_quality — which builds a
+    low_base-shaped dict from pass 1's earnings_quality, ahead of the vet call
+    — share one implementation rather than a second copy of Route 1/Route 2
+    and the mis-copy guard.
+
+    Reads the same `cand["low_base"]` shape the gate has always read:
+    period/metric/current_value/preceding_period_value/prior_year_value/
+    prior_year_growth_pct. Returns {"ok": False, "reason": ...} on anything it
+    cannot establish — the `reason` vocabulary matches GateResult.reason
+    exactly, so _gate_low_base needs no second mapping — or
+    {"ok": True, period, metric, current_value, preceding_value, delta_pct,
+    basis, prior_year_value, fy} on success. `prior_year_value` and `fy` are
+    only populated on the derived-from-FY route; they exist here so
+    _gate_low_base's seasonal-norm test (which needs them) doesn't have to
+    redo Route 2 itself.
+    """
     from showcase import _parse_money
 
     lb = cand.get("low_base")
     if not isinstance(lb, dict):
-        return GateResult(state="n/a", reason="not_vetted")
+        return {"ok": False, "reason": "not_vetted"}
 
     period = str(lb.get("period") or "").strip().upper()
     if period not in _LOW_BASE_PERIODS:
-        return GateResult(state="n/a", reason="missing_period")
+        return {"ok": False, "reason": "missing_period"}
 
     current = _parse_money(lb.get("current_value"))
     if current is None:
-        return GateResult(state="n/a", reason="unparseable_value")
+        return {"ok": False, "reason": "unparseable_value"}
 
     # Route 1 — the announcement prints the immediately preceding same-length
     # period directly (CAPD's Q1'26 next to Q2'26). No divisor, no
@@ -329,7 +378,7 @@ def _gate_low_base(cand: dict) -> GateResult:
         # §Phase 4 data-source audit) — so a quarter with nothing printed
         # directly is n/a, never a divide-by-4 guess.
         if period not in _LOW_BASE_HALVES:
-            return GateResult(state="n/a", reason="quarter_unsupported")
+            return {"ok": False, "reason": "quarter_unsupported"}
 
         prior = _parse_money(lb.get("prior_year_value"))
         if prior is None:
@@ -337,28 +386,58 @@ def _gate_low_base(cand: dict) -> GateResult:
             if isinstance(growth, (int, float)) and growth > -100:
                 prior = current / (1 + growth / 100.0)
         if prior is None:
-            return GateResult(state="n/a", reason="no_period_split")
+            return {"ok": False, "reason": "no_period_split"}
 
         metric = str(lb.get("metric") or "").strip().lower()
         if metric not in _LOW_BASE_METRICS:
-            return GateResult(state="n/a", reason="metric_unmapped")
+            return {"ok": False, "reason": "metric_unmapped"}
 
         fy = _low_base_fy_series(cand.get("symbol"), metric, 2)
         if not fy or fy[0] is None:
-            return GateResult(state="n/a", reason="no_annual_history")
+            return {"ok": False, "reason": "no_annual_history"}
 
         preceding = fy[0] - prior
         basis = "derived_from_fy_total"
 
     if not preceding:
-        return GateResult(state="n/a", reason="unparseable_value")
+        return {"ok": False, "reason": "unparseable_value"}
 
     delta_pct = round((current / preceding - 1) * 100, 1)
+    return {
+        "ok": True,
+        "period": period,
+        "metric": str(lb.get("metric") or "").strip().lower() or None,
+        "current_value": current,
+        "preceding_value": round(preceding, 1),
+        "delta_pct": delta_pct,
+        "basis": basis,
+        "prior_year_value": prior,
+        "fy": fy,
+    }
+
+
+def _gate_low_base(cand: dict) -> GateResult:
+    from showcase import _parse_money
+
+    base = compute_sequential_base(cand)
+    if not base["ok"]:
+        return GateResult(state="n/a", reason=base["reason"])
+
+    period = base["period"]
+    current = base["current_value"]
+    preceding = base["preceding_value"]
+    delta_pct = base["delta_pct"]
+    basis = base["basis"]
+    prior = base["prior_year_value"]
+    fy = base["fy"]
+
     evidence = {
         "period": period, "current_value": current,
-        "preceding_value": round(preceding, 1), "delta_pct": delta_pct,
+        "preceding_value": preceding, "delta_pct": delta_pct,
         "basis": basis,
     }
+
+    lb = cand.get("low_base") or {}
 
     # Guardrail 3 (STAN/JNEO) — the model's own direction claim, checked
     # mechanically against the sign Python just computed, field to field —

@@ -172,6 +172,137 @@ def test_vet_prompt_stub_body_says_unavailable_external_document():
     assert "short stub" not in user
 
 
+# ── Sequential base from earnings_quality (docs/rns-sequential-base-plan.md) ──
+# Fixtures are the real stored earnings_quality for these five rns_ids, read
+# from prod on 2026-08-04 (the plan's own worked examples, §5). ELIX and HSBA
+# are exactly as stored — FRES and CTEC add a synthetic Revenue entry to
+# simulate the Step 1 ranker-prompt fix landing (neither had one in the real
+# row that day, which is the defect §1 of the plan is about).
+_ELIX_EQ = [
+    {"item": "Revenue", "kind": "income", "value": "£89.0m", "period": "H1 2026",
+     "prior_value": "£71.2m (implied from 25% growth)", "one_off_named": None},
+    {"item": "Adjusted EBITDA", "kind": "income", "value": "£27.6m", "period": "H1 2026",
+     "prior_value": "£21.4m (implied from 29% growth)", "one_off_named": None},
+]
+_HSBA_EQ = [
+    {"item": "Profit before tax", "kind": "income", "value": "$19.5bn", "period": "1H26",
+     "prior_value": "$15.8bn",
+     "one_off_named": "net favourable impact of notable items of $2.2bn"},
+    {"item": "Revenue", "kind": "income", "value": "$37.7bn", "period": "1H26",
+     "prior_value": "$34.1bn",
+     "one_off_named": "net favourable impact of notable items of $0.8bn and "
+                       "one-off property asset disposal gain of $0.2bn"},
+]
+_CGEO_EQ = [
+    {"item": "Total portfolio value creation", "kind": "income", "value": "GEL 772,338",
+     "period": "1H26", "prior_value": "GEL 1,014,360", "one_off_named": None},
+    {"item": "Net income", "kind": "income", "value": "GEL 720,646", "period": "1H26",
+     "prior_value": "GEL 988,747", "one_off_named": None},
+]
+_FRES_EQ_WITH_REVENUE = [
+    {"item": "Revenue", "kind": "income", "value": "US$3,382.6m", "period": "H1 2026",
+     "prior_value": "US$1,936.2m", "one_off_named": None},
+    {"item": "Profit for the period", "kind": "income", "value": "US$1,463.4m",
+     "period": "H1 2026", "prior_value": "US$467.6m", "one_off_named": None},
+]
+_CTEC_EQ_WITH_REVENUE = [
+    {"item": "Revenue", "kind": "income", "value": "$1,232m", "period": "H1 2026",
+     "prior_value": "$1,180m", "one_off_named": None},
+    {"item": "Cost of revenue", "kind": "cost_or_charge", "value": "$900m",
+     "period": "H1 2026", "prior_value": "$860m", "one_off_named": None},
+]
+
+
+def test_sequential_base_from_earnings_quality_fres_canonical_case():
+    # The row that started the plan: +28.9% was derivable and the vet said it
+    # couldn't be verified. 4,561.2 - 1,936.2 = 2,625.0; 3,382.6/2,625.0-1 = +28.9%.
+    with patch.object(showcase, "_annual_history", return_value=[{"revenue": 4_561.2e6}]):
+        base = showcase._sequential_base_from_earnings_quality(
+            {"symbol": "FRES.L", "earnings_quality": _FRES_EQ_WITH_REVENUE}
+        )
+    assert base is not None
+    assert base["period"] == "H1"
+    assert abs(base["preceding_value"] - 2_625.0e6) < 1e5
+    assert 28.5 < base["delta_pct"] < 29.3
+
+
+def test_sequential_base_from_earnings_quality_elix_positive_control():
+    with patch.object(showcase, "_annual_history", return_value=[{"revenue": 149.6e6}]):
+        base = showcase._sequential_base_from_earnings_quality(
+            {"symbol": "ELIX.L", "earnings_quality": _ELIX_EQ}
+        )
+    assert base is not None
+    assert 13 < base["delta_pct"] < 14
+
+
+def test_sequential_base_from_earnings_quality_ctec_negative_direction_control():
+    with patch.object(showcase, "_annual_history", return_value=[{"revenue": 2_439e6}]):
+        base = showcase._sequential_base_from_earnings_quality(
+            {"symbol": "CTEC.L", "earnings_quality": _CTEC_EQ_WITH_REVENUE}
+        )
+    assert base is not None
+    # "Cost of revenue" must not be picked up as the top line.
+    assert base["current_value"] == 1_232e6
+    assert -2.5 < base["delta_pct"] < -1.7
+
+
+def test_sequential_base_from_earnings_quality_silent_on_hsba_named_one_off():
+    # HSBA's Revenue line carries one_off_named — a raw sequential read of a
+    # line the announcement itself says is one-off-flattered is not a clean
+    # comparison. Default to silence (plan §5/§7).
+    base = showcase._sequential_base_from_earnings_quality(
+        {"symbol": "HSBA.L", "earnings_quality": _HSBA_EQ}
+    )
+    assert base is None
+
+
+def test_sequential_base_from_earnings_quality_silent_on_cgeo_no_revenue_line():
+    # No revenue/turnover item at all (only portfolio value creation / net
+    # income), and its periods are quarters anyway — must stay silent.
+    base = showcase._sequential_base_from_earnings_quality(
+        {"symbol": "CGEO.L", "earnings_quality": _CGEO_EQ}
+    )
+    assert base is None
+
+
+def test_sequential_base_from_earnings_quality_silent_when_field_absent():
+    for eq in (None, [], "not a list"):
+        assert showcase._sequential_base_from_earnings_quality(
+            {"symbol": "ABC.L", "earnings_quality": eq}
+        ) is None
+
+
+def test_sequential_base_context_renders_the_fres_block():
+    with patch.object(showcase, "_annual_history", return_value=[{"revenue": 4_561.2e6}]):
+        text = showcase._sequential_base_context(
+            {"symbol": "FRES.L", "earnings_quality": _FRES_EQ_WITH_REVENUE}
+        )
+    assert "Sequential comparison" in text
+    assert "ABOVE the preceding half" in text
+    assert "28.9%" in text
+
+
+def test_sequential_base_context_empty_when_nothing_establishable():
+    assert showcase._sequential_base_context({"symbol": "HSBA.L", "earnings_quality": _HSBA_EQ}) == ""
+    assert showcase._sequential_base_context({}) == ""
+
+
+def test_vet_prompt_includes_sequential_block_when_present():
+    with patch.object(showcase, "_annual_history", return_value=[{"revenue": 4_561.2e6}]):
+        msgs = showcase._vet_messages(
+            _cand(symbol="FRES.L", earnings_quality=_FRES_EQ_WITH_REVENUE), []
+        )
+    user = msgs[1]["content"]
+    assert "Sequential comparison" in user
+    system = msgs[0]["content"]
+    assert "use it rather than deriving your own sequential read" in system
+
+
+def test_vet_prompt_omits_sequential_block_when_absent():
+    msgs = showcase._vet_messages(_cand(earnings_quality=None), [])
+    assert "Sequential comparison" not in msgs[1]["content"]
+
+
 def test_annual_history_query_shape():
     rows = [
         {"fiscal_year": 2023, "period_end_date": "2023-03-31", "revenue": 1,
