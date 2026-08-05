@@ -145,25 +145,79 @@ a one-off inside the line → `self_referential`, never an adjudication.
 
 ---
 
-## 5. Promotion criterion — required at landing
+## 5. Promotion criterion — SUPERSEDED 2026-08-05: arming rejected
 
-`docs/rns-gate-block-plan.md` §4 names "shadow gates never getting armed" as a
-failure mode, and requires the criterion be stated when the gate lands.
+**This gate will not be armed, and nothing should accrue toward arming it.**
+The criterion below is kept only so the reasoning that retired it is legible.
 
-> `one_off` may be armed only on a **materiality threshold**, never on
+> ~~`one_off` may be armed only on a **materiality threshold**, never on
 > presence, and only once: (i) ≥ 30 rows have reached `adjudicated` within a
 > single `llm_model` era; (ii) faceted by score band, the `adjudicated` rows'
 > mean 1d excess on the `score >= 60` facet is negative; and (iii) the
-> `population=reached_gates` facet is used for both — the wide pool overstates
-> fire rates by ~11x on this page (measured 2026-08-04). If `adjudicated` has
-> not reached 30 rows within 6 months, the honest conclusion is that
-> materiality is not extractable and the gate should be **deleted**, not left
-> in shadow forever.
+> `population=reached_gates` facet is used for both. If `adjudicated` has not
+> reached 30 rows within 6 months, the gate should be **deleted**.~~
 
-At current rates ((b): 18% of 122/month) that is roughly 20 adjudicable
-rows/month, so criterion (i) is ~2 months — but only if `self_referential`
-does not eat most of them, which measurement (c) says it might. **Re-measure
-after one month and reconsider before investing further.**
+### Why it was retired
+
+The day-1 read (2026-08-05, 79 evaluations) answered a question the criterion
+was not built to ask. Criterion (i) was on track — it would have been met. The
+problem is that meeting it would have proved nothing:
+
+- Of the **7 rows ever `adjudicated`**, the **3 that also reached the vet were
+  every one of them already named in the vet's own rationale**, same item and
+  same figure (CTEC's `$69m InnovaMatrix impairment` twice, HSBA's `$2.2bn
+  notable items`). Not one unique catch.
+- The gate has **never adjudicated a published row.** The two approved rows it
+  evaluated came back `not_quantified` (CKN) and `pass` (ELIX). It has never
+  been live at the point where a decision is made.
+- The other 4 adjudicated rows are below the public-flag floors — rows that
+  were never going to be published, so a record on them decides nothing.
+
+n = 3 on the overlap is thin, and §8's own warning about thin samples applies
+to this conclusion as much as to the one that motivated the gate. But the
+structural argument does not depend on n: **this gate reads a lossy extraction
+of the body the vet reads whole, so it cannot in principle see a one-off the
+vet could not.** Arming it could only ever have blocked stories the vet was
+already going to catch — with the added risk of blocking one it would have
+passed.
+
+### What replaced it
+
+The gate's real edge was never *finding* one-offs. It is that a Python ratio is
+correct and the vet's arithmetic is not: the 2026-07-30 audit recorded in
+`showcase._vet_candidate` found 4 of 5 v4-flash rationales drew the sequential
+comparison backwards with every input figure traced correctly. Finding and
+sizing are different skills.
+
+So the gate's `computed` ratio is now handed to the vet as a fact, exactly as
+the sequential base is (`docs/rns-sequential-base-plan.md`, 7c21c29), via
+`showcase._one_off_materiality_context` — which **calls `gates._gate_one_off`
+rather than re-deriving**, so the figure the vet reads and the figure `/gates`
+records cannot drift apart.
+
+**The gate therefore stays.** It is no longer a candidate blocker; it is the
+shared arithmetic plus the audit record. Its `pass`/`n/a` states remain useful
+as a record, and §4's prohibitions below still bind in full — in particular it
+still must never infer an unnamed one-off.
+
+Verified on HSX.L 9704864: the vet's rationale went from sizing nothing to
+"Adjusted operating profit is heavily dependent on prior-year reserve releases
+(52.5% of the line)".
+
+### The recall gap this exposed, and where it was fixed
+
+HSX also showed the gate returning a **false `pass`** — `one_off_named` null on
+all 7 entries while the body printed `$173.7m` of favourable prior-year
+development. That was measurement (e)'s known-wrong NWG failure recurring, and
+it was fixed where §4 requires, **in the ranker's extraction prompt, never in
+the gate**: three rules added to `_JSON_SCHEMA_BLOCK` on 2026-08-05 (one-offs
+disclosed away from the line they flatter; attribute back rather than emitting
+the one-off as its own entry; a printed "excluding" pair is a named one-off).
+NWG.L 9697081 now adjudicates at 2.1% and HSX at 52.5%.
+
+**Consequence for any future reading of this data: the sample is not
+comparable across 2026-08-05.** Five of eight controls changed state, all
+toward `adjudicated`. Do not pool pre- and post-fix rows.
 
 ---
 

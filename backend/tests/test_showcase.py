@@ -303,6 +303,79 @@ def test_vet_prompt_omits_sequential_block_when_absent():
     assert "Sequential comparison" not in msgs[1]["content"]
 
 
+# ── One-off materiality handed to the vet ────────────────────────────────────
+# Controls are the real stored extractions these rows produced, not invented
+# fixtures. HSX is the row that motivated the whole change: the vet found a
+# DIFFERENT, smaller one-off ($64.5m deferred tax) by reading the body and
+# never sized the $173.7m at all.
+_HSX_EQ_FIXED = [
+    {"item": "Adjusted operating profit before tax", "kind": "income",
+     "value": "$331.0m", "period": "H1 2026", "prior_value": "$262.0m",
+     "one_off_named": "favourable prior-year development of $173.7 million"},
+    {"item": "Prior-year development", "kind": "income", "value": "$173.7m",
+     "period": "H1 2026", "prior_value": "$292.7m", "one_off_named": None},
+]
+# TW.L 9697075 as stored: the £222.2m cladding provision IS the line, so the
+# ratio is a degenerate 100% that sizes nothing.
+_TW_EQ_SELF_REF = [
+    {"item": "Exceptional charge", "kind": "cost_or_charge", "value": "£222.2m",
+     "period": "H1 2026", "prior_value": None,
+     "one_off_named": "£222.2 million increase in cladding fire safety provision"},
+]
+# BA.L 9694659 as stored: named, but no figure in the one-off text to divide by.
+_BA_EQ_UNQUANTIFIED = [
+    {"item": "Free cash flow", "kind": "income", "value": "£1,234m",
+     "period": "H1 2026", "prior_value": "£(368)m",
+     "one_off_named": "high level of customer advances"},
+]
+
+
+def test_one_off_materiality_context_renders_the_hsx_ratio():
+    text = showcase._one_off_materiality_context(
+        {"symbol": "HSX.L", "earnings_quality": _HSX_EQ_FIXED}
+    )
+    assert "Named one-off materiality" in text
+    assert "52.5% of it" in text
+    # Quoted as the announcement printed it — never re-labelled with the
+    # database's financial_currency, which is a different field entirely.
+    assert "$173.7 million" in text
+    # The one-off's own line is not itself sized against itself.
+    assert text.count("equal to") == 1
+
+
+def test_one_off_materiality_context_drops_the_self_referential_ratio():
+    # Mirrors gates._gate_one_off returning n/a "self_referential": a 100%
+    # ratio is not an adjudication however clean it looks.
+    assert showcase._one_off_materiality_context(
+        {"symbol": "TW.L", "earnings_quality": _TW_EQ_SELF_REF}
+    ) == ""
+
+
+def test_one_off_materiality_context_silent_when_nothing_quantifiable():
+    # Unquantified named one-offs are left to the vet's own reading of the
+    # body — it needs no help FINDING those, only sizing them.
+    for eq in (_BA_EQ_UNQUANTIFIED, None, [], "not a list"):
+        assert showcase._one_off_materiality_context(
+            {"symbol": "ABC.L", "earnings_quality": eq}
+        ) == ""
+
+
+def test_vet_prompt_includes_one_off_block_and_its_absence_guard():
+    msgs = showcase._vet_messages(
+        _cand(symbol="HSX.L", earnings_quality=_HSX_EQ_FIXED), []
+    )
+    assert "Named one-off materiality" in msgs[1]["content"]
+    system = msgs[0]["content"]
+    assert "use the percentage given rather than working out your own" in system
+    # The load-bearing guard: silence must never read as "no one-offs here".
+    assert "ABSENCE is not evidence the result is clean" in system
+
+
+def test_vet_prompt_omits_one_off_block_when_absent():
+    msgs = showcase._vet_messages(_cand(earnings_quality=None), [])
+    assert "Named one-off materiality" not in msgs[1]["content"]
+
+
 def test_annual_history_query_shape():
     rows = [
         {"fiscal_year": 2023, "period_end_date": "2023-03-31", "revenue": 1,

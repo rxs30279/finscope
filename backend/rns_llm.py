@@ -587,6 +587,56 @@ do not pick a score and then justify it:
                    grows with the size of the book, so it says little on its
                    own; the rate is the figure that shows whether anything
                    actually deteriorated, which is why the company reports it.
+                     A ONE-OFF IS RARELY PRINTED NEXT TO THE LINE IT
+                   FLATTERS. Insurers, banks and any issuer reporting on an
+                   adjusted basis disclose the non-repeating part somewhere
+                   else — a starred footnote under a ratio table ("*Prior year
+                   tax credit of $64.5m has not been annualised"), a
+                   reserve-development or notable-items note, an
+                   alternative-performance-measure reconciliation — often
+                   thousands of words after the headline figure it explains.
+                   Read the whole announcement for these, not just the text
+                   around each line. Each one must appear in the
+                   one_off_named of THE RESULT LINE IT FLATTERS — the headline
+                   figure a reader would otherwise take at face value.
+                   Worked example: an insurer's highlights print "Adjusted
+                   operating profit before tax $331.0m" and a note twenty
+                   paragraphs later reads "Prior-year development recognised
+                   for the period is favorable and amounts to $173.7
+                   million". The required entry is item "Adjusted operating
+                   profit before tax", value "$331.0m", one_off_named
+                   "favourable prior-year development of $173.7 million".
+                     Many such figures are ALSO reported metrics in their own
+                   right, and you may keep that separate entry
+                   ("Prior-year development", $173.7m) — but with its
+                   one_off_named null, and never as a substitute for naming it
+                   on the line it flatters. Listing the one-off as a line of
+                   its own and stopping there is the most common way to get
+                   this wrong: it records that the figure exists while hiding
+                   the only thing worth knowing, which is how much of the
+                   headline it accounts for. Whenever an entry's value and its
+                   one_off_named are the same amount, the attribution you
+                   actually owe is on some OTHER line.
+                     A PRINTED "EXCLUDING" PAIR IS A NAMED ONE-OFF. When the
+                   announcement gives both a headline figure and a version of
+                   it excluding something — "total income £8,862m" and "total
+                   income excluding notable items £8,672m", reported vs
+                   adjusted vs underlying — the company has itself named what
+                   the difference is made of. Name it on the HEADLINE entry
+                   (one_off_named "notable items of £190m"), quantified with
+                   the figure the announcement gives for it. Do not treat
+                   emitting the excluding-line, or an entry for the notable
+                   items themselves, as having discharged this — those record
+                   that an adjustment exists without ever saying it is what
+                   the headline growth is made of.
+                     Where a one-off affects both an absolute figure and a
+                   ratio, attach it to the ABSOLUTE figure — a percentage
+                   cannot show how much of itself the one-off accounts for.
+                   The ratio still gets its own entry, without the one-off.
+                     What has to be named in the announcement is the
+                   CONTRIBUTOR, not the connection: you may join a note to the
+                   line it plainly qualifies, but you still may not invent a
+                   one-off nobody named.
                      KEEP IT TO THE MATERIAL LINES — at most about 8 entries.
                    Material means the line moves the result or changes how the
                    result should be read, not merely that a number appears in
@@ -615,13 +665,16 @@ do not pick a score and then justify it:
                                    "52bps"), else null
                      kind          "income" or "cost_or_charge"
                      one_off_named the non-repeating contributor the
-                                   announcement ITSELF names for this line,
-                                   quoted as printed (e.g. "c.£225m gain from
-                                   the sale of the AA co-branded cards
-                                   portfolio"), else null. Copy the company's
-                                   own words; do not judge for yourself
-                                   whether an item recurs, and never infer a
-                                   one-off the announcement does not name.
+                                   announcement ITSELF names as affecting this
+                                   line, quoted as printed — whether named
+                                   inline ("c.£225m gain from the sale of the
+                                   AA co-branded cards portfolio") or in a
+                                   footnote or note ("favourable prior-year
+                                   development of $173.7 million"), else null.
+                                   Copy the company's own words;
+                                   do not judge for yourself whether an item
+                                   recurs, and never infer a one-off the
+                                   announcement does not name.
                                    Direction-neutral: a one-off charge that
                                    flatters the underlying trend gets an entry
                                    exactly as a one-off gain does.

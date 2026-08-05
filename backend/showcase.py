@@ -684,6 +684,73 @@ def _sequential_base_context(cand: dict) -> str:
     return "\n".join(lines)
 
 
+# ── One-off materiality, computed from pass 1 ────────────────────────────────
+# Same shape as the sequential base above, and for the same reason. The
+# 2026-08-05 review of the `one_off` shadow gate found it had never once told
+# us something the vet had not already found by reading the body: of the 7 rows
+# it adjudicated, the 3 that also reached the vet were all named in the vet's
+# own rationale, same item, same figure ($69m InnovaMatrix, $2.2bn notable
+# items). As a gate it is redundant; the vet dominates it wherever a decision
+# is actually made, and it cannot in principle see anything the vet could not,
+# because it reads a lossy extraction of the body the vet reads whole.
+#
+# What the vet is NOT reliably good at is the arithmetic. The 2026-07-30 audit
+# recorded in _vet_candidate below found 4 of 5 v4-flash rationales drew the
+# sequential comparison backwards with correct inputs in front of them, which is
+# what motivated handing over the sequential base rather than asking for it —
+# see docs/rns-sequential-base-plan.md. Finding a one-off and sizing it
+# are different skills: the vet does the first well from prose, Python does the
+# second deterministically. So the gate's ratio is handed over as a fact
+# instead of being recorded for a promotion decision it was never going to be
+# able to inform.
+#
+# Reuses gates._gate_one_off rather than re-deriving the ratio, so the number
+# the vet reads and the number /gates records can never drift apart.
+def _one_off_materiality_context(cand: dict) -> str:
+    """Render pass 1's quantified named one-offs for the vet prompt, or "" when
+    none could be sized — the caller omits the whole block rather than print an
+    empty header.
+
+    Only entries the gate actually ADJUDICATED are shown: an unquantified named
+    one-off is left to the vet's own reading of the body (it needs no help
+    finding those), and a self-referential ~100% ratio is dropped exactly as
+    the gate drops it, because "the line IS the one-off" sizes nothing.
+
+    Figures are quoted as the announcement printed them, never re-labelled with
+    the database's financial_currency — 167 of 755 companies report in a
+    currency that is not the one the announcement quotes, and one-off values
+    are parsed straight out of the announcement text.
+    """
+    from gates import _ONE_OFF_SELF_REFERENTIAL_PP, _gate_one_off
+
+    r = _gate_one_off(cand)
+    if r.reason != "adjudicated" or not r.evidence:
+        return ""
+    real = [
+        c for c in (r.evidence.get("computed") or [])
+        if abs(c.get("ratio_pct", 100.0) - 100.0) > _ONE_OFF_SELF_REFERENTIAL_PP
+    ]
+    if not real:
+        return ""
+
+    lines = [
+        "Named one-off materiality (computed by us from figures pass-1 "
+        "extracted from this announcement — not by you)",
+    ]
+    for c in real:
+        period = f" ({c['period']})" if c.get("period") else ""
+        lines.append(
+            f"  {c['item']}{period}: the announcement credits "
+            f"\"{c['one_off_named']}\" to this line — equal to "
+            f"{c['ratio_pct']:.1f}% of it."
+        )
+    lines.append(
+        "  If any of these figures looks wrong against the text, say so and "
+        "disregard it."
+    )
+    return "\n".join(lines)
+
+
 # Verdict/score agreement, enforced in _clean_vet_score AND stated in the prompt
 # below — which is why it is defined up here rather than next to its enforcer.
 # Both numbers used to be typed out by hand in two prose passages and one JSON
@@ -740,6 +807,16 @@ def _vet_messages(
         "disregard it — it is not authoritative over the announcement itself. "
         "Where it is absent, the instructions above stand and you derive the "
         "comparison yourself. "
+        "The same applies to a 'Named one-off materiality' block: we computed "
+        "each share, so use the percentage given rather than working out your "
+        "own, and if a figure looks wrong against the text say so and "
+        "disregard it. Its ABSENCE is not evidence the result is clean — most "
+        "named one-offs cannot be sized arithmetically (the announcement has "
+        "to print a figure for both the line and the one-off, which only "
+        "happens on a minority of them), so a missing block means only that "
+        "we could not do the division for you. Keep reading the text for "
+        "one-offs yourself exactly as you would if no block appeared, and "
+        "never treat silence here as a reason to score up. "
         "Separately, fill the low_base object by COPYING figures as printed — "
         "never calculate the preceding-period base yourself. Identify the "
         "period of the headline figure you are assessing (H1/H2/Q1-Q4) and "
@@ -811,6 +888,8 @@ def _vet_messages(
     )
     seq_block = _sequential_base_context(cand)
     seq_section = f"\n{seq_block}\n" if seq_block else ""
+    one_off_block = _one_off_materiality_context(cand)
+    one_off_section = f"\n{one_off_block}\n" if one_off_block else ""
 
     user = f"""Announcement
   Company:    {cand.get('company_name') or '?'} ({cand.get('symbol') or '?'})
@@ -848,7 +927,7 @@ net operating income — compare bases carefully. Check the announcement's own
 currency before comparing any figure against this series; a UK-listed company
 may report in dollars or euros)
 {_annual_lines(annual or [], cand.get('financial_currency'))}
-{seq_section}
+{seq_section}{one_off_section}
 Return a JSON object with exactly these fields, IN THIS ORDER — decide the
 verdict and write the rationale before you choose the score, so the number
 follows the reasoning rather than the reasoning excusing the number:

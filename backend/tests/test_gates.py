@@ -196,11 +196,18 @@ _LSEG = [
     {"item": "Total income (excl. recoveries)", "kind": "income", "value": "£4,799m",
      "period": "H1 2026", "prior_value": "£4,489m", "one_off_named": None},
 ]
-# NWG.L 9697081 — the vet's central objection was "£190m notable items", but
-# the ranker's own extraction never named it (one_off_named is null on every
-# entry). This MUST still read `pass` — it is a known-wrong recall gap
-# (measurement (e)), not something this gate should paper over by inferring
-# an unnamed one-off.
+# NWG.L 9697081, as the ranker ORIGINALLY extracted it — the vet's central
+# objection was "£190m notable items" and one_off_named came back null on every
+# entry (measurement (e)'s known-wrong recall gap).
+#
+# That gap has since been closed where it belonged, in the extraction prompt,
+# not here: the "printed EXCLUDING pair" rule added to _JSON_SCHEMA_BLOCK on
+# 2026-08-05 makes the ranker name it on the headline line, and a re-run of this
+# row now yields one_off_named "notable items of £190m" against total income
+# £8,862m — `adjudicated` at 2.1%. The fixture is kept AS-IS, frozen at the old
+# extraction, because what it pins is a gate-level rule that has not changed and
+# must not: given entries that name nothing, the gate reads `pass`. It never
+# infers an unnamed one-off, however obvious the notable-items line makes it.
 _NWG = [
     {"item": "Notable items within total income", "kind": "income", "value": "£190m",
      "period": "H1 2026", "prior_value": "£23m", "one_off_named": None},
