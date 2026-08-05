@@ -139,15 +139,37 @@ _CATEGORIES: list[tuple[str, str, tuple[str, ...]]] = [
         ),
     ),
     ("firm_offer", "A", ("rule-2.7", "rule-2-7", "rule 2.7", "firm-offer")),
+    # "Combination"/"merger" are the all-share phrasing of the same Takeover Code
+    # events as "offer" — SEGRO filed "Statement re Possible Combination" (22 Jul
+    # 2026) and "Recommended Combination" (4 Aug 2026), a £13bn FTSE 100 merger
+    # that both offer categories missed on the wording alone, twice.
     (
         "possible_offer",
         "A",
-        ("rule-2.4", "rule-2-4", "rule 2.4", "possible-offer", "possible offer"),
+        (
+            "rule-2.4",
+            "rule-2-4",
+            "rule 2.4",
+            "possible-offer",
+            "possible offer",
+            "possible-combination",
+            "possible combination",
+            "possible-merger",
+            "possible merger",
+        ),
     ),
     (
         "recommended_offer",
         "A",
-        ("recommended-offer", "recommended-cash-offer", "recommended offer"),
+        (
+            "recommended-offer",
+            "recommended-cash-offer",
+            "recommended offer",
+            "recommended-combination",
+            "recommended combination",
+            "recommended-merger",
+            "recommended merger",
+        ),
     ),
     (
         "ma_update",
@@ -742,6 +764,60 @@ _EARNINGS_RE = re.compile(
     r"|preliminary|quarterly|annual)\b.*\bearnings\b"
 )
 
+# bp files its quarterly results as "2Q26 BP PLC SEA" ("SEA" = Stock Exchange
+# Announcement; 4 Aug 2026, −4.9% on the day). Both halves defeat the classifier
+# today: every `quarterly` pattern is letter-first ("q2-results") so the
+# digit-first "2Q26" never matches, and the headline carries no results word at
+# all for the regex fallbacks to catch. Hence a period marker written
+# digit-first, which also rescues plain "2Q 2026 Results" (39IB, Tier C today).
+_DIGIT_QUARTER_RE = re.compile(r"\b[1-4]q[- ]?(?:19|20)?\d{0,4}\b")
+_SHORT_FY_RE      = re.compile(r"\bfy[- ]?(?:19|20)?\d{2}\b")
+
+# "SEA" earns its place as a results word only behind one of those markers —
+# the bare token is far too ambiguous to trust on its own ("Update on Sea
+# Concession 2A Technical Report", KZG, must stay Tier C).
+_RESULTS_WORD_RE = re.compile(
+    r"\b(?:results?|earnings|report|release|statement|sea)\b"
+)
+
+# Scheduling collateral published *around* a results release — invitations,
+# decks, replays. Same intent as the "notice" guard on the fallback block, and
+# as _EARNINGS_RE's deliberate refusal to match bare "earnings call" /
+# "presentation": the event itself is Tier A, the diary furniture is not.
+# Without this, "HR- 2Q26 Earnings Presentation" (BVA) and "1H and 2Q 2026
+# Results Conference Call Invitation" (37QB) would both be promoted.
+_RESULTS_COLLATERAL_RE = re.compile(
+    r"\bpresentation\b|\bconference call\b|\bwebcast\b|\binvitation\b"
+    r"|\btranscript\b|\bslides\b|\bcall details\b"
+)
+
+
+# Issuers routinely bundle the scheduling note onto the event itself: "Trading
+# Update and Notice of Results" is a real trading update with a diary line
+# attached, not diary admin. Because notice_of_results is listed first (so a
+# bare "notice-of-interim-results" slug can't reach interim_results), the
+# "notice" half won and 14 genuine updates in the 38 days the table retains as
+# of 5 Aug 2026 — TRB, ACSO, APTD, FNTL, FSJ, UPR, FLO, EMR, BIG, FNX, AIEA,
+# JDG, NXQ, TPFG — all dropped to Tier C, roughly one every 2.7 days, so the
+# ranker never saw any of them. When a substantive update word sits
+# alongside the notice, skip notice_of_results and let the loop fall through to
+# trading_update. Deliberately narrow: only the words that are themselves a
+# Tier A trading_update pattern, so "Notice of Results" alone stays Tier C.
+_NOTICE_WITH_UPDATE_RE = re.compile(
+    r"\btrading[- ](?:update|statement)\b|\bbusiness[- ]update\b"
+)
+
+# Single-word filings. Halma (4 Aug 2026, +5.5% on the day) and FirstGroup
+# (29 Jul 2026) each filed a disposal under the bare headline "Disposal", with
+# "disposal" as the whole slug too — every disposal pattern needs a companion
+# word ("disposal of", "-disposal"), so both fell to Tier C. Matched on equality
+# rather than substring so headlines that merely mention a disposal keep their
+# own (usually Tier C) category.
+_BARE_EVENT_CATEGORIES: dict[str, tuple[str, str]] = {
+    "disposal": ("disposal", "B"),
+    "acquisition": ("acquisition", "B"),
+}
+
 
 def _classify(headline: str, slug: str) -> dict:
     """Classify one announcement into tier/category/keyword hits/score.
@@ -757,9 +833,21 @@ def _classify(headline: str, slug: str) -> dict:
     tier = "C"
     for cat, t, patterns in _CATEGORIES:
         if any(p in hay_slug or p in hay_headline for p in patterns):
+            if cat == "notice_of_results" and _NOTICE_WITH_UPDATE_RE.search(
+                f"{hay_slug} {hay_headline}"
+            ):
+                continue  # bundled with a real update — keep looking
             category = cat
             tier = t
             break
+
+    # Bare one-word filings, before the results/contract regex fallbacks. Only
+    # reached when nothing above matched, so it can never override a category.
+    if category is None:
+        for bare in (hay_headline.strip(), hay_slug.strip("- ")):
+            if bare in _BARE_EVENT_CATEGORIES:
+                category, tier = _BARE_EVENT_CATEGORIES[bare]
+                break
 
     # Fallback: results announcements (e.g. "FY26 Results", "Half-year Financial
     # Report") that the enumerated final_results/interim_results slugs miss. Runs
@@ -787,6 +875,17 @@ def _classify(headline: str, slug: str) -> dict:
             if re.search(r"\b(?:half[- ]?year|six[- ]?months?|interim)\b", hay):
                 category, tier = "interim_results", "A"
             elif re.search(r"\bq[1-4]\b|\bquarter(?:ly)?\b", hay):
+                category, tier = "quarterly", "A"
+            else:
+                category, tier = "final_results", "A"
+        elif (
+            _RESULTS_WORD_RE.search(hay)
+            and not _RESULTS_COLLATERAL_RE.search(hay)
+            and (_DIGIT_QUARTER_RE.search(hay) or _SHORT_FY_RE.search(hay))
+        ):
+            # Digit-first period marker + a results word. Routed by the marker,
+            # matching how _EARNINGS_RE picks its category.
+            if _DIGIT_QUARTER_RE.search(hay):
                 category, tier = "quarterly", "A"
             else:
                 category, tier = "final_results", "A"

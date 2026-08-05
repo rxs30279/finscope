@@ -337,6 +337,163 @@ def test_classify_earnings_growth_prose_not_promoted():
     assert r["category"] != "final_results"
 
 
+# ── _classify — bundled "and Notice of Results" ───────────────────────────────
+# Every headline/slug pair below is a real filing that landed in Tier C in the
+# 180 days to 4 Aug 2026 — the ranker never saw any of them.
+
+import pytest
+
+@pytest.mark.parametrize("headline,slug", [
+    ("Trading Update and Notice of Results",
+     "trading-update-and-notice-of-results"),
+    ("Half Year Trading Update and Notice of Results",
+     "half-year-trading-update-and-notice-of-results"),
+    ("Half-Year Trading Update and Notice of Results",
+     "half-year-trading-update-and-notice-of-results"),
+    ("Full Year Trading Update and Notice of Results",
+     "full-year-trading-update-and-notice-of-results"),
+    ("Pre-close Trading Update and Notice of Results",
+     "pre-close-trading-update-and-notice-of-results"),
+    ("Trading Update and Notice of Half-Year Results",
+     "trading-update-and-notice-of-half-year-results"),
+    # BIG's slug carries a trailing hyphen.
+    ("Trading Update and Notice of Results",
+     "trading-update-and-notice-of-results-"),
+])
+def test_classify_bundled_trading_update_beats_notice(headline, slug):
+    r = _classify(headline, slug)
+    assert r["tier"] == "A"
+    assert r["category"] == "trading_update"
+
+def test_classify_bare_notice_of_results_still_tier_c():
+    # The guard must not disarm the notice category itself.
+    r = _classify("Notice of Results", "notice-of-results")
+    assert r["tier"] == "C"
+    assert r["category"] == "notice_of_results"
+
+def test_classify_notice_of_interim_results_still_tier_c():
+    r = _classify("Notice of Interim Results", "notice-of-interim-results")
+    assert r["tier"] == "C"
+    assert r["category"] == "notice_of_results"
+
+
+# ── _classify — digit-first period markers / bp's "SEA" ──────────────────────
+
+def test_classify_bp_sea_quarterly_is_tier_a():
+    # bp's actual Q2 results release, 4 Aug 2026 (−4.9% on the day) — scored
+    # Tier C, so the ranker never saw an £85bn results day.
+    r = _classify("2Q26 BP PLC SEA", "2q26-bp-plc-sea")
+    assert r["tier"] == "A"
+    assert r["category"] == "quarterly"
+
+def test_classify_fy_sea_routes_to_final_results():
+    # Same house style at the full-year end — routed by the period marker.
+    r = _classify("FY26 BP PLC SEA", "fy26-bp-plc-sea")
+    assert r["tier"] == "A"
+    assert r["category"] == "final_results"
+
+def test_classify_digit_first_quarter_results_is_tier_a():
+    # 39IB, Tier C today: the enumerated quarterly slugs are all letter-first.
+    r = _classify("2Q 2026 Results", "2q-2026-results-")
+    assert r["tier"] == "A"
+    assert r["category"] == "quarterly"
+
+def test_classify_bare_sea_word_not_promoted():
+    # KZG — "sea" is only a results word behind a period marker.
+    r = _classify("Update on Sea Concession 2A Technical Report",
+                  "update-on-sea-concession-2a-technical-report")
+    assert r["tier"] == "C"
+
+def test_classify_quarterly_presentation_stays_tier_c():
+    # BVA — collateral around the release, not the release.
+    r = _classify("HR- 2Q26 Earnings Presentation", "hr-2q26-earnings-presentation")
+    assert r["tier"] == "C"
+
+def test_classify_quarterly_conference_call_invitation_stays_tier_c():
+    # 37QB — has a period marker AND "results", but it's an invitation.
+    r = _classify("1H and 2Q 2026 Results Conference Call Invitation",
+                  "1h-and-2q-2026-results-conference-call-invitation")
+    assert r["tier"] == "C"
+
+def test_classify_notice_of_digit_quarter_results_stays_tier_c():
+    # BUR — the existing "notice" guard must still hold on the new branch.
+    r = _classify("Notice of 2Q26 Results & Results Call Details",
+                  "notice-of-2q26-results-results-call-details")
+    assert r["tier"] == "C"
+
+def test_classify_bp_trading_statement_unchanged():
+    # bp files a trading statement weeks before the release; it was already
+    # Tier A via the trading_update patterns and must stay there.
+    r = _classify("2Q26 bp Trading Statement Part 1 of 1",
+                  "2q26-bp-trading-statement-part-1-of-1")
+    assert r["tier"] == "A"
+    assert r["category"] == "trading_update"
+
+
+# ── _classify — combination / merger phrasing of an offer ─────────────────────
+
+def test_classify_recommended_combination_is_tier_a():
+    # SEGRO, 4 Aug 2026 — £13bn FTSE 100 merger that scored Tier C.
+    r = _classify("Recommended Combination", "recommended-combination")
+    assert r["tier"] == "A"
+    assert r["category"] == "recommended_offer"
+
+def test_classify_possible_combination_is_tier_a():
+    # SEGRO, 22 Jul 2026 — the opening statement of the same merger.
+    r = _classify("Statement re Possible Combination",
+                  "statement-re-possible-combination-")
+    assert r["tier"] == "A"
+    assert r["category"] == "possible_offer"
+
+def test_classify_recommended_merger_is_tier_a():
+    r = _classify("Recommended Merger of Acme and Beta",
+                  "recommended-merger-of-acme-and-beta")
+    assert r["tier"] == "A"
+    assert r["category"] == "recommended_offer"
+
+def test_classify_possible_merger_is_tier_a():
+    r = _classify("Statement re Possible Merger", "statement-re-possible-merger")
+    assert r["tier"] == "A"
+    assert r["category"] == "possible_offer"
+
+def test_classify_business_combination_prose_not_promoted():
+    # "Combination" only counts behind possible/recommended — a routine mention
+    # must not reach an offer category. (Directorate Change is board_change/B on
+    # its own; the point here is that the bare word doesn't make it an offer.)
+    r = _classify("Directorate Change following business combination",
+                  "directorate-change-following-business-combination")
+    assert r["category"] not in ("recommended_offer", "possible_offer")
+
+
+# ── _classify — bare one-word filings ─────────────────────────────────────────
+
+def test_classify_bare_disposal_is_tier_b():
+    # Halma, 4 Aug 2026 (+5.5% on the day) and FirstGroup, 29 Jul 2026.
+    r = _classify("Disposal", "disposal")
+    assert r["tier"] == "B"
+    assert r["category"] == "disposal"
+
+def test_classify_bare_acquisition_is_tier_b():
+    r = _classify("Acquisition", "acquisition")
+    assert r["tier"] == "B"
+    assert r["category"] == "acquisition"
+
+def test_classify_bare_event_matches_on_equality_not_substring():
+    # The bare-event lookup is equality-only: a headline that merely contains
+    # the word, and that no existing disposal pattern covers, must not be
+    # promoted. Keeps the new path from widening into a substring match.
+    r = _classify("Disposal Group Update", "disposal-group-update")
+    assert r["tier"] == "C"
+    assert r["category"] is None
+
+def test_classify_disposal_of_business_unchanged():
+    # The existing "disposal of" pattern must still win on its own.
+    r = _classify("Disposal of Momart International",
+                  "disposal-of-momart-international")
+    assert r["tier"] == "B"
+    assert r["category"] == "disposal"
+
+
 # ── _classify — unknown slug falls back ───────────────────────────────────────
 
 def test_classify_unknown_slug_defaults_to_tier_c():
