@@ -484,6 +484,46 @@ def test_flag_vet_failure_shadows_instead_of_publishing():
     assert record_lb.call_args[0][1]["low_base"] is None
 
 
+def test_flag_never_re_vets_an_announcement_that_already_has_a_score():
+    """The 2026-08-05 cost bug. The symbol-level dedupe deliberately lets shadow
+    rows back into the pool, so nothing stopped the SAME rns_id being re-vetted
+    on every one of the ~16 cron runs a morning — ~8 reasoning-heavy calls per
+    run, every one of them discarded by the ON CONFLICT. It also made publishing
+    a lottery: the vet is not reproducible on identical input, and NXT.L rolled
+    a 75 on its sixth re-vet that morning only for the INSERT to drop it.
+
+    Asserted on the SQL because the exclusion has to happen in the candidate
+    query — a Python-side skip would still have paid for the row's selection but,
+    more to the point, the point of the fix is that the vet call is never made."""
+    with patch.object(showcase, "_q", return_value=[]) as q, \
+         patch.object(showcase, "_vet_candidate") as vet:
+        showcase.flag_high_impact_candidates()
+    sql = " ".join(q.call_args[0][0].split())
+    assert "SELECT 1 FROM high_impact_rns h2 WHERE h2.rns_id = r.id" in sql
+    assert "AND h2.vet_score IS NOT NULL" in sql
+    vet.assert_not_called()
+
+
+def test_flag_conflict_clause_only_overwrites_a_failed_vet():
+    """The other half: a row kept eligible by the NULL-score exception must be
+    able to land its retry. DO NOTHING silently threw it away, which is why the
+    failure path above could never actually promote anything."""
+    vet = {"verdict": "include", "confidence": "high", "rationale": "clean",
+           "score": 88, "model": "deepseek-v4-flash:thinking", "low_base": None}
+    with patch.object(showcase, "_q", return_value=[_cand()]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation"), \
+         patch.object(showcase, "_exec", return_value=1) as ex:
+        showcase.flag_high_impact_candidates()
+    sql = " ".join(ex.call_args[0][0].split())
+    assert "ON CONFLICT (rns_id) DO UPDATE SET" in sql
+    assert "vet_score = EXCLUDED.vet_score" in sql
+    # Without this guard the upsert would let a re-vet overwrite a stored
+    # verdict — the exact non-determinism the candidate SQL now prevents.
+    assert "WHERE high_impact_rns.vet_score IS NULL" in sql
+
+
 def test_flag_shadows_a_vetted_row_below_the_publish_floor():
     """The 60-74 llm_score band's normal outcome: vetted, scored, stored,
     invisible. The row must still carry its full vet output — that band is the

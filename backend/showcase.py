@@ -1428,7 +1428,10 @@ def _named_one_offs(cand: dict) -> list[dict]:
 def flag_high_impact_candidates(hours: int = 48) -> dict:
     """Flag rules-passing candidates from the last `hours` straight onto the
     approved (public) showcase. Advisory-vets each and snapshots the story.
-    Idempotent via the rns_id unique constraint. Returns a counts dict for
+    Idempotent via the rns_id unique constraint, and each announcement is
+    vetted exactly once (a failed vet call being the one retryable case) — the
+    cron re-runs this every 15 minutes over a 48h window, so anything else
+    re-pays for the same LLM verdict dozens of times. Returns a counts dict for
     cron logs."""
     cands = _q(
         """
@@ -1504,6 +1507,26 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
               WHERE h.symbol = r.symbol
                 AND h.status <> 'shadow'
                 AND h.flagged_at >= NOW() - (%s || ' days')::interval
+          )
+          -- ONE VET PER ANNOUNCEMENT. The clause above intentionally lets a
+          -- shadow row back into the pool so it can't lock out its symbol —
+          -- but nothing there stops the SAME rns_id being re-selected, so
+          -- until 2026-08-05 every already-vetted candidate was re-vetted on
+          -- every run for the whole `hours` window: ~8 reasoning-heavy calls
+          -- per 15-minute run, all of them discarded by the ON CONFLICT below.
+          -- Worse than the cost, it made publication a lottery — the vet is
+          -- not reproducible on identical input (HSX.L scored 65/48/65/62/45
+          -- across one morning), and on 2026-08-05 07:30 NXT.L rolled a 75 on
+          -- its sixth re-vet, paid for the fwd extraction, then vanished into
+          -- ON CONFLICT DO NOTHING against its own 06:09 shadow row.
+          -- Scored once, the row is done: its verdict is stored and the INSERT
+          -- could not update it anyway. A NULL vet_score is the exception —
+          -- that means the CALL FAILED, not that the story is weak, so it
+          -- stays eligible and the conflict clause below lets the retry land.
+          AND NOT EXISTS (
+              SELECT 1 FROM high_impact_rns h2
+              WHERE h2.rns_id = r.id
+                AND h2.vet_score IS NOT NULL
           )
         ORDER BY r.llm_score DESC
         """,
@@ -1629,7 +1652,36 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                     %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s)
-            ON CONFLICT (rns_id) DO NOTHING
+            -- Only ONE conflict can now reach here: a row whose earlier vet
+            -- call FAILED (vet_score NULL, stored as shadow) and which the
+            -- candidate SQL therefore kept eligible for a retry. Let that
+            -- retry land — test_flag_vet_failure_shadows_instead_of_publishing
+            -- has always promised "a re-vet can promote it", and under DO
+            -- NOTHING that was never true: a DeepSeek outage during the
+            -- morning batch withheld the story permanently. The WHERE makes
+            -- this unreachable for a row that already has a score, so a stored
+            -- verdict is still immutable.
+            ON CONFLICT (rns_id) DO UPDATE SET
+                vet_verdict = EXCLUDED.vet_verdict,
+                vet_confidence = EXCLUDED.vet_confidence,
+                vet_rationale = EXCLUDED.vet_rationale,
+                vet_model = EXCLUDED.vet_model,
+                vet_processed_at = EXCLUDED.vet_processed_at,
+                vet_score = EXCLUDED.vet_score,
+                low_base = EXCLUDED.low_base,
+                fwd_metric = EXCLUDED.fwd_metric,
+                fwd_value = EXCLUDED.fwd_value,
+                fwd_currency = EXCLUDED.fwd_currency,
+                fwd_period = EXCLUDED.fwd_period,
+                fwd_basis = EXCLUDED.fwd_basis,
+                fwd_is_bound = EXCLUDED.fwd_is_bound,
+                fwd_quote = EXCLUDED.fwd_quote,
+                fwd_ev = EXCLUDED.fwd_ev,
+                fwd_multiple = EXCLUDED.fwd_multiple,
+                fwd_model = EXCLUDED.fwd_model,
+                fwd_processed_at = EXCLUDED.fwd_processed_at,
+                status = EXCLUDED.status
+            WHERE high_impact_rns.vet_score IS NULL
             """,
             (
                 c["id"], c["symbol"], c["company_name"], c["headline"], c["url"],
