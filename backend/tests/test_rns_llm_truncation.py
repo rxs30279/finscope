@@ -103,3 +103,20 @@ def test_truncation_never_parses_partial_json(fake_client):
         _resp("stop", json.dumps({"score": 80, "thesis": "complete"})),
     ])
     assert rns_llm._call_deepseek([]) == {"score": 80, "thesis": "complete"}
+
+
+# ── sampling temperature ──────────────────────────────────────────────────────
+# Pinned because the failure is invisible: nothing errors if the ranker starts
+# sampling at a different temperature, its scores just quietly stop being
+# comparable to every llm_score already stored and to the digest's calibrated
+# 76 bar. Note this only binds the fast path — deepseek-v4-flash ignores
+# temperature in thinking mode, so the vet's score spread is not reachable from
+# here (see the note above showcase._vet_candidate).
+def test_ranker_keeps_its_calibrated_temperature(fake_client):
+    client = fake_client([_resp("stop", json.dumps({"score": 80}))])
+    captured = {}
+    client._create = lambda **kw: (captured.update(kw), client._responses.pop(0))[1]
+    client.chat.completions.create = client._create
+    rns_llm._call_deepseek([])
+    assert captured["temperature"] == 0.2
+    assert rns_llm._DEFAULT_TEMPERATURE == 0.2

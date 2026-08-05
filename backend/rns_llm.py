@@ -1105,6 +1105,19 @@ _FAST_MAX_COMPLETION_TOKENS = int(os.environ.get("RNS_FAST_MAX_COMPLETION_TOKENS
 _FAST_REVIEW_SCORE = int(os.environ.get("RNS_FAST_REVIEW_SCORE", "65"))
 
 
+# Sampling temperature, named because it is a calibration constant rather than a
+# tunable: every stored llm_score was produced at this value, as were the
+# digest's 76 bar and the 76+/80+ thresholds. Changing it re-bases the whole feed
+# against its own history.
+#
+# It only reaches the FAST path in practice. deepseek-v4-flash ignores
+# temperature in thinking mode (confirmed 2026-08-05), so it does nothing at all
+# for reasoning-on callers — notably the showcase vet, whose run-to-run score
+# spread therefore cannot be fixed by turning this down. See the note beside
+# showcase._VET_MAX_COMPLETION_TOKENS before spending time on that idea again.
+_DEFAULT_TEMPERATURE = 0.2
+
+
 class TruncatedResponse(RuntimeError):
     """The model ran out of completion budget before finishing its answer.
 
@@ -1149,7 +1162,7 @@ def _call_deepseek(
             model=_DEEPSEEK_MODEL,
             messages=messages,
             response_format={"type": "json_object"},
-            temperature=0.2,
+            temperature=_DEFAULT_TEMPERATURE,
             max_tokens=attempt_budget,
             extra_body=_THINKING_ON if thinking else _THINKING_OFF,
         )

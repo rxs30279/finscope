@@ -2,10 +2,16 @@
 
 Pipeline (all driven from run_rns.py after the LLM ranking stage):
   1. flag_high_impact_candidates() — rules pick candidates (high llm_score,
-     positive sentiment, performance-report category, market-cap floor), an
-     advisory LLM vet flags market-punished positives, and each lands directly
-     as status='approved' (live on the public page). There is no human approval
-     gate — the admin archives unsuitable entries after the fact instead.
+     positive sentiment, performance-report category, market-cap floor), then an
+     LLM vet SCORES each one and that score decides publication (migration 029,
+     2026-08-03): vet_score >= 75 lands as status='approved', live on the public
+     page; below it lands as status='shadow' and is never rendered. The vet was
+     advisory before that and much of the surrounding prose still reads that way
+     — treat "advisory" anywhere in this file as pre-029 wording. There is no
+     human approval gate — the admin archives unsuitable entries after the fact.
+     Each announcement is vetted once, and only once: the cron re-runs this
+     every 15 minutes over a 48h window, so re-selecting a scored row means
+     re-paying for a verdict already stored (fixed 2026-08-05).
   2. record_followups() — copies subsequent tier A/B announcements for each
      tracked company into high_impact_rns_followups, so bad news that surfaces
      AFTER selection (Luceco-style CEO exit) is captured even though Tier C
@@ -985,6 +991,30 @@ Return JSON only — no preamble, no code fence."""
 # the cron log: a cap is not a target, it bills what is generated.
 _VET_MAX_COMPLETION_TOKENS = int(os.environ.get("SHOWCASE_VET_MAX_TOKENS", "8000"))
 
+# DO NOT reach for temperature to make vet_score reproducible — it does nothing
+# here. deepseek-v4-flash ignores temperature in thinking mode (confirmed
+# 2026-08-05), and this call always runs thinking=True. A `temperature=0` on
+# this path would be a no-op that reads like a determinism guarantee.
+#
+# The noise is real and it matters: vet_score decides publication against a hard
+# 75 floor, and on 2026-08-05 the same NXT.L announcement drew
+# 70/68/65/65/68/65/45/70 while HSX.L drew 65/48/65/62/45. Since the same day's
+# dedupe fix there is exactly one vet per announcement, so that spread now lands
+# entirely on a single draw.
+#
+# The variance is structural, not a sampling setting: the reasoning chain is
+# itself sampled, and one divergent token early cascades through arithmetic the
+# model is doing in its head. The levers that can actually move it are
+#   (a) give the model less to compute — the Python-side one-off materiality
+#       (c61f15f) is the first instalment, docs/rns-gate-block-plan.md Phase 4
+#       is the rest;
+#   (b) sample deliberately — best-of-N with the median recorded, once, at a
+#       known cost, rather than the accidental re-vet loop that ran until
+#       2026-08-05 and recorded the FIRST draw anyway;
+#   (c) stop making a hard threshold arbitrate a noisy number.
+# Measure any of them with analysis/rns_body_context_validation.py --repeat,
+# never a single sample.
+
 
 def _clean_vet_score(raw, verdict: Optional[str]) -> Optional[int]:
     """Coerce the vet's score, then enforce the verdict caps in Python.
@@ -1031,8 +1061,17 @@ def _vet_candidate(cand: dict, before=None) -> dict:
     (docs/rns-gate-block-plan.md); the two are complements, not alternatives,
     and Phase 4 remains the real fix because a copied field beats a computed one.
 
-    Note this is advisory either way — insertion is hardcoded 'approved', so a
-    wrong verdict mislabels a card on /gates rather than suppressing a story.
+    NOT advisory since migration 029 (2026-08-03). Insertion used to be
+    hardcoded 'approved', which made a wrong verdict cosmetic — it mislabelled a
+    card on /gates. The score this returns now decides publication: >= 75 goes
+    live, anything below lands as status='shadow' and is never seen. So a wrong
+    verdict here suppresses a real story, which is this system's high-severity
+    error. Treat changes to the prompt or the score bands accordingly.
+
+    Scored exactly once per announcement (see the dedupe clause in
+    flag_high_impact_candidates) and the result is not reproducible: the same
+    row drew 45-75 across one morning. Temperature cannot fix that — see the
+    note beside _VET_MAX_COMPLETION_TOKENS before trying.
     """
     from rns_llm import _call_deepseek, _DEEPSEEK_MODEL
 
