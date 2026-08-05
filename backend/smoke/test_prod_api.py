@@ -8,6 +8,14 @@ backend/healthcheck.py's responsibility.
 TICKER = "AZN.L"
 
 
+def test_version(get_json):
+    """The deploy probe itself. If this shape drifts, every "is my change live?"
+    check silently stops meaning anything, so assert it here rather than trust it."""
+    d = get_json("/api/version")
+    assert isinstance(d.get("source_fingerprint"), str) and d["source_fingerprint"]
+    assert d.get("source_files", 0) > 0
+
+
 def test_filters(get_json):
     d = get_json("/api/filters")
     assert isinstance(d, dict)

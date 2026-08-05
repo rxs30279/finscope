@@ -94,6 +94,7 @@ app.include_router(email_monitor_router)
 # router — see item #6 of the 2026-07-12 review). Re-exported here so existing
 # `from main import query / get_pool` call sites keep working.
 from db import DB_CONFIG, get_pool, query
+import build_info
 from healthcheck import collect as _collect_health, summarize as _summarize_health
 import ci_status
 import gh_actions
@@ -2460,6 +2461,24 @@ def digest(
     return resp
 
 
+# ── Build identity ────────────────────────────────────────────────────────────
+
+@app.get("/api/version")
+def version():
+    """What code this process is running — the deploy probe.
+
+    Deliberately public and unauthenticated: the whole point is that a bare
+    `curl https://api.alphamoveai.co.uk/api/version` answers "is my change live
+    yet?" before anyone starts debugging a redeploy that hasn't landed. It
+    exposes a commit hash and a source digest, neither of which is a secret, and
+    touches nothing (no DB, no network) so it stays up when the rest is sick.
+
+    Compare `source_fingerprint` before and after a push: it changes iff the
+    .py files inside the container changed. `sha` is only populated when the
+    image was built with the GIT_SHA build arg."""
+    return build_info.collect()
+
+
 # ── Admin health/status page ──────────────────────────────────────────────────
 
 def _pooled_query_one(sql):
@@ -2524,6 +2543,7 @@ def status(fresh_ci: bool = Query(default=False)):
         "ci": _ci_latest_runs(force=fresh_ci),
         "digest": _digest_marker(),
         "email_events": _email_events(),
+        "build": build_info.collect(),
     }
 
 
