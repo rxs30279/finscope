@@ -415,6 +415,79 @@ def test_sentiment_prefers_stored_llm_sentiment():
     ) == "positive"
 
 
+# ── FX for the leverage floor ─────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _reset_fx_cache():
+    """_fx_to_gbp memoises for 6h on the module, so without this one test's
+    rates leak into the next (and into the flag tests, which call it)."""
+    showcase._FX_CACHE["rates"] = None
+    showcase._FX_CACHE["at"] = None
+    yield
+    showcase._FX_CACHE["rates"] = None
+    showcase._FX_CACHE["at"] = None
+
+
+def _fx_rows(*codes):
+    return [{"code": c} for c in codes]
+
+
+def test_fx_keeps_gbp_when_the_rate_lookup_dies():
+    """A Yahoo/DB outage must not cost STERLING reporters the net-debt-vs-cap
+    check — they never needed a rate. Only foreign names lose it (rate NULL →
+    the SQL's OR-chain leaves that one test unevaluated)."""
+    with patch.object(showcase, "_q", side_effect=RuntimeError("db down")):
+        assert showcase._fx_to_gbp() == {"GBP": 1.0}
+
+
+def test_fx_one_dead_pair_does_not_cost_the_others_their_rate():
+    """GELGBP=X genuinely does not exist on Yahoo (3 companies report in GEL),
+    so a per-pair failure has to be survivable rather than fatal."""
+    def _ticker(t):
+        if t == "GELGBP=X":
+            raise RuntimeError("404")
+        obj = type("T", (), {})()
+        obj.fast_info = {"lastPrice": 0.74 if t == "GBP=X" else 0.86}
+        return obj
+
+    fake_yf = type("yf", (), {"Ticker": staticmethod(_ticker)})
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD", "EUR", "GEL")), \
+         patch.dict("sys.modules", {"yfinance": fake_yf}):
+        rates = showcase._fx_to_gbp()
+    assert rates == {"GBP": 1.0, "USD": 0.74, "EUR": 0.86}
+    assert "GEL" not in rates          # unevaluable, not defaulted to 1.0
+
+
+def test_fx_never_defaults_a_missing_rate_to_one():
+    """The dangerous failure would be treating an unknown currency as parity —
+    that silently recreates the very bug this exists to fix."""
+    def _ticker(t):
+        raise RuntimeError("no data")
+
+    fake_yf = type("yf", (), {"Ticker": staticmethod(_ticker)})
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": fake_yf}):
+        rates = showcase._fx_to_gbp()
+    assert rates == {"GBP": 1.0}
+    assert "USD" not in rates
+
+
+def test_flag_passes_fx_codes_and_rates_into_the_candidate_query():
+    """Parallel arrays land in the two slots the SQL's unnest() zips, directly
+    after PEER_MARGIN_MIN_GROUP and before the llm_score floor. Positional, so
+    a reordered param tuple silently mis-binds the whole WHERE clause."""
+    with patch.object(showcase, "_fx_to_gbp", return_value={"GBP": 1.0, "USD": 0.74}), \
+         patch.object(showcase, "_q", return_value=[]) as q:
+        showcase.flag_high_impact_candidates(hours=48)
+    params = q.call_args[0][1]
+    assert params[0] == showcase.PEER_MARGIN_MIN_GROUP
+    assert params[1] == ["GBP", "USD"]
+    assert params[2] == [1.0, 0.74]
+    assert params[3] == showcase.HIGH_IMPACT_VET_ENTRY_SCORE
+    # The two arrays must stay index-aligned or every rate binds to the wrong
+    # currency — the failure mode would be silent, not an error.
+    assert len(params[1]) == len(params[2])
+
+
 # ── flag_high_impact_candidates ───────────────────────────────────────────────
 def test_flag_keeps_positive_and_stores_vet():
     vet = {"verdict": "include", "confidence": "high", "rationale": "clean",

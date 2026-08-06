@@ -16,10 +16,26 @@ used to assert the quality one; several fixtures trip it on the same inputs.
 
 import sys, os
 from datetime import datetime, timezone
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rns_llm
+import showcase
+
+
+# Rates the leverage block converts net debt with. Stubbed for every test in
+# this file: _build_messages calls showcase._fx_to_gbp, which would otherwise
+# query the DB and hit Yahoo, and this file's fixtures are meant to be pure.
+_FX = {"GBP": 1.0, "USD": 0.74, "EUR": 0.86}
+
+
+@pytest.fixture(autouse=True)
+def _stub_fx():
+    with patch.object(showcase, "_fx_to_gbp", return_value=dict(_FX)):
+        yield
 
 
 def _user_prompt(**overrides) -> str:
@@ -73,6 +89,77 @@ def test_missing_peer_median_uses_absolute_fallback():
 def test_prompt_labels_median_as_industry():
     user = _user_prompt(net_income_margin=0.0167, peer_margin_median=0.04, roce=0.24)
     assert "(industry median +4.0%)" in user
+
+
+# ── Leverage: net debt (reporting currency) vs market cap (GBP) ───────────────
+# net_debt/EBITDA is same-currency and needs no rate; net_debt/market_cap does.
+# Harbour Energy is the case that exposed it (2026-08-06).
+_HBR = dict(net_debt=4_415_000_000, market_cap=3_662_820_864, ebitda=6_297_000_000)
+
+
+def test_dollar_filer_not_flagged_when_converted_debt_is_below_market_cap():
+    """$4.42bn against a £3.66bn cap is 1.21x raw but ~0.89x converted, so the
+    flag must NOT fire. Before the fix every dollar filer read as ~1.35x more
+    indebted than it is."""
+    user = _user_prompt(financial_currency="USD", **_HBR)
+    assert "net debt exceeds market cap" not in user
+
+
+def test_same_company_in_sterling_is_still_flagged():
+    """Control: identical numbers reported in GBP genuinely are 1.21x, so the
+    flag fires. Proves the fix converts rather than just suppressing."""
+    user = _user_prompt(financial_currency="GBP", **_HBR)
+    assert "net debt exceeds market cap" in user
+
+
+def test_dollar_filer_still_flagged_when_genuinely_over_levered():
+    """TLW.L-shaped: 6.6x raw is still ~4.9x converted. Conversion must not
+    become an amnesty for real leverage."""
+    user = _user_prompt(
+        financial_currency="USD",
+        net_debt=6_600_000_000, market_cap=1_000_000_000, ebitda=9_000_000_000,
+    )
+    assert "net debt exceeds market cap" in user
+
+
+def test_missing_rate_drops_the_flag_rather_than_guessing():
+    """GEL has no Yahoo pair. An unknown currency must not be treated as
+    parity — that silently recreates the bug. The flag only tempers a score,
+    so staying silent is the safe failure."""
+    user = _user_prompt(financial_currency="GEL", **_HBR)
+    assert "net debt exceeds market cap" not in user
+    assert "Net debt/mkt cap: n/ax" in user
+
+
+def test_ebitda_leverage_flag_needs_no_conversion():
+    """net_debt and EBITDA are both reporting-currency, so this flag fires on
+    a dollar filer with no rate available at all."""
+    user = _user_prompt(
+        financial_currency="GEL",
+        net_debt=4_000_000_000, market_cap=9_000_000_000, ebitda=500_000_000,
+    )
+    assert "HIGH LEVERAGE (net debt > 3x profit)" in user
+
+
+def test_net_debt_is_printed_in_a_currency_its_label_matches():
+    """The £ sign was hardcoded, so a dollar filer's net debt printed as
+    "£4.4bn" when it was $4.4bn — the c1d08f1 mislabel, still live in the
+    ranker until 2026-08-06. Converted, the £ label is now truthful."""
+    user = _user_prompt(financial_currency="USD", **_HBR)
+    assert "Net debt:     £3.3bn" in user
+    assert "£4.4bn" not in user
+
+
+def test_unconvertible_net_debt_names_its_real_currency():
+    user = _user_prompt(financial_currency="GEL", **_HBR)
+    assert "Net debt:     4.4bn GEL" in user
+
+
+def test_sterling_net_debt_is_unchanged():
+    """Regression guard for the 617 GBP reporters — the common path must look
+    exactly as it always did."""
+    user = _user_prompt(financial_currency="GBP", **_HBR)
+    assert "Net debt:     £4.4bn" in user
 
 
 def test_no_fundamentals_quality_is_na_not_zero():

@@ -222,6 +222,10 @@ def _load_candidate(row_id: int) -> Optional[dict]:
                a.headline, a.headline_slug, a.url, a.tier, a.category,
                a.keyword_hits, a.score, a.summary, a.body, a.body_is_stub,
                m.sector, m.industry, m.country, m.ftse_index,
+               -- Reporting currency of the accounts, needed to convert net_debt
+               -- before it can be compared against a GBP market cap (see the
+               -- leverage block in _build_messages).
+               m.financial_currency,
                t.market_cap,
                CASE WHEN t.price_to_earnings > 999 OR t.price_to_earnings <= 0
                     THEN NULL ELSE t.price_to_earnings END AS price_to_earnings,
@@ -390,23 +394,42 @@ def _load_prior_guidance(symbol: Optional[str], exclude_id: Optional[int] = None
     return rows[0] if rows else None
 
 
-def _format_market_cap(mc: Optional[float]) -> str:
+def _format_market_cap(mc: Optional[float], ccy: str = "£") -> str:
+    """Money format. `ccy` defaults to sterling because market_cap really is
+    GBP — pass the reporting currency when formatting an unconverted figure
+    from the accounts, which for 138 of 755 companies is NOT sterling."""
     if mc is None:
         return "unknown"
     if mc >= 1e9:
-        return f"£{mc/1e9:.1f}bn"
+        return f"{ccy}{mc/1e9:.1f}bn"
     if mc >= 1e6:
-        return f"£{mc/1e6:.0f}m"
-    return f"£{mc:.0f}"
+        return f"{ccy}{mc/1e6:.0f}m"
+    return f"{ccy}{mc:.0f}"
 
 
-def _format_net_debt(nd: Optional[float]) -> str:
+def _format_net_debt(nd: Optional[float], ccy: str = "£") -> str:
     """Sign-aware money format; negative net debt is surfaced as net cash."""
     if nd is None:
         return "n/a"
     if nd < 0:
-        return f"{_format_market_cap(-nd)} net cash"
-    return _format_market_cap(nd)
+        return f"{_format_market_cap(-nd, ccy)} net cash"
+    return _format_market_cap(nd, ccy)
+
+
+def _net_debt_line(raw: Optional[float], gbp: Optional[float], rep_ccy: str) -> str:
+    """Net debt for the prompt, in a currency the label actually matches.
+
+    The £ sign used to be hardcoded, so a dollar filer's net debt was printed
+    as "£4.4bn" when it was $4.4bn — the same mislabel fixed in the vet prompt
+    by c1d08f1, still live here until 2026-08-06. Prefer the GBP-converted
+    figure so it agrees with the net-debt/mkt-cap ratio printed beside it; with
+    no rate, show the real currency rather than a wrong symbol.
+    """
+    if raw is None:
+        return "n/a"
+    if gbp is not None:
+        return _format_net_debt(gbp)
+    return f"{_format_net_debt(raw, '')} {rep_ccy}"
 
 
 def _fmt_pct(v: Optional[float]) -> str:
@@ -874,10 +897,28 @@ def _build_messages(
     # We avoid highly-indebted companies. Net debt / EBITDA above ~3x is a red
     # flag, and net debt that dwarfs the market cap means equity holders sit
     # behind a large debt load (enterprise value is mostly debt).
+    #
+    # CURRENCY: net_debt and ebitda are both in the REPORTING currency, so
+    # net debt / EBITDA needs no conversion. market_cap is in GBP, so net debt
+    # / market cap does — without it every dollar filer read as ~1.27x more
+    # indebted than it is, and Harbour Energy's $4.42bn net debt tripped the
+    # flag against a £3.66bn cap when the true ratio is below 1 (2026-08-06).
+    # A missing rate makes the ratio None, which drops the flag rather than
+    # guessing it — this only ever tempers a score, so silence is the safe
+    # failure. Mirrors the same fix in showcase.py's selection SQL.
     net_debt = cand.get("net_debt")
     ebitda = cand.get("ebitda")
     mcap = cand.get("market_cap")
-    nd_to_mktcap = (net_debt / mcap) if (net_debt is not None and mcap and mcap > 0) else None
+
+    from showcase import _fx_to_gbp  # deferred — avoids a circular import
+
+    rep_ccy = (cand.get("financial_currency") or "GBP").upper().strip() or "GBP"
+    fx = _fx_to_gbp().get(rep_ccy)
+    net_debt_gbp = (net_debt * fx) if (net_debt is not None and fx) else None
+
+    nd_to_mktcap = (
+        (net_debt_gbp / mcap) if (net_debt_gbp is not None and mcap and mcap > 0) else None
+    )
     nd_to_ebitda = (net_debt / ebitda) if (net_debt is not None and ebitda and ebitda > 0) else None
     leverage_flag = ""
     if nd_to_ebitda is not None and nd_to_ebitda > 3:
@@ -948,7 +989,7 @@ def _build_messages(
         f"  Op. margin:   {_fmt_pct(op_margin)}   FCF margin: {_fmt_pct(fcf_margin)}\n"
         f"  Revenue gr:   {_fmt_pct(rev_growth)}   EPS CAGR 10Y: {_fmt_pct(eps_cagr)}\n"
         f"  D/E:          {_fmt_num(de, 2)}   Current ratio: {_fmt_num(cr, 2)}\n"
-        f"  Net debt:     {_format_net_debt(net_debt)}"
+        f"  Net debt:     {_net_debt_line(net_debt, net_debt_gbp, rep_ccy)}"
         f"   Net debt/EBITDA: {_fmt_num(nd_to_ebitda, 1)}x"
         f"   Net debt/mkt cap: {_fmt_num(nd_to_mktcap, 1)}x{leverage_flag}\n"
         f"  P/B:          {_fmt_num(pb, 2)}x   P/S: {_fmt_num(ps, 2)}x\n"

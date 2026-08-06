@@ -74,7 +74,10 @@ HIGH_IMPACT_MIN_MARKET_CAP = 50_000_000  # £50m — keep to genuinely tradeable
 # Balance-sheet / quality floors — keep over-levered and low-quality names out of
 # the showcase entirely (they convert good news to shareholder value poorly). These
 # mirror the leverage/quality flags in the LLM ranker so the two stages agree.
-HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA = 3.0  # skip net debt > 3x profit (also skips net debt > market cap)
+# The companion "net debt > market cap" test is in the SQL, not a tunable here,
+# and is the only floor needing FX — net_debt is reporting-currency, market_cap
+# is GBP (see _fx_to_gbp).
+HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA = 3.0  # skip net debt > 3x profit (same currency both sides, no FX)
 HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # fallback margin floor when no usable peer median exists
 HIGH_IMPACT_MIN_ROCE = 0.15               # capital-returns escape hatch past the margin floor (profitable names only)
 PEER_MARGIN_MIN_GROUP = 5                 # industry margin medians need at least this many names to count
@@ -1463,6 +1466,79 @@ def _named_one_offs(cand: dict) -> list[dict]:
     ]
 
 
+# ── FX for the leverage floor ─────────────────────────────────────────────────
+# Cache is process-lifetime with a TTL; the backend is long-lived (see
+# project notes on in-process caches) so the RNS cron pays this at most a few
+# times a day rather than on each of its 15-minute runs.
+_FX_CACHE: dict = {"rates": None, "at": None}
+_FX_TTL_SECONDS = 6 * 3600
+
+
+def _fx_to_gbp() -> dict:
+    """Rates converting each reporting currency in the universe into GBP.
+
+    Exists for ONE comparison — the `net debt > market cap` leverage floor —
+    because those two columns are in different currencies and nothing else in
+    this file may form a cross-currency ratio (see _size_context: the vet is
+    explicitly told to refuse the comparison rather than guess a rate).
+
+    ttm_financials.net_debt is in the company's REPORTING currency; market_cap
+    is in GBP. Comparing them raw judged every dollar filer too harshly by the
+    FX rate — Harbour Energy's $4.42bn net debt read as 1.21x its £3.66bn cap
+    when the true ratio is ~0.96 (found 2026-08-06). 138 of 755 companies
+    report in a non-GBP currency, so this is not an edge case.
+
+    Callers MUST treat a MISSING rate as "this check cannot be evaluated"
+    rather than as a pass or a fail — that matches the surrounding floors,
+    which leave names with missing data in. Yahoo's 'GBP=X' convention is
+    USD->GBP, and the cross pairs are '<CCY>GBP=X'.
+
+    GBP is therefore seeded first and returned even when everything else
+    fails: sterling reporters (617 of 755) need no rate, so a Yahoo outage
+    must not cost them a check that was never cross-currency. Only the names
+    genuinely needing a conversion lose it.
+
+    GBP and GBp both map to 1.0: the 'GBp' quote code is a unit label only and
+    the stored market cap is already in whole pounds, not pence.
+    """
+    now = datetime.now(timezone.utc)
+    cached, at = _FX_CACHE["rates"], _FX_CACHE["at"]
+    if cached is not None and at and (now - at).total_seconds() < _FX_TTL_SECONDS:
+        return cached
+
+    rates = {"GBP": 1.0}
+    try:
+        codes = [
+            (r.get("code") or "").upper().strip()
+            for r in _q(
+                "SELECT DISTINCT upper(trim(financial_currency)) AS code"
+                " FROM company_metadata WHERE financial_currency IS NOT NULL"
+            )
+        ]
+        wanted = sorted({c for c in codes if c and c != "GBP"})
+        if wanted:
+            import yfinance as yf  # deferred — only this fetch path needs it
+
+            for code in wanted:
+                ticker = "GBP=X" if code == "USD" else f"{code}GBP=X"
+                try:
+                    fi = yf.Ticker(ticker).fast_info
+                    last = fi.get("lastPrice") or fi.get("previousClose")
+                    if last and float(last) > 0:
+                        rates[code] = float(last)
+                except Exception as e:
+                    # One bad pair must not cost the others their rate.
+                    print(f"[showcase] fx rate {ticker} unavailable — {e}")
+    except Exception as e:
+        # Non-fatal by design: sterling names keep the check, foreign ones
+        # skip it for this run. Not cached, so the next run retries.
+        print(f"[showcase] fx lookup failed, non-GBP leverage-vs-cap skipped — {e}")
+        return {"GBP": 1.0}
+
+    _FX_CACHE["rates"], _FX_CACHE["at"] = rates, now
+    return rates
+
+
 # ── Auto-flag ─────────────────────────────────────────────────────────────────
 def flag_high_impact_candidates(hours: int = 48) -> dict:
     """Flag rules-passing candidates from the last `hours` straight onto the
@@ -1472,6 +1548,12 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
     cron re-runs this every 15 minutes over a 48h window, so anything else
     re-pays for the same LLM verdict dozens of times. Returns a counts dict for
     cron logs."""
+    # Parallel arrays rather than a dict: psycopg2 adapts Python lists straight
+    # to the two Postgres arrays the unnest() below zips back into rows.
+    _fx = _fx_to_gbp()
+    _fx_codes = list(_fx.keys())
+    _fx_rates = [_fx[c] for c in _fx_codes]
+
     cands = _q(
         """
         SELECT r.id, r.symbol, r.company_name, r.headline, r.url, r.published_at,
@@ -1504,6 +1586,15 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
               AND t2.net_income_margin IS NOT NULL
             HAVING COUNT(*) >= %s
         ) pm ON TRUE
+        -- Rate turning this company's REPORTING currency into GBP, so net debt
+        -- can be compared against a GBP market cap below. NULL when the rate is
+        -- unavailable, which deliberately makes that one check unevaluable
+        -- rather than guessing — see _fx_to_gbp.
+        LEFT JOIN LATERAL (
+            SELECT f.rate
+            FROM unnest(%s::text[], %s::numeric[]) AS f(code, rate)
+            WHERE f.code = upper(trim(COALESCE(m.financial_currency, 'GBP')))
+        ) fx ON TRUE
         WHERE r.symbol IS NOT NULL
           AND r.llm_processed_at IS NOT NULL
           AND r.llm_score >= %s
@@ -1515,10 +1606,20 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
           -- Leverage floor: drop over-indebted names. Excludes net debt > 3x
           -- EBITDA, indebted names with no profit to service it, and net debt
           -- that exceeds the market cap. Missing net_debt data is left in.
+          --
+          -- The first two tests are same-currency (net debt and EBITDA are both
+          -- reporting-currency) and so need no conversion. The third is NOT:
+          -- market_cap is GBP while net_debt is the reporting currency, so it
+          -- converts first. Without that it read every dollar filer as ~1.27x
+          -- more indebted than it is. A NULL rate leaves the third test NULL,
+          -- the OR-chain yields NULL when the other two are false, and the
+          -- COALESCE keeps the name — i.e. an unavailable rate skips this one
+          -- check instead of silently excluding or admitting the company. The
+          -- other two leverage tests still apply, so it is never unguarded.
           AND NOT COALESCE(
               (t.ebitda > 0 AND t.net_debt > %s * t.ebitda)
               OR (t.ebitda <= 0 AND t.net_debt > 0)
-              OR (t.net_debt > t.market_cap),
+              OR (t.net_debt * fx.rate > t.market_cap),
               FALSE
           )
           -- Quality floor, peer-relative: require profitability at or above the
@@ -1571,6 +1672,8 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
         """,
         (
             PEER_MARGIN_MIN_GROUP,
+            _fx_codes,
+            _fx_rates,
             HIGH_IMPACT_VET_ENTRY_SCORE,
             list(HIGH_IMPACT_CATEGORIES),
             hours,
