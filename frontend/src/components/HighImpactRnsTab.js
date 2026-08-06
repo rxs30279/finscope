@@ -1136,7 +1136,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
             <button
               onClick={() => setShowChangeInfo((v) => !v)}
               title="What do these mean?"
-              aria-label="Explain the % Change options"
+              aria-label="Explain the Gap and Since Open columns"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
