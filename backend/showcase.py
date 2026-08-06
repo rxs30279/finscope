@@ -2359,6 +2359,24 @@ def list_showcase(response: Response):
     return _enrich(entries)
 
 
+@router.get("/archive", dependencies=[Depends(require_admin_token)])
+def list_archive():
+    """Admin — approved stories the display floor has hidden from the public page.
+
+    Same rows as /showcase would return with SHOWCASE_MIN_STORY_DATE unset —
+    nothing here is deleted or re-statused, it's just everything /showcase's
+    date filter currently excludes. Moving the floor forward only ever adds to
+    this list.
+    """
+    entries = _q(
+        "SELECT * FROM high_impact_rns WHERE status = 'approved' "
+        "AND (published_at AT TIME ZONE 'Europe/London')::date < %s::date "
+        "ORDER BY published_at DESC",
+        (SHOWCASE_MIN_STORY_DATE,),
+    )
+    return _enrich(entries)
+
+
 @router.get("/pending", dependencies=[Depends(require_admin_token)])
 def list_pending():
     """Admin — candidates awaiting approval, newest flag first."""

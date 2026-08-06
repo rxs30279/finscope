@@ -1481,6 +1481,26 @@ def test_list_shadow_applies_the_same_display_floor(client):
     assert q.call_args[0][1] == (showcase.SHOWCASE_MIN_STORY_DATE,)
 
 
+def test_list_archive_selects_approved_rows_below_the_display_floor(client):
+    """The archive is the mirror image of the public list's floor: same table,
+    same status, opposite side of the date cutoff. If this ever drifted to
+    match /showcase's '>=' a story would appear on neither page."""
+    with patch("main.query", return_value=[]) as q:
+        r = client.get("/api/showcase/archive")
+    assert r.status_code == 200
+    sql = " ".join(q.call_args[0][0].split())
+    assert "status = 'approved'" in sql
+    assert "(published_at AT TIME ZONE 'Europe/London')::date < %s::date" in sql
+    assert q.call_args[0][1] == (showcase.SHOWCASE_MIN_STORY_DATE,)
+
+
+def test_list_archive_is_admin_only(client):
+    """These rows are excluded from the public page on purpose (the display
+    floor); leaking them without the token guard defeats that."""
+    r = client.get("/api/showcase/archive", headers={"X-Admin-Token": "wrong"})
+    assert r.status_code in (401, 403)
+
+
 def test_list_shadow_is_admin_only(client):
     """These are unpublished judgements about live companies. If the token guard
     is ever dropped, every story the vet withheld becomes public — the exact

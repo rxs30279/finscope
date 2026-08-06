@@ -877,7 +877,7 @@ const COLS = [
 ];
 
 // ── main component ────────────────────────────────────────────────────────────
-export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
+export default function HighImpactRnsTab({ onSelect, initialRows = null, archiveOnly = false }) {
   const isAdmin = useIsAdmin();
   const isMobile = useIsMobile();
 
@@ -910,20 +910,24 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
   // refetch() advancing refreshKey, always fetches fresh.
   useEffect(() => {
     let cancelled = false;
-    const skipApproved = Array.isArray(initialRows) && refreshKey === 0;
+    // Archive mode has no SSR payload to reuse and always reads the admin-only
+    // endpoint instead of the public one; pending/shadow don't apply to it.
+    const skipApproved = !archiveOnly && Array.isArray(initialRows) && refreshKey === 0;
     if (!skipApproved) setLoading(true);
     const jobs = [
-      skipApproved
-        ? Promise.resolve(null)
-        : fetch(`${API}/showcase`).then((r) => (r.ok ? r.json() : [])),
+      archiveOnly
+        ? fetch(`${API}/showcase/archive`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
+        : skipApproved
+          ? Promise.resolve(null)
+          : fetch(`${API}/showcase`).then((r) => (r.ok ? r.json() : [])),
     ];
     jobs.push(
-      isAdmin
+      !archiveOnly && isAdmin
         ? fetch(`${API}/showcase/pending`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
         : Promise.resolve([]),
     );
     jobs.push(
-      isAdmin
+      !archiveOnly && isAdmin
         ? fetch(`${API}/showcase/shadow`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
         : Promise.resolve([]),
     );
@@ -939,7 +943,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, refreshKey, initialRows]);
+  }, [isAdmin, refreshKey, initialRows, archiveOnly]);
 
   // Keep the news panel pointed at a valid share.
   useEffect(() => {
@@ -1052,39 +1056,47 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
 
   return (
     <div>
-      <EmailDigestCTA source="high_impact_rns" />
+      {!archiveOnly && <EmailDigestCTA source="high_impact_rns" />}
 
       <PageHeader
         title={
-          <>
-            High Impact RNS
-            <sup
-              style={{
-                marginLeft: 7,
-                fontSize: 10,
-                fontFamily: "monospace",
-                fontWeight: 700,
-                letterSpacing: 1,
-                textTransform: "uppercase",
-                color: "#10b981",
-              }}
-            >
-              New
-            </sup>
-          </>
+          archiveOnly ? (
+            "High Impact RNS — Archive"
+          ) : (
+            <>
+              High Impact RNS
+              <sup
+                style={{
+                  marginLeft: 7,
+                  fontSize: 10,
+                  fontFamily: "monospace",
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                  textTransform: "uppercase",
+                  color: "#10b981",
+                }}
+              >
+                New
+              </sup>
+            </>
+          )
         }
         subtitle={
-          <>
-            Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication.
-            <div style={{ marginTop: 6 }}>
-              <Link
-                href="/research/how-i-use-ai-to-find-winning-uk-stocks-from-7am-rns-news"
-                style={{ color: "#a78bfa", textDecoration: "none", borderBottom: "1px dashed #a78bfa55", paddingBottom: 1 }}
-              >
-                Read how this works on the Research blog →
-              </Link>
-            </div>
-          </>
+          archiveOnly ? (
+            "Approved stories the public page's display floor no longer shows. Nothing here was rejected — only hidden by date."
+          ) : (
+            <>
+              Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication.
+              <div style={{ marginTop: 6 }}>
+                <Link
+                  href="/research/how-i-use-ai-to-find-winning-uk-stocks-from-7am-rns-news"
+                  style={{ color: "#a78bfa", textDecoration: "none", borderBottom: "1px dashed #a78bfa55", paddingBottom: 1 }}
+                >
+                  Read how this works on the Research blog →
+                </Link>
+              </div>
+            </>
+          )
         }
         right={
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
