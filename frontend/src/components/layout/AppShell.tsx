@@ -31,6 +31,22 @@ const NAV_GROUPS: NavGroup[] = [
   { href: "/research", label: "Research" },
 ];
 
+// Admin-only tooling, appended to the nav for an unlocked browser only (see
+// useIsAdmin) — every one of these pages is independently gated too, so this
+// is purely a shortcut, not the access control.
+const PRIVATE_GROUP: NavGroup = {
+  label: "🔒 Private",
+  children: [
+    { href: "/status", label: "System Status" },
+    { href: "/gates", label: "Gate Calibration" },
+    { href: "/high-impact-rns/archive", label: "High Impact RNS Archive" },
+    { href: "/research/admin", label: "Research Admin" },
+    { href: "/emails", label: "Emails" },
+    { href: "/email-metrics", label: "Email Metrics" },
+    { href: "/audience", label: "Audience" },
+  ],
+};
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -42,11 +58,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(isNarrow);
   const [toolsOpen, setToolsOpen] = useState(false);
-  // RNS nav dropdown. The menu is position:fixed (not absolute) because the nav
+  // Nav dropdown (RNS, and Private for an admin). Keyed by group label rather
+  // than a per-group boolean so two dropdown groups can't both believe they're
+  // "the" open one. The menu is position:fixed (not absolute) because the nav
   // links wrapper scrolls horizontally (overflow-x) and would clip an absolutely
   // positioned menu; left is measured from the trigger button at click time.
-  const [rnsOpen, setRnsOpen] = useState(false);
-  const [rnsLeft, setRnsLeft] = useState(0);
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const [openGroupLeft, setOpenGroupLeft] = useState(0);
   const [searchQ, setSearchQ] = useState("");
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [showSearch, setShowSearch] = useState(false);
@@ -57,6 +75,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const isCompanyPage = pathname.startsWith("/company");
   const isResearchPage = pathname.startsWith("/research");
   const showSidebar = !isCompanyPage && !isResearchPage;
+
+  // The Private group only ever appears for an unlocked browser — every page
+  // it links to is independently admin-gated too, so this is a convenience,
+  // not the access control.
+  const navGroups = isAdmin ? [...NAV_GROUPS, PRIVATE_GROUP] : NAV_GROUPS;
 
   const doSearch = useCallback((q: string) => {
     setSearchQ(q);
@@ -197,17 +220,18 @@ export default function AppShell({ children }: { children: ReactNode }) {
           className="no-scrollbar appnav-links"
           style={{ gap: 2, flexShrink: 1, minWidth: 0, overflowX: "auto" }}
         >
-            {NAV_GROUPS.map((g) => {
+            {navGroups.map((g) => {
               if (g.children) {
                 const isActive = g.children.some(
                   (c) => pathname === c.href || pathname.startsWith(c.href),
                 );
+                const isOpen = openGroup === g.label;
                 return (
                   <div key={g.label} style={{ flexShrink: 0 }}>
                     <button
                       onClick={(e) => {
-                        setRnsLeft(e.currentTarget.getBoundingClientRect().left);
-                        setRnsOpen((v) => !v);
+                        setOpenGroupLeft(e.currentTarget.getBoundingClientRect().left);
+                        setOpenGroup((v) => (v === g.label ? null : g.label));
                       }}
                       style={{
                         ...S.navBtn,
@@ -218,12 +242,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
                     >
                       {g.label} ▾
                     </button>
-                    {rnsOpen && (
+                    {isOpen && (
                       <>
-                        <div onClick={() => setRnsOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 200 }} />
+                        <div onClick={() => setOpenGroup(null)} style={{ position: "fixed", inset: 0, zIndex: 200 }} />
                         <div style={{
-                          position: "fixed", top: 52, left: rnsLeft,
-                          minWidth: 170, background: "#141414", border: "1px solid #2a2a2a",
+                          position: "fixed", top: 52, left: openGroupLeft,
+                          minWidth: 210, background: "#141414", border: "1px solid #2a2a2a",
                           borderRadius: 4, boxShadow: "0 8px 24px rgba(0,0,0,0.8)",
                           zIndex: 201, overflow: "hidden",
                         }}>
@@ -233,13 +257,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
                               <Link
                                 key={c.href}
                                 href={c.href}
-                                onClick={() => setRnsOpen(false)}
+                                onClick={() => setOpenGroup(null)}
                                 style={{
                                   display: "block", padding: "10px 14px",
                                   color: childActive ? "#f97316" : "#e5e5e5",
                                   fontFamily: "monospace", fontSize: 11,
                                   fontWeight: childActive ? 700 : 400,
                                   textDecoration: "none",
+                                  whiteSpace: "nowrap",
                                   borderBottom: i < g.children.length - 1 ? "1px solid #1f1f1f" : "none",
                                 }}
                               >
@@ -416,7 +441,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <>
           <div onClick={() => setMobileMenuOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 99 }} />
           <div style={{ position: "fixed", top: 52, left: 0, bottom: 0, width: 260, background: "#0d0d0d", borderRight: "1px solid #2a2a2a", zIndex: 100, overflowY: "auto", padding: "8px 0" }}>
-            {NAV_GROUPS.map((g) => {
+            {navGroups.map((g) => {
               if (g.children) {
                 // Dropdown groups flatten in the drawer: dim section label, indented links.
                 return (
