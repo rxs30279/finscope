@@ -499,10 +499,10 @@ function PendingCard({ entry, onApprove, onReject }) {
   );
 }
 
-// A story the vet scored but withheld (status='shadow'). Rendered inline in the
-// main table so a 45 sits next to an 80 on the same day — that comparison is
-// the whole reason for surfacing them. Admin-only: `shadow` is empty for a
-// public visitor, so these rows simply do not exist on the public page.
+// A story the vet scored but withheld (status='shadow'). No longer shown on
+// this page at all (see /high-impact-rns/archive) — isWithheld and the
+// styling below only still run here because this same table component
+// renders that page too, in archiveOnly mode, where every row IS a shadow row.
 //
 // isWithheld is keyed on status, NOT on `vet_score < 75`. A row can be shadow
 // with a NULL score (the vet CALL failed), and an admin can publish a shadow row
@@ -883,11 +883,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
 
   const [rows, setRows] = useState(() => (Array.isArray(initialRows) ? initialRows : []));
   const [pending, setPending] = useState([]);
-  // Vet-withheld rows (status='shadow'), admin-only — always [] for a public
-  // visitor. Held in its own state rather than merged into `rows` so the
-  // "N tracked" count keeps meaning "N published picks", and so the public
-  // payload and the admin view can never be confused for one another.
-  const [shadow, setShadow] = useState([]);
   const [loading, setLoading] = useState(!Array.isArray(initialRows));
   const [liveQuotes, setLiveQuotes] = useState({});
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
@@ -895,13 +890,9 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
   const [refreshKey, setRefreshKey] = useState(0);
   const [showChangeInfo, setShowChangeInfo] = useState(false);
 
-  // Withheld rows are included: a withheld story still needs a live price, since
-  // "what did it do afterwards" is the only way to find out whether the vet was
-  // right to withhold it. Empty for non-admins, so the public quote request is
-  // unchanged.
   const symbols = useMemo(
-    () => [...new Set([...rows, ...shadow].map((r) => r.symbol))],
-    [rows, shadow],
+    () => [...new Set(rows.map((r) => r.symbol))],
+    [rows],
   );
 
   // Approved showcase (public) + pending candidates (admin only). The very
@@ -911,7 +902,8 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
   useEffect(() => {
     let cancelled = false;
     // Archive mode has no SSR payload to reuse and always reads the admin-only
-    // endpoint instead of the public one; pending/shadow don't apply to it.
+    // endpoint instead of the public one; pending doesn't apply to it. Withheld
+    // (shadow) rows moved off this page entirely onto /high-impact-rns/archive.
     const skipApproved = !archiveOnly && Array.isArray(initialRows) && refreshKey === 0;
     if (!skipApproved) setLoading(true);
     const jobs = [
@@ -926,17 +918,11 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
         ? fetch(`${API}/showcase/pending`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
         : Promise.resolve([]),
     );
-    jobs.push(
-      !archiveOnly && isAdmin
-        ? fetch(`${API}/showcase/shadow`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
-        : Promise.resolve([]),
-    );
     Promise.all(jobs)
-      .then(([approved, pend, shad]) => {
+      .then(([approved, pend]) => {
         if (cancelled) return;
         if (approved !== null) setRows(Array.isArray(approved) ? approved : []);
         setPending(Array.isArray(pend) ? pend : []);
-        setShadow(Array.isArray(shad) ? shad : []);
         setLoading(false);
       })
       .catch(() => !cancelled && setLoading(false));
@@ -1009,19 +995,12 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
     return ((p - r.low_52w) / span) * 100;
   };
 
-  // The table's rows: the public showcase, plus — for an admin — the stories
-  // the vet withheld, interleaved by date rather than parked in a separate
-  // block. Seeing a 45 sitting next to an 80 on the same day is the whole point
-  // of showing them; a segregated list makes exactly the comparison that
-  // matters (did the vet call this right?) harder, not easier.
-  //
-  // ADMIN-ONLY. `shadow` is empty for everyone else, so the public page is
-  // byte-for-byte what it was. If these should ever go public, that is a change
-  // to this one line — and to /api/showcase, which filters status='approved'
-  // server-side and is what the SSR payload actually uses.
+  // Newest first. Withheld (shadow) stories no longer interleave here — they
+  // moved to their own page, /high-impact-rns/archive, which reads them
+  // straight off /api/showcase/shadow instead.
   const sorted = useMemo(() => {
     const dateVal = (r) => (r.story?.published_at ? new Date(r.story.published_at).getTime() : null);
-    const arr = [...rows, ...shadow];
+    const arr = [...rows];
     arr.sort((a, b) => {
       const va = dateVal(a);
       const vb = dateVal(b);
@@ -1031,7 +1010,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
       return vb - va;
     });
     return arr;
-  }, [rows, shadow]);
+  }, [rows]);
 
   const refetch = useCallback(() => setRefreshKey((n) => n + 1), []);
 
@@ -1102,7 +1081,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
           <span style={{ color: "#64748b", fontSize: 12, fontFamily: "monospace" }}>
             {loading ? "loading…" : `${rows.length} tracked`}
             {isAdmin && pending.length > 0 ? ` · ${pending.length} pending` : ""}
-            {isAdmin && shadow.length > 0 ? ` · ${shadow.length} withheld` : ""}
           </span>
         }
       />
@@ -1123,19 +1101,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
               />
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Admin: what the vet withheld is now interleaved into the table below,
-          marked WITHHELD. This banner just explains why rows appear here that a
-          public visitor cannot see. */}
-      {isAdmin && shadow.length > 0 && (
-        <div style={{ marginBottom: 14, padding: "8px 12px", background: "#12100c", border: "1px solid #3f2d1a", borderRadius: 4, color: "#94a3b8", fontSize: 11, lineHeight: 1.5, maxWidth: 760 }}>
-          <span style={{ color: "#f59e0b", fontWeight: 700 }}>{shadow.length} withheld</span>{" "}
-          {shadow.length === 1 ? "story is" : "stories are"} shown below marked{" "}
-          <span style={{ color: "#f59e0b", fontWeight: 700, fontFamily: "monospace" }}>WITHHELD</span>{" "}
-          — they cleared the ranker at 60+ but scored under 75 on the vet&apos;s second read.
-          Expand a row to read why. Not visible to anyone but you.
         </div>
       )}
 
