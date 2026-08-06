@@ -916,7 +916,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
     if (!skipApproved) setLoading(true);
     const jobs = [
       archiveOnly
-        ? fetch(`${API}/showcase/archive`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
+        ? fetch(`${API}/showcase/shadow`, { headers: adminHeaders() }).then((r) => (r.ok ? r.json() : []))
         : skipApproved
           ? Promise.resolve(null)
           : fetch(`${API}/showcase`).then((r) => (r.ok ? r.json() : [])),
@@ -1083,7 +1083,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
         }
         subtitle={
           archiveOnly ? (
-            "Approved stories the public page's display floor no longer shows. Nothing here was rejected — only hidden by date."
+            "Stories the vet scored but withheld from the public page — cleared the ranker at 60+, scored under 75 on the vet's second read. Not rejected outright, just not published. Newest vet score first."
           ) : (
             <>
               Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication.
