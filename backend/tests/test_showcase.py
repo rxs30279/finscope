@@ -1,8 +1,9 @@
 """High Impact RNS showcase — sentiment, auto-flag, follow-ups, auto-archive and
 the admin status/extend endpoints. DB access is mocked (showcase._q / ._exec and
 main.query), so these run without a database."""
+import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -417,12 +418,16 @@ def test_sentiment_prefers_stored_llm_sentiment():
 
 # ── FX for the leverage floor ─────────────────────────────────────────────────
 @pytest.fixture(autouse=True)
-def _reset_fx_cache():
-    """_fx_to_gbp memoises for 6h on the module, so without this one test's
-    rates leak into the next (and into the flag tests, which call it)."""
+def _reset_fx_cache(tmp_path):
+    """_fx_to_gbp memoises for 6h in memory AND on disk, so without this one
+    test's rates leak into the next (and into the flag tests, which call it).
+    The snapshot path is redirected into tmp_path so a test run can never read
+    or clobber the developer's real cache file."""
     showcase._FX_CACHE["rates"] = None
     showcase._FX_CACHE["at"] = None
-    yield
+    with patch.object(showcase, "_FX_SNAPSHOT_DIR", str(tmp_path)), \
+         patch.object(showcase, "_FX_SNAPSHOT_PATH", str(tmp_path / "fx.json")):
+        yield
     showcase._FX_CACHE["rates"] = None
     showcase._FX_CACHE["at"] = None
 
@@ -469,6 +474,83 @@ def test_fx_never_defaults_a_missing_rate_to_one():
         rates = showcase._fx_to_gbp()
     assert rates == {"GBP": 1.0}
     assert "USD" not in rates
+
+
+def _fake_yf(rates_by_ticker):
+    def _ticker(t):
+        if t not in rates_by_ticker:
+            raise RuntimeError("404")
+        obj = type("T", (), {})()
+        obj.fast_info = {"lastPrice": rates_by_ticker[t]}
+        return obj
+
+    return type("yf", (), {"Ticker": staticmethod(_ticker)})
+
+
+def test_fx_snapshot_carries_rates_across_processes():
+    """The whole point of the on-disk tier: the RNS cron is a fresh process
+    every 15 minutes, so a second 'process' must reuse the first one's rates
+    instead of re-paying a ~3.4s Yahoo fetch."""
+    yf = _fake_yf({"GBP=X": 0.74})
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": yf}):
+        first = showcase._fx_to_gbp()
+    assert first == {"GBP": 1.0, "USD": 0.74}
+
+    # Simulate a brand-new process: memory empty, snapshot file still there.
+    showcase._FX_CACHE["rates"] = None
+    showcase._FX_CACHE["at"] = None
+    boom = _fake_yf({})  # any network call now raises
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": boom}):
+        second = showcase._fx_to_gbp()
+    assert second == {"GBP": 1.0, "USD": 0.74}
+
+
+def test_fx_stale_snapshot_is_ignored():
+    showcase._fx_save_snapshot({"GBP": 1.0, "USD": 0.60})
+    stale = datetime.now(timezone.utc) - timedelta(seconds=showcase._FX_TTL_SECONDS + 60)
+    with open(showcase._FX_SNAPSHOT_PATH, "w", encoding="utf-8") as fh:
+        json.dump({"at": stale.isoformat(), "rates": {"GBP": 1.0, "USD": 0.60}}, fh)
+    assert showcase._fx_load_snapshot() is None
+
+
+def test_fx_snapshot_without_sterling_is_treated_as_corrupt():
+    """A snapshot missing GBP would drop the check for all 617 sterling
+    reporters — refetch instead of trusting it."""
+    with open(showcase._FX_SNAPSHOT_PATH, "w", encoding="utf-8") as fh:
+        json.dump({"at": datetime.now(timezone.utc).isoformat(),
+                   "rates": {"USD": 0.74}}, fh)
+    assert showcase._fx_load_snapshot() is None
+
+
+def test_fx_degraded_result_is_never_persisted():
+    """Writing a sterling-only dict would pin every foreign name's check off
+    for the whole 6h TTL on the back of one Yahoo outage."""
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": _fake_yf({})}):
+        assert showcase._fx_to_gbp() == {"GBP": 1.0}
+    assert not os.path.exists(showcase._FX_SNAPSHOT_PATH)
+
+
+def test_fx_skips_currencies_with_no_yahoo_pair():
+    """GELGBP=X 404s in ~0.56s on every run. Skipping it must not change the
+    outcome — GEL stays absent, i.e. unevaluable."""
+    calls = []
+
+    def _ticker(t):
+        calls.append(t)
+        obj = type("T", (), {})()
+        obj.fast_info = {"lastPrice": 0.74}
+        return obj
+
+    yf = type("yf", (), {"Ticker": staticmethod(_ticker)})
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD", "GEL")), \
+         patch.dict("sys.modules", {"yfinance": yf}):
+        rates = showcase._fx_to_gbp()
+    assert "GELGBP=X" not in calls
+    assert "GEL" not in rates
+    assert rates == {"GBP": 1.0, "USD": 0.74}
 
 
 def test_flag_passes_fx_codes_and_rates_into_the_candidate_query():

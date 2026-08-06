@@ -36,6 +36,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
 import re
+import tempfile
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -1467,11 +1468,66 @@ def _named_one_offs(cand: dict) -> list[dict]:
 
 
 # ── FX for the leverage floor ─────────────────────────────────────────────────
-# Cache is process-lifetime with a TTL; the backend is long-lived (see
-# project notes on in-process caches) so the RNS cron pays this at most a few
-# times a day rather than on each of its 15-minute runs.
+# TWO tiers, because the in-memory one alone is a narrower guarantee than it
+# looks: the RNS cron is `docker exec ... python run_rns.py`, a fresh process
+# every 15 minutes, so a module-level dict never survives between runs.
+#
+#   1. in-memory — kills the repeat calls WITHIN a run. _build_messages asks per
+#      ranked candidate, so the 36-candidate 06:04 run would otherwise pay 36x.
+#   2. on-disk — carries the rates ACROSS runs. Without it every cron run paid a
+#      cold ~3.4s Yahoo fetch (measured on the VPS 2026-08-06), most of them on
+#      runs with no candidates to filter at all.
+#
+# Same snapshot dir as market.py, which is the Dokploy /data volume in prod, so
+# the cron exec and the uvicorn workers share one file. Best-effort throughout:
+# a snapshot failure costs a refetch, never a wrong rate.
+_FX_SNAPSHOT_DIR = os.environ.get(
+    "MARKET_SNAPSHOT_DIR",
+    os.path.join(tempfile.gettempdir(), "finscope_market_cache"),
+)
+_FX_SNAPSHOT_PATH = os.path.join(_FX_SNAPSHOT_DIR, "fx_to_gbp.json")
+
 _FX_CACHE: dict = {"rates": None, "at": None}
 _FX_TTL_SECONDS = 6 * 3600
+
+# Currencies with no Yahoo cross pair. Purely an optimisation: GELGBP=X 404s in
+# ~0.56s on every single run and logs a line each time, and the 3 GEL reporters
+# already lose the check either way (a missing rate is unevaluable, see below).
+# Deleting this set costs a wasted call, never correctness — so if Yahoo ever
+# lists the pair, drop the code and it starts working.
+_FX_NO_YAHOO_PAIR = {"GEL"}
+
+
+def _fx_load_snapshot() -> Optional[dict]:
+    """Rates from the shared snapshot if still inside the TTL, else None."""
+    try:
+        if not os.path.exists(_FX_SNAPSHOT_PATH):
+            return None
+        with open(_FX_SNAPSHOT_PATH, "r", encoding="utf-8") as fh:
+            blob = json.load(fh)
+        at = datetime.fromisoformat(blob["at"])
+        if (datetime.now(timezone.utc) - at).total_seconds() >= _FX_TTL_SECONDS:
+            return None
+        rates = {str(k): float(v) for k, v in (blob.get("rates") or {}).items()}
+        # A snapshot without sterling is corrupt, not merely stale — refetch
+        # rather than silently dropping the check for every GBP reporter.
+        return rates if rates.get("GBP") == 1.0 else None
+    except Exception as e:
+        print(f"[showcase] fx snapshot load failed — {e}")
+        return None
+
+
+def _fx_save_snapshot(rates: dict) -> None:
+    try:
+        os.makedirs(_FX_SNAPSHOT_DIR, exist_ok=True)
+        tmp = _FX_SNAPSHOT_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(
+                {"at": datetime.now(timezone.utc).isoformat(), "rates": rates}, fh
+            )
+        os.replace(tmp, _FX_SNAPSHOT_PATH)  # atomic on POSIX
+    except Exception as e:
+        print(f"[showcase] fx snapshot save failed — {e}")
 
 
 def _fx_to_gbp() -> dict:
@@ -1500,11 +1556,21 @@ def _fx_to_gbp() -> dict:
 
     GBP and GBp both map to 1.0: the 'GBp' quote code is a unit label only and
     the stored market cap is already in whole pounds, not pence.
+
+    Reads memory, then the shared snapshot, then Yahoo — see the tier notes
+    above the cache constants for why a process-local dict is not enough.
     """
     now = datetime.now(timezone.utc)
     cached, at = _FX_CACHE["rates"], _FX_CACHE["at"]
     if cached is not None and at and (now - at).total_seconds() < _FX_TTL_SECONDS:
         return cached
+
+    # Tier 2: a recent snapshot from another process (usually an earlier cron
+    # run). Seeds this process's memory so the rest of the run is free.
+    snap = _fx_load_snapshot()
+    if snap:
+        _FX_CACHE["rates"], _FX_CACHE["at"] = snap, now
+        return snap
 
     rates = {"GBP": 1.0}
     try:
@@ -1515,7 +1581,9 @@ def _fx_to_gbp() -> dict:
                 " FROM company_metadata WHERE financial_currency IS NOT NULL"
             )
         ]
-        wanted = sorted({c for c in codes if c and c != "GBP"})
+        wanted = sorted(
+            {c for c in codes if c and c != "GBP" and c not in _FX_NO_YAHOO_PAIR}
+        )
         if wanted:
             import yfinance as yf  # deferred — only this fetch path needs it
 
@@ -1536,6 +1604,11 @@ def _fx_to_gbp() -> dict:
         return {"GBP": 1.0}
 
     _FX_CACHE["rates"], _FX_CACHE["at"] = rates, now
+    # Only worth persisting once a real rate was actually resolved — a
+    # sterling-only dict is the degraded result and must not be written, or a
+    # Yahoo outage would pin every foreign name's check off for the full TTL.
+    if len(rates) > 1:
+        _fx_save_snapshot(rates)
     return rates
 
 
