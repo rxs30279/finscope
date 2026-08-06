@@ -50,9 +50,29 @@ _STATUS_PRECEDENCE = (
     ("email.delivery_delayed", "delayed"),
 )
 
+# How far back to look for a message's own send, beyond the requested window.
+# BOTH read models below filter EVENTS, not messages, so without this a late
+# open on an old digest arrives as a group holding nothing but that open: the
+# message loses its own sent/delivered rows, dates itself to the open, and
+# materialises as a phantom send. Seen in prod twice:
+#   2026-08-04, metrics — the 21 Jul digest was opened on 3 Aug and turned up as
+#     a Sunday send, delivered=0 dragging that day's deliverability down with it.
+#   2026-08-06, list — the 29 and 30 Jul digests, reopened together late on the
+#     5th, appeared stamped "16h ago" and labelled Sent (_classify defaults to
+#     "sent" when a group carries no delivered/bounced/failed row), reading as
+#     duplicate sends to the same recipient.
+# 30 days covers realistic late-open lag; anything older simply drops out, which
+# is the correct outcome.
+_COHORT_LOOKBACK_DAYS = 30
+
 # One row per message (GROUP BY email_id). Verified against prod 2026-07-30:
 # zero email_ids span more than one recipient/subject/provider, so MAX() here
 # is picking the only value each column ever holds, not guessing among several.
+#
+# Callers pass the WIDENED window (days + _COHORT_LOOKBACK_DAYS) and then drop
+# by send time — see _load_messages. email_created_at/first_event_at are
+# selected only to feed _cohort_ts, which needs the same inputs here as it gets
+# from _METRICS_SQL or the two paths would date the same message differently.
 _MSGS_SQL = """
     SELECT
         email_id,
@@ -60,8 +80,10 @@ _MSGS_SQL = """
         MAX(recipient)                                                  AS recipient,
         MAX(recipient_domain)                                           AS recipient_domain,
         MAX(subject)                                                    AS subject,
+        MIN(email_created_at)                                           AS email_created_at,
         MIN(occurred_at) FILTER (WHERE event_type = 'email.sent')       AS sent_at,
         MAX(occurred_at) FILTER (WHERE event_type = 'email.delivered')  AS delivered_at,
+        MIN(occurred_at)                                                AS first_event_at,
         MAX(occurred_at)                                                AS last_event_at,
         ARRAY_AGG(DISTINCT event_type)                                  AS event_types
     FROM email_events
@@ -86,19 +108,69 @@ def _classify(event_types: list[str] | None) -> tuple[str, bool, bool, bool]:
     )
 
 
+def _cohort_ts(msg: dict) -> datetime | None:
+    """When a message actually went out — every event on it, however late, is
+    attributed here.
+
+    Keys on `email_created_at` — the provider's own record of when it built the
+    message — in preference to the timestamp of the `email.sent` EVENT. The two
+    agree for ordinary mail, but the event can be missing entirely: anything
+    sent before the webhook was configured on 21 Jul 09:43 has no sent or
+    delivered row at all, and surfaces only if someone later opens it. Derived
+    from events, such a message dates itself to the open (sophieclaw1@pm.me
+    opened the 21 Jul digest on 3 Aug, landing a 62nd message on a day that sent
+    61). `email_created_at` rides on every row including that one — 1363 of 1363
+    populated, checked 2026-08-04 — and correctly says 21 Jul.
+
+    The remaining fallbacks are for safety only, cheapest-lie-first: the sent
+    event, then the earliest event of any kind. Never the LAST event, which is
+    whenever someone last touched the mail — days or weeks adrift.
+
+    One definition, shared by the list's window cut and the metrics buckets, so
+    the two pages can never disagree about which day a message belongs to.
+    """
+    ts = (
+        msg.get("email_created_at")
+        or msg.get("sent_at")
+        or msg.get("first_event_at")
+        or msg.get("last_event_at")
+    )
+    if not isinstance(ts, datetime):
+        return None
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
 def _load_messages(days: int) -> list[dict]:
-    """One classified row per message in the window. Filtering/pagination
+    """One classified row per message SENT in the window. Filtering/pagination
     happen in Python (see list_messages) rather than in SQL — at today's
     volume (~150 events/day, ~409 messages over 9 days per the plan's prod
     check) pulling the whole window is trivial, and it keeps the
     status/was_delayed logic in one place that unit tests can exercise
-    without a database."""
-    rows = query(_MSGS_SQL, {"days": days})
+    without a database.
+
+    The QUERY window is widened by _COHORT_LOOKBACK_DAYS so a message whose only
+    in-window event is a late open still arrives with its own sent/delivered
+    rows attached; those extra messages are then dropped by SEND time. So the
+    list means "sent in the last `days`", not "touched in the last `days`" —
+    without the drop, reopening a week-old digest resurrects it at the top of
+    the list wearing the open's timestamp.
+
+    The cutoff mirrors the SQL's own `NOW() - days` rather than a UK calendar
+    day, so widening the query does not quietly move the boundary that decides
+    which messages the page shows.
+    """
+    rows = query(_MSGS_SQL, {"days": days + _COHORT_LOOKBACK_DAYS})
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     out = []
     for r in rows:
+        sent_ts = _cohort_ts(r)
+        if sent_ts is None or sent_ts < cutoff:
+            continue
         status, was_delayed, opened, clicked = _classify(r.get("event_types"))
         out.append({
-            **{k: v for k, v in r.items() if k != "event_types"},
+            # first_event_at exists only to feed _cohort_ts; it would read as a
+            # second, subtly different send time in the API response.
+            **{k: v for k, v in r.items() if k not in ("event_types", "first_event_at")},
             "status": status,
             "was_delayed": was_delayed,
             "opened": opened,
@@ -201,16 +273,6 @@ _SERIES_EVENT = {
 _ENGAGEMENT_TRACKED_FROM = date(2026, 7, 31)
 
 
-# How far back to look for a message's own send, beyond the charted window.
-# _MSGS_SQL filters EVENTS, not messages, so without this a late open on an old
-# digest arrives as a group holding nothing but that open: sent_at is NULL, the
-# cohort falls through to the event time, and the message materialises on the
-# day it was opened — a phantom send, with delivered=0 dragging that day's
-# deliverability down with it. Seen in prod on 2026-08-04: the 21 Jul digest was
-# opened on 3 Aug and turned up as a Sunday send. 30 days covers realistic
-# late-open lag; anything older simply drops out, which is the correct outcome.
-_COHORT_LOOKBACK_DAYS = 30
-
 # The metrics read model. Separate from _MSGS_SQL because that one collapses a
 # message to a DISTINCT set of event types, which is exactly the information the
 # unique/events toggle needs back: `event_counts` is a {event_type: n} map.
@@ -249,35 +311,12 @@ _METRICS_SQL = f"""
 
 
 def _cohort_day(msg: dict) -> date | None:
-    """The UK date a message went out — every event on it, however late, is
-    attributed here. Cohort-by-send-day (not by event day) is what makes the
-    rates readable: `opened` on 04 Aug is a share of THAT morning's delivered,
-    rather than of whatever happened to be delivered the day the open landed.
-
-    Keys on `email_created_at` — the provider's own record of when it built the
-    message — in preference to the timestamp of the `email.sent` EVENT. The two
-    agree for ordinary mail, but the event can be missing entirely: anything
-    sent before the webhook was configured on 21 Jul 09:43 has no sent or
-    delivered row at all, and surfaces only if someone later opens it. Derived
-    from events, such a message dates itself to the open (sophieclaw1@pm.me
-    opened the 21 Jul digest on 3 Aug, landing a 62nd message on a day that sent
-    61). `email_created_at` rides on every row including that one — 1363 of 1363
-    populated, checked 2026-08-04 — and correctly says 21 Jul.
-
-    The remaining fallbacks are for safety only, cheapest-lie-first: the sent
-    event, then the earliest event of any kind. Never the LAST event, which is
-    whenever someone last touched the mail — days or weeks adrift."""
-    ts = (
-        msg.get("email_created_at")
-        or msg.get("sent_at")
-        or msg.get("first_event_at")
-        or msg.get("last_event_at")
-    )
-    if not isinstance(ts, datetime):
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(_UK_TZ).date()
+    """The UK date a message went out. Cohort-by-send-day (not by event day) is
+    what makes the rates readable: `opened` on 04 Aug is a share of THAT
+    morning's delivered, rather than of whatever happened to be delivered the
+    day the open landed. See _cohort_ts for the precedence and why."""
+    ts = _cohort_ts(msg)
+    return ts.astimezone(_UK_TZ).date() if ts is not None else None
 
 
 def _rates(totals: dict, engagement_delivered: int) -> dict:

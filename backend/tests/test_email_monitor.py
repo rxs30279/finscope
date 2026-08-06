@@ -15,12 +15,26 @@ from email_monitor import _classify
 from main import app
 
 
+def _at(days_ago: int, hour: int = 7) -> datetime:
+    """A UTC timestamp `days_ago` UK-days before now, at the digest hour.
+
+    Fixtures must be relative, never absolute: /emails now drops messages whose
+    SEND time falls outside the requested window (see _load_messages), so a
+    hardcoded date silently ages out of range and takes the whole fixture with
+    it. These tests were originally written with literal 2026-07-30 stamps and
+    began failing when that date passed out of the default 7-day window.
+    """
+    today = datetime.now(timezone.utc).astimezone(email_monitor._UK_TZ).date()
+    day = today - timedelta(days=days_ago)
+    return datetime(day.year, day.month, day.day, hour, 30, tzinfo=email_monitor._UK_TZ)
+
+
 def _msg(email_id, event_types, sent_at=None, last_event_at=None, provider="resend",
          recipient="someone@example.com", subject="RNS Digest", counts=None):
     """One grouped row. Serves both read models: `event_types` is what
     _MSGS_SQL returns (for /emails), `event_counts` what _METRICS_SQL returns.
     Counts default to one event per type; pass `counts` to model repeats."""
-    now = datetime(2026, 7, 30, 9, 0, tzinfo=timezone.utc)
+    now = _at(0, hour=9)
     return {
         "email_id": email_id,
         "provider": provider,
@@ -86,30 +100,86 @@ def test_message_with_no_sent_event_orders_on_last_event_at(monkeypatch):
     load-bearing: without it these sink to the bottom regardless of age."""
     recent_no_sent = _msg(
         "no-sent", ["email.delivered"], sent_at=None,
-        last_event_at=datetime(2026, 7, 30, 8, 0, tzinfo=timezone.utc),
+        last_event_at=_at(0, hour=8),
     )
     older_with_sent = _msg(
         "with-sent", ["email.sent", "email.delivered"],
-        sent_at=datetime(2026, 7, 29, 7, 0, tzinfo=timezone.utc),
+        sent_at=_at(1, hour=7),
     )
     monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [recent_no_sent, older_with_sent])
 
     out = email_monitor.list_messages(days=7)
     ids = [m["email_id"] for m in out["messages"]]
-    assert ids == ["no-sent", "with-sent"]  # 30 Jul 08:00 is newer than 29 Jul 07:00
+    assert ids == ["no-sent", "with-sent"]  # today 08:00 is newer than yesterday 07:00
+
+
+# ── Late opens must not resurrect an old message ───────────────────────────────
+
+def test_late_open_does_not_resurrect_an_old_message(monkeypatch):
+    """Reopening a week-old digest must not put it back in a 7-day list.
+
+    Prod, 2026-08-06: one subscriber reopened the 29 and 30 Jul digests late on
+    the 5th. _MSGS_SQL filters EVENTS, so each old message came back as a group
+    holding only that open — sent_at NULL, and _classify defaulting to "sent"
+    because no delivered row was in range. The frontend renders
+    `ago(sent_at ?? last_event_at)`, so both appeared stamped "16h ago" and
+    labelled Sent: two rows for one recipient that read as duplicate sends.
+
+    The fixture models what the WIDENED query now returns — the message with its
+    own sent/delivered rows attached — so the drop is by send time, not by
+    whether the send happened to fall in range.
+    """
+    old_but_reopened = _msg(
+        "old", ["email.sent", "email.delivered", "email.opened"],
+        sent_at=_at(8), last_event_at=_at(0, hour=23) - timedelta(days=1),
+    )
+    genuinely_recent = _msg(
+        "recent", ["email.sent", "email.delivered"], sent_at=_at(1),
+    )
+    monkeypatch.setattr(
+        email_monitor, "query", lambda *a, **k: [old_but_reopened, genuinely_recent]
+    )
+
+    out = email_monitor.list_messages(days=7)
+    assert [m["email_id"] for m in out["messages"]] == ["recent"]
+    # ...and it does not inflate the stat tiles either
+    assert out["summary"] == {"delivered": 1}
+
+    # Widen the window past its send date and it comes back, correctly dated.
+    wide = email_monitor.list_messages(days=14)
+    assert {m["email_id"] for m in wide["messages"]} == {"old", "recent"}
+    revived = next(m for m in wide["messages"] if m["email_id"] == "old")
+    assert revived["sent_at"] == _at(8)      # its own send, not the late open
+    assert revived["status"] == "delivered"  # not the "sent" default
+
+
+def test_pre_webhook_orphan_is_dated_by_email_created_at_not_the_open(monkeypatch):
+    """A message with no sent/delivered rows at all (sent before the webhook was
+    configured on 21 Jul 09:43) surfaces only when someone opens it. It must
+    date itself by email_created_at — which rides on every row — or it lands in
+    the list as a brand-new send on the day of the open."""
+    orphan = {
+        **_msg("orphan", ["email.opened"], sent_at=None, last_event_at=_at(0, hour=17)),
+        "first_event_at": _at(0, hour=17),
+        "email_created_at": _at(16),
+    }
+    monkeypatch.setattr(email_monitor, "query", lambda *a, **k: [orphan])
+
+    assert email_monitor.list_messages(days=7)["messages"] == []
+    assert [m["email_id"] for m in email_monitor.list_messages(days=30)["messages"]] == ["orphan"]
 
 
 # ── Filtering + pagination ──────────────────────────────────────────────────────
 
 def _mixed_messages():
     return [
-        _msg("m1", ["email.sent", "email.delivered"], sent_at=datetime(2026, 7, 30, 7, 1, tzinfo=timezone.utc),
+        _msg("m1", ["email.sent", "email.delivered"], sent_at=_at(0) + timedelta(minutes=1),
              provider="resend", recipient="a@gmail.com"),
-        _msg("m2", ["email.sent", "email.bounced"], sent_at=datetime(2026, 7, 30, 7, 2, tzinfo=timezone.utc),
+        _msg("m2", ["email.sent", "email.bounced"], sent_at=_at(0) + timedelta(minutes=2),
              provider="resend", recipient="b@hotmail.com"),
-        _msg("m3", ["email.sent", "email.delivered"], sent_at=datetime(2026, 7, 30, 7, 3, tzinfo=timezone.utc),
+        _msg("m3", ["email.sent", "email.delivered"], sent_at=_at(0) + timedelta(minutes=3),
              provider="ses", recipient="c@gmail.com"),
-        _msg("m4", ["email.sent"], sent_at=datetime(2026, 7, 30, 7, 4, tzinfo=timezone.utc),
+        _msg("m4", ["email.sent"], sent_at=_at(0) + timedelta(minutes=4),
              provider="resend", recipient="d@gmail.com", subject="Feedback reply"),
     ]
 
@@ -153,13 +223,6 @@ def test_summary_ignores_status_filter_but_honours_provider_and_search(monkeypat
 
 
 # ── Daily metrics ───────────────────────────────────────────────────────────────
-
-def _at(days_ago: int, hour: int = 7) -> datetime:
-    """A UTC timestamp `days_ago` UK-days before now, at the digest hour."""
-    today = datetime.now(timezone.utc).astimezone(email_monitor._UK_TZ).date()
-    day = today - timedelta(days=days_ago)
-    return datetime(day.year, day.month, day.day, hour, 30, tzinfo=email_monitor._UK_TZ)
-
 
 def test_metrics_emits_every_day_in_the_window_including_empty_ones(monkeypatch):
     """The digest is weekdays-only — dropping days with no send would close the
