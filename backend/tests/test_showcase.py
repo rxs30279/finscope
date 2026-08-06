@@ -524,13 +524,105 @@ def test_fx_snapshot_without_sterling_is_treated_as_corrupt():
     assert showcase._fx_load_snapshot() is None
 
 
-def test_fx_degraded_result_is_never_persisted():
-    """Writing a sterling-only dict would pin every foreign name's check off
-    for the whole 6h TTL on the back of one Yahoo outage."""
+def test_fx_degraded_result_is_never_persisted_as_rates():
+    """Writing a sterling-only dict as if it were good rates would pin every
+    foreign name's check off for the whole 6h TTL on one Yahoo outage."""
     with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
          patch.dict("sys.modules", {"yfinance": _fake_yf({})}):
         assert showcase._fx_to_gbp() == {"GBP": 1.0}
-    assert not os.path.exists(showcase._FX_SNAPSHOT_PATH)
+    # The failure marker IS written (that is the backoff), but no rates.
+    blob = showcase._fx_read_blob()
+    assert blob.get("failed_at")
+    assert not blob.get("rates")
+
+
+def _write_blob(rates=None, age_seconds=0, failed_seconds_ago=None):
+    blob = {}
+    if rates is not None:
+        blob["rates"] = rates
+        blob["at"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+        ).isoformat()
+    if failed_seconds_ago is not None:
+        blob["failed_at"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=failed_seconds_ago)
+        ).isoformat()
+    showcase._fx_write_blob(blob)
+
+
+def test_fx_backs_off_instead_of_retrying_every_run():
+    """The point of the backoff: a Yahoo outage must not mean ~16 cron runs a
+    day each hammering it. Inside the window we make no call at all."""
+    _write_blob(failed_seconds_ago=60)
+    calls = []
+
+    def _ticker(t):
+        calls.append(t)
+        raise RuntimeError("still down")
+
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": type("yf", (), {"Ticker": staticmethod(_ticker)})}):
+        showcase._fx_to_gbp()
+    assert calls == []
+
+
+def test_fx_retries_once_the_backoff_expires():
+    _write_blob(failed_seconds_ago=showcase._FX_FAIL_BACKOFF_SECONDS + 60)
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": _fake_yf({"GBP=X": 0.74})}):
+        assert showcase._fx_to_gbp() == {"GBP": 1.0, "USD": 0.74}
+
+
+def test_fx_serves_stale_rates_during_an_outage():
+    """Adding a backoff without this would make outages WORSE — foreign names
+    would lose the check for 30 minutes rather than retrying every 15. A
+    day-old rate beats no rate for a test whose contested band is 1.0-1.27."""
+    _write_blob(rates={"GBP": 1.0, "USD": 0.74}, age_seconds=26 * 3600,
+                failed_seconds_ago=60)
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": _fake_yf({})}):
+        assert showcase._fx_to_gbp() == {"GBP": 1.0, "USD": 0.74}
+
+
+def test_fx_stops_trusting_rates_that_are_too_stale():
+    _write_blob(rates={"GBP": 1.0, "USD": 0.74},
+                age_seconds=showcase._FX_STALE_MAX_SECONDS + 3600,
+                failed_seconds_ago=60)
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": _fake_yf({})}):
+        assert showcase._fx_to_gbp() == {"GBP": 1.0}
+
+
+def test_fx_failure_preserves_existing_rates_on_disk():
+    """Stamping the backoff must not wipe the rates the outage window needs."""
+    _write_blob(rates={"GBP": 1.0, "USD": 0.74}, age_seconds=10 * 3600)
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": _fake_yf({})}):
+        showcase._fx_to_gbp()
+    blob = showcase._fx_read_blob()
+    assert blob["rates"] == {"GBP": 1.0, "USD": 0.74}
+    assert blob.get("failed_at")
+
+
+def test_fx_success_clears_the_failure_marker():
+    _write_blob(rates={"GBP": 1.0, "USD": 0.60},
+                age_seconds=10 * 3600,
+                failed_seconds_ago=showcase._FX_FAIL_BACKOFF_SECONDS + 60)
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": _fake_yf({"GBP=X": 0.74})}):
+        assert showcase._fx_to_gbp() == {"GBP": 1.0, "USD": 0.74}
+    assert not showcase._fx_read_blob().get("failed_at")
+
+
+def test_fx_stale_result_does_not_poison_the_memory_cache():
+    """The memory slot means "fresh for 6h". Parking stale rates there would
+    suppress the retry once the backoff expires."""
+    _write_blob(rates={"GBP": 1.0, "USD": 0.74}, age_seconds=26 * 3600,
+                failed_seconds_ago=60)
+    with patch.object(showcase, "_q", return_value=_fx_rows("USD")), \
+         patch.dict("sys.modules", {"yfinance": _fake_yf({})}):
+        showcase._fx_to_gbp()
+    assert showcase._FX_CACHE["rates"] is None
 
 
 def test_fx_skips_currencies_with_no_yahoo_pair():
@@ -1258,6 +1350,93 @@ def test_story_close_returns_none_when_no_price_history():
         assert showcase._story_close("NEW.L", datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc)) is None
 
 
+# ── _entry_open / the gap split ───────────────────────────────────────────────
+def test_entry_open_takes_the_announcement_days_own_open_before_the_bell():
+    """A 07:00 RNS is public by the 08:00 open, so THAT day's open is the first
+    dealable price. The helper this replaced (_next_open) took the day after,
+    skipping the whole session the news was priced into — the off-by-one that
+    flattened the signal in the score-performance work."""
+    with patch.object(showcase, "_q", return_value=[{"open": 110.0}]) as q:
+        assert showcase._entry_open(
+            "ABC.L", datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc)) == 110.0
+    sql = " ".join(q.call_args[0][0].split())
+    # Same-day bar admissible only when the release beat the open; later
+    # announcements fall through to the next session.
+    assert "p.date > s.local_ts::date" in sql
+    assert "p.date = s.local_ts::date AND s.local_ts::time < %s::time" in sql
+    assert "ORDER BY p.date ASC" in sql
+    # Never the blanket "day after" rule.
+    assert "date > %s::date" not in sql
+
+
+def test_entry_open_boundary_is_the_lse_open_in_london_time():
+    """published_at is UTC and the table spans BST and GMT, so a fixed offset
+    would be an hour wrong for half the year — and an hour is the difference
+    between the 07:00 slot and the open."""
+    assert showcase._LSE_OPEN_LOCAL == "08:00"
+    with patch.object(showcase, "_q", return_value=[]) as q:
+        assert showcase._entry_open(
+            "X.L", datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc)) is None
+    sql = " ".join(q.call_args[0][0].split())
+    assert "AT TIME ZONE 'Europe/London'" in sql
+    assert q.call_args[0][1][2] == showcase._LSE_OPEN_LOCAL
+
+
+def _showcase_row(**kw):
+    """A stored high_impact_rns row, as _enrich receives it."""
+    base = dict(
+        id=7, rns_id=1, symbol="ABC.L", company_name="Abc plc",
+        headline="FY results", url="http://x", summary="Strong year",
+        published_at=datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc),
+        category="final_results", tier="A", status="approved",
+        llm_score=80, llm_confidence="high", llm_thesis="beat", llm_risks="none",
+        vet_verdict="include", vet_confidence="high", vet_rationale="clean",
+        vet_score=82, story_close=100.0,
+        flagged_at=None, decided_at=None,
+        fwd_multiple=None, fwd_metric=None, fwd_basis=None, fwd_is_bound=None,
+        fwd_period=None, fwd_quote=None,
+    )
+    base.update(kw)
+    return base
+
+
+def test_enrich_splits_the_move_into_gap_and_since_open():
+    """The two halves must compound back to the whole. A reader who sees only
+    "+21%" cannot tell whether it was there to take: here 10 points gapped open
+    before anyone could deal and 10 points were available afterwards, and the
+    page has to be able to say which was which."""
+    with patch("main._watchlist_rows",
+               return_value=[{"symbol": "ABC.L", "name": "Abc plc",
+                              "current_price": 121.0}]), \
+         patch("main._scrub_screener_metrics"), patch("main._attach_pegy"), \
+         patch.object(showcase, "_q", return_value=[]), \
+         patch.object(showcase, "_entry_open", return_value=110.0):
+        row = showcase._enrich([_showcase_row()])[0]
+
+    assert row["gap_pct"] == 10.0                 # 100 -> 110, untradeable
+    assert row["pct_since_entry_open"] == 10.0    # 110 -> 121, tradeable
+    assert row["entry_open"] == 110.0
+    # (1 + gap) * (1 + since) - 1 == the old single figure, so the split loses
+    # nothing.
+    assert row["pct_since_news"] == 21.0
+
+
+def test_enrich_leaves_both_halves_blank_until_the_entry_open_exists():
+    """A story that broke this morning has no open on record. Blank, never a
+    zero — a 0.0% gap reads as "the market shrugged", which is a claim."""
+    with patch("main._watchlist_rows",
+               return_value=[{"symbol": "ABC.L", "name": "Abc plc",
+                              "current_price": 121.0}]), \
+         patch("main._scrub_screener_metrics"), patch("main._attach_pegy"), \
+         patch.object(showcase, "_q", return_value=[]), \
+         patch.object(showcase, "_entry_open", return_value=None):
+        row = showcase._enrich([_showcase_row()])[0]
+
+    assert row["gap_pct"] is None
+    assert row["pct_since_entry_open"] is None
+    assert row["entry_open"] is None
+
+
 # ── list endpoint ─────────────────────────────────────────────────────────────
 def test_list_showcase_empty(client):
     with patch("main.query", return_value=[]):
@@ -1275,6 +1454,31 @@ def test_list_showcase_public_never_returns_shadow_rows(client):
     sql = q.call_args[0][0]
     assert "status = 'approved'" in sql
     assert "shadow" not in sql
+
+
+def test_list_showcase_hides_old_stories_without_deleting_them(client):
+    """The page restarts at SHOWCASE_MIN_STORY_DATE. This is a display floor in
+    the SELECT and nothing else: the rows stay in high_impact_rns, keep their
+    follow-ups, and still answer /gates and every calibration query. If this
+    ever becomes a DELETE the calibration history goes with it."""
+    with patch("main.query", return_value=[]) as q:
+        r = client.get("/api/showcase")
+    assert r.status_code == 200
+    sql = " ".join(q.call_args[0][0].split())
+    assert "(published_at AT TIME ZONE 'Europe/London')::date >= %s::date" in sql
+    assert q.call_args[0][1] == (showcase.SHOWCASE_MIN_STORY_DATE,)
+    assert "DELETE" not in sql.upper()
+
+
+def test_list_shadow_applies_the_same_display_floor(client):
+    """Withheld rows are interleaved into the same table as published ones, so a
+    floor on only one list would leave old withheld stories sitting above
+    published ones the page no longer shows."""
+    with patch("main.query", return_value=[]) as q:
+        client.get("/api/showcase/shadow")
+    sql = " ".join(q.call_args[0][0].split())
+    assert "(published_at AT TIME ZONE 'Europe/London')::date >= %s::date" in sql
+    assert q.call_args[0][1] == (showcase.SHOWCASE_MIN_STORY_DATE,)
 
 
 def test_list_shadow_is_admin_only(client):

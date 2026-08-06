@@ -65,6 +65,18 @@ const fmtPounds = (pence) =>
 const pctColor = (v) =>
   v == null ? "#64748b" : v > 0.05 ? "#10b981" : v < -0.05 ? "#ef4444" : "#94a3b8";
 
+// Signed percentage, or a dash. Never "0.0%" for a missing figure — a flat gap
+// is a claim about the market, and today's story simply has no open yet.
+const fmtPct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+
+// Tooltip copy for the two halves of the move, kept in one place because the
+// desktop header, the desktop cells and the mobile card all say the same thing.
+const GAP_TITLE =
+  "Gap — the move from the last close before the announcement to the first open you could have dealt at. " +
+  "RNS drops at 07:00, an hour before the market opens, so this part had already happened by the time anyone could buy.";
+const SINCE_OPEN_TITLE =
+  "Since that first dealable open to the latest price — the part of the move that was actually available to take.";
+
 const TIER_COLOR = { A: "#f87171", B: "#fbbf24", C: "#94a3b8" };
 
 const VET_STYLE = {
@@ -568,8 +580,8 @@ function LabelledPill({ label, value, invert }) {
 // tapping it opens the company, tapping the caret expands the same AI-analysis
 // block as desktop but full-width, no horizontal scroll involved.
 function MobileCard({
-  r, isOpen, onToggle, onSelect, isAdmin, live, price, changePct, rangePosValue,
-  isNewsSelected, onNewsSelect, vet, st, setStatus,
+  r, isOpen, onToggle, onSelect, isAdmin, live, price, gapPct, sinceOpenPct,
+  totalPct, rangePosValue, isNewsSelected, onNewsSelect, vet, st, setStatus,
 }) {
   const [showMqvrInfo, setShowMqvrInfo] = useState(false);
   const caretColor = isOpen ? "#f97316" : "#93c5fd";
@@ -639,15 +651,22 @@ function MobileCard({
             </span>
           </div>
           <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(calc(-50% + 66px), -50%)", pointerEvents: "none" }}>
-            <Sparkline points={r.spark} sinceCount={r.spark_since} sinceUp={changePct == null ? null : changePct >= 0} width={64} height={22} />
+            {/* Coloured on the WHOLE move (close -> now), because that is the
+                stretch the line actually draws — not the since-open half. */}
+            <Sparkline points={r.spark} sinceCount={r.spark_since} sinceUp={totalPct == null ? null : totalPct >= 0} width={64} height={22} />
           </div>
           <div style={{ textAlign: "right", flexShrink: 0, marginLeft: "auto" }}>
             <div style={{ color: "#f1f5f9", fontWeight: 700, fontSize: 13 }}>
               {live && <span title="Live" style={{ marginRight: 4, fontSize: 9, color: "#10b981" }}>●</span>}
               {fmtPounds(price)}
             </div>
-            <div style={{ color: pctColor(changePct), fontWeight: 700, fontSize: 12 }}>
-              {changePct == null ? "—" : `${changePct >= 0 ? "+" : ""}${changePct.toFixed(1)}%`}
+            {/* Same split as the desktop table's two columns, stacked: the
+                tradeable half leads, the gap sits under it as context. */}
+            <div title={SINCE_OPEN_TITLE} style={{ color: pctColor(sinceOpenPct), fontWeight: 700, fontSize: 12 }}>
+              {fmtPct(sinceOpenPct)}
+            </div>
+            <div title={GAP_TITLE} style={{ color: pctColor(gapPct), fontSize: 9.5, fontWeight: 700, opacity: 0.75, whiteSpace: "nowrap" }}>
+              gap {fmtPct(gapPct)}
             </div>
           </div>
         </div>
@@ -832,7 +851,11 @@ const COLS = [
   { key: "rank", label: "Rank", align: "center" },
   { key: "ai", label: "Vet Score", align: "center" },
   { key: "price", label: "Price", align: "right" },
-  { key: "pct_news", label: "% Change", align: "right" },
+  // The move, split the way /gates splits it: what gapped away before the open,
+  // and what was left to take afterwards. One combined "% Change" column hid
+  // which of the two a reader was looking at.
+  { key: "gap", label: "Gap", align: "right", title: GAP_TITLE },
+  { key: "since_open", label: "Since Open", align: "right", title: SINCE_OPEN_TITLE },
   { key: "fwd", label: "Fwd Multiple", align: "center" },
   {
     key: "range",
@@ -870,10 +893,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
   const [selectedNewsSymbol, setSelectedNewsSymbol] = useState(null);
   const [openStory, setOpenStory] = useState(() => new Set());
   const [refreshKey, setRefreshKey] = useState(0);
-  // "story": % since the story-date close (the flag baseline). "next_open": %
-  // since the next trading day's open — what buying the morning after would
-  // have returned, since the story close itself isn't a price you could deal at.
-  const [changeMode, setChangeMode] = useState("story");
   const [showChangeInfo, setShowChangeInfo] = useState(false);
 
   // Withheld rows are included: a withheld story still needs a live price, since
@@ -966,15 +985,18 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
     if (live != null && r.story_close > 0) return (live / r.story_close - 1) * 100;
     return r.pct_since_news;
   };
-  // % since the next trading day's open — what buying the morning after the
-  // story broke (rather than at the unobtainable story-date close) would have
-  // returned. Null until that next session's open is actually on record.
-  const pctSinceNextOpen = (r) => {
+  // % since the first open the news could be traded at (the announcement day's
+  // own open for a 07:00 RNS — see showcase._entry_open). Recomputed from the
+  // live quote for the same reason as above. Null until that open is on record,
+  // which is why this morning's story shows a dash rather than a zero.
+  const pctSinceOpen = (r) => {
     const live = liveQuotes[r.symbol];
-    if (live != null && r.next_open > 0) return (live / r.next_open - 1) * 100;
-    return r.pct_since_next_open;
+    if (live != null && r.entry_open > 0) return (live / r.entry_open - 1) * 100;
+    return r.pct_since_entry_open;
   };
-  const changePctOf = (r) => (changeMode === "next_open" ? pctSinceNextOpen(r) : pctSinceNews(r));
+  // The other half: pre-news close -> that open. Purely historical, so unlike
+  // the two above it never moves with the live quote.
+  const gapPct = (r) => r.gap_pct;
   const rangePos = (r) => {
     const p = priceOf(r);
     if (p == null || r.high_52w == null || r.low_52w == null) return null;
@@ -1109,34 +1131,8 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", marginBottom: 10 }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 7, fontFamily: "monospace" }}>
             <span style={{ color: "#64748b", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-              % Change vs
+              Gap + Since Open
             </span>
-            <div style={{ display: "inline-flex", border: "1px solid #2a3444", borderRadius: 4, overflow: "hidden" }}>
-              <button
-                onClick={() => setChangeMode("story")}
-                title="% since the close price on the publish date"
-                style={{
-                  padding: "3px 10px", fontSize: 10.5, fontWeight: 700, fontFamily: "monospace",
-                  border: "none", cursor: "pointer",
-                  background: changeMode === "story" ? "#f97316" : "transparent",
-                  color: changeMode === "story" ? "#0a0a0a" : "#94a3b8",
-                }}
-              >
-                Publish date
-              </button>
-              <button
-                onClick={() => setChangeMode("next_open")}
-                title="% since the opening price the day after publication — what buying the morning after the story broke would have returned"
-                style={{
-                  padding: "3px 10px", fontSize: 10.5, fontWeight: 700, fontFamily: "monospace",
-                  border: "none", borderLeft: "1px solid #2a3444", cursor: "pointer",
-                  background: changeMode === "next_open" ? "#f97316" : "transparent",
-                  color: changeMode === "next_open" ? "#0a0a0a" : "#94a3b8",
-                }}
-              >
-                +1d Publish date
-              </button>
-            </div>
             <button
               onClick={() => setShowChangeInfo((v) => !v)}
               title="What do these mean?"
@@ -1166,13 +1162,14 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
           </div>
           {showChangeInfo && (
             <div style={{ marginTop: 8, padding: "8px 10px", background: "#0d1420", border: "1px solid #1e2a3d", borderRadius: 4, fontSize: 10.5, color: "#94a3b8", lineHeight: 1.6, maxWidth: 420 }}>
-              <b style={{ color: "#cbd5e1" }}>Publish date</b> — % change from the closing price on the day the
-              story was published to now. This is the flag baseline, but it isn't a price you could actually
-              have dealt at.
+              The move is split in two, because only one half was ever available to take.
               <br />
-              <b style={{ color: "#cbd5e1" }}>+1d Publish date</b> — % change from the opening price on the next
-              trading day after publication to now — what you'd have made buying the morning after the story
-              broke, a more realistic entry point.
+              <b style={{ color: "#cbd5e1" }}>Gap</b> — from the last close before the announcement to the first
+              open anyone could deal at. RNS drops at 07:00, an hour before the market opens, so this part had
+              already happened.
+              <br />
+              <b style={{ color: "#cbd5e1" }}>Since Open</b> — from that open to the latest price. This is the
+              part you could have captured. A dash means the market hasn&apos;t opened on the story yet.
             </div>
           )}
         </div>
@@ -1201,7 +1198,9 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                     isAdmin={isAdmin}
                     live={isLive(r)}
                     price={priceOf(r)}
-                    changePct={changePctOf(r)}
+                    gapPct={gapPct(r)}
+                    sinceOpenPct={pctSinceOpen(r)}
+                    totalPct={pctSinceNews(r)}
                     rangePosValue={rangePos(r)}
                     isNewsSelected={r.symbol === selectedNewsSymbol}
                     onNewsSelect={() => setSelectedNewsSymbol(r.symbol)}
@@ -1220,7 +1219,11 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                 <thead>
                   <tr>
                     {COLS.map((c) => (
-                      <th key={c.key} style={{ ...S.th, textAlign: "center", cursor: "default", color: "#f97316" }}>
+                      <th
+                        key={c.key}
+                        title={c.title}
+                        style={{ ...S.th, textAlign: "center", cursor: c.title ? "help" : "default", color: "#f97316" }}
+                      >
                         {c.label}
                       </th>
                     ))}
@@ -1324,9 +1327,22 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null }) {
                             <span style={{ color: "#f1f5f9", fontWeight: 700 }}>{fmtPounds(priceOf(r))}</span>
                           </td>
 
-                          {/* Change — % since the story close, or since next-day open */}
-                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(changePctOf(r)) }}>
-                            {changePctOf(r) == null ? "—" : `${changePctOf(r) >= 0 ? "+" : ""}${changePctOf(r).toFixed(1)}%`}
+                          {/* Gap — the half that had already happened by the open.
+                              Deliberately lighter than the column beside it: it is
+                              context for the entry price, not a return anyone made. */}
+                          <td
+                            title={GAP_TITLE}
+                            style={{ ...S.td, textAlign: "right", color: pctColor(gapPct(r)), opacity: 0.75 }}
+                          >
+                            {fmtPct(gapPct(r))}
+                          </td>
+
+                          {/* Since that open — the half that was actually available */}
+                          <td
+                            title={SINCE_OPEN_TITLE}
+                            style={{ ...S.td, textAlign: "right", fontWeight: 700, color: pctColor(pctSinceOpen(r)) }}
+                          >
+                            {fmtPct(pctSinceOpen(r))}
                           </td>
 
                           {/* Forward multiple on the announcement's own stated figure */}

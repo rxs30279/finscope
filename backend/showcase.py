@@ -83,6 +83,15 @@ HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # fallback margin floor when no usable
 HIGH_IMPACT_MIN_ROCE = 0.15               # capital-returns escape hatch past the margin floor (profitable names only)
 PEER_MARGIN_MIN_GROUP = 5                 # industry margin medians need at least this many names to count
 HIGH_IMPACT_DEDUPE_DAYS = 30             # don't re-flag the same symbol within a month
+# Display floor for the page (2026-08-06). Stories published before this date
+# are NOT deleted — they stay in high_impact_rns with their follow-ups intact,
+# still feed /gates and every calibration query — they are simply no longer
+# served to /high-impact-rns. The list restarts from the vet-as-scorer regime
+# (migration 029, 2026-08-03) rather than mixing in picks published under the
+# old single-score rule, which are not comparable and mostly render "—" where
+# the vet score should be. Move the date to change what the page shows; there
+# is no other switch.
+SHOWCASE_MIN_STORY_DATE = "2026-08-01"
 
 
 # ── Sentiment (server-side port of RnsTab.js getSentiment) ────────────────────
@@ -232,17 +241,46 @@ def _story_close(symbol: str, published_at) -> Optional[float]:
     return float(rows[0]["close"]) if rows and rows[0]["close"] is not None else None
 
 
-def _next_open(symbol: str, published_at) -> Optional[float]:
-    """Open (pence) on the first trading day AFTER the story date — the baseline
-    for 'bought the next morning at the open'. None until that day's price has
-    actually been recorded (e.g. a story flagged today has no next-day open yet)."""
+# LSE opening auction. An RNS released before it (07:00 is the standard slot,
+# 34 of the 36 stories ever showcased) is already public when the market opens,
+# so THAT day's open is the first price anyone could have dealt at.
+_LSE_OPEN_LOCAL = "08:00"
+
+
+def _entry_open(symbol: str, published_at) -> Optional[float]:
+    """Open (pence) of the first session that could trade on the news.
+
+    The far end of the gap and the near end of "since the open" — the two halves
+    the page splits the move into, matching /gates (gates._row_returns), the
+    landing story and analysis/rns_score_perf.py.
+
+    For the standard 07:00 release that is the announcement day's OWN open, not
+    the day after. The day-after rule this replaced (_next_open) skipped the
+    entire session the news was priced into, which is where the reaction lands —
+    the same off-by-one that flattened the signal in the score-performance work.
+
+    An announcement released after the open falls through to the next session:
+    its own day's open is a pre-news price, and using it would put part of the
+    post-news move inside the "gap" the reader is told they missed.
+
+    None until that session's bar exists — a story that broke this morning has
+    no open on record yet, so the page shows a dash rather than a guess.
+    """
     rows = _q(
         """
-        SELECT open FROM price_history
-        WHERE symbol = %s AND date > %s::date AND open IS NOT NULL
-        ORDER BY date ASC LIMIT 1
+        WITH s AS (SELECT (%s AT TIME ZONE 'Europe/London') AS local_ts)
+        SELECT p.open
+        FROM price_history p, s
+        WHERE p.symbol = %s
+          AND p.open IS NOT NULL
+          AND (
+              p.date > s.local_ts::date
+              OR (p.date = s.local_ts::date AND s.local_ts::time < %s::time)
+          )
+        ORDER BY p.date ASC
+        LIMIT 1
         """,
-        (symbol, published_at),
+        (published_at, symbol, _LSE_OPEN_LOCAL),
     )
     return float(rows[0]["open"]) if rows and rows[0]["open"] is not None else None
 
@@ -1481,6 +1519,10 @@ def _named_one_offs(cand: dict) -> list[dict]:
 # Same snapshot dir as market.py, which is the Dokploy /data volume in prod, so
 # the cron exec and the uvicorn workers share one file. Best-effort throughout:
 # a snapshot failure costs a refetch, never a wrong rate.
+#
+# Steady state is ~9 Yahoo requests per refresh (1 crumb handshake + 2 chart
+# calls per pair — fast_info makes two) at 2-4 refreshes/day. The failure path
+# is the one that could actually get us rate-limited, hence the backoff below.
 _FX_SNAPSHOT_DIR = os.environ.get(
     "MARKET_SNAPSHOT_DIR",
     os.path.join(tempfile.gettempdir(), "finscope_market_cache"),
@@ -1497,37 +1539,98 @@ _FX_TTL_SECONDS = 6 * 3600
 # lists the pair, drop the code and it starts working.
 _FX_NO_YAHOO_PAIR = {"GEL"}
 
+# Negative cache. Without it a Yahoo outage means EVERY cron run retries — ~16
+# runs/day x 9 requests, i.e. we'd hit Yahoo hardest exactly when it is already
+# refusing us. After a total failure, wait this long before calling again.
+#
+# Must be well ABOVE the 15-minute cron interval to be worth anything: at 30
+# minutes it only skipped every other run (measured: 8 attempts per 16 runs, a
+# 2x cut). At 2h a full-day outage costs a handful of attempts instead of 16.
+# Retrying eagerly buys nothing here, because the stale rates below keep the
+# check running throughout — so the only thing fast recovery gains is slightly
+# fresher numbers on a comparison that tolerates day-old rates fine.
+_FX_FAIL_BACKOFF_SECONDS = 2 * 3600
 
-def _fx_load_snapshot() -> Optional[dict]:
-    """Rates from the shared snapshot if still inside the TTL, else None."""
+# During that wait, keep serving the last known rates even though they are past
+# the 6h TTL. FX moves ~1%/day and this only feeds a net-debt-vs-market-cap
+# test whose contested band is 1.0-1.27, so a day-old rate is far better than
+# no rate. Bounded, because "stale" has to stop meaning "usable" eventually.
+_FX_STALE_MAX_SECONDS = 7 * 24 * 3600
+
+
+def _fx_read_blob() -> Optional[dict]:
+    """Raw snapshot file, or None. Kept separate from the freshness rules so a
+    failure marker can live alongside rates that are stale but still usable."""
     try:
         if not os.path.exists(_FX_SNAPSHOT_PATH):
             return None
         with open(_FX_SNAPSHOT_PATH, "r", encoding="utf-8") as fh:
-            blob = json.load(fh)
-        at = datetime.fromisoformat(blob["at"])
-        if (datetime.now(timezone.utc) - at).total_seconds() >= _FX_TTL_SECONDS:
-            return None
-        rates = {str(k): float(v) for k, v in (blob.get("rates") or {}).items()}
-        # A snapshot without sterling is corrupt, not merely stale — refetch
-        # rather than silently dropping the check for every GBP reporter.
-        return rates if rates.get("GBP") == 1.0 else None
+            return json.load(fh)
     except Exception as e:
         print(f"[showcase] fx snapshot load failed — {e}")
         return None
 
 
-def _fx_save_snapshot(rates: dict) -> None:
+def _fx_blob_rates(blob: Optional[dict]) -> tuple[Optional[dict], float]:
+    """(rates, age_seconds) from a raw blob. Rates without sterling are treated
+    as corrupt, not stale — trusting them would drop the check for every GBP
+    reporter, which is the one group that never needed a rate at all."""
+    if not blob:
+        return None, 0.0
+    try:
+        rates = {str(k): float(v) for k, v in (blob.get("rates") or {}).items()}
+        if rates.get("GBP") != 1.0:
+            return None, 0.0
+        age = (
+            datetime.now(timezone.utc) - datetime.fromisoformat(blob["at"])
+        ).total_seconds()
+        return rates, age
+    except Exception:
+        return None, 0.0
+
+
+def _fx_load_snapshot() -> Optional[dict]:
+    """Rates from the shared snapshot if still inside the TTL, else None."""
+    rates, age = _fx_blob_rates(_fx_read_blob())
+    return rates if rates and age < _FX_TTL_SECONDS else None
+
+
+def _fx_in_backoff(blob: Optional[dict]) -> bool:
+    """True while a recent total failure should stop us calling Yahoo again."""
+    try:
+        failed_at = (blob or {}).get("failed_at")
+        if not failed_at:
+            return False
+        since = (
+            datetime.now(timezone.utc) - datetime.fromisoformat(failed_at)
+        ).total_seconds()
+        return since < _FX_FAIL_BACKOFF_SECONDS
+    except Exception:
+        return False
+
+
+def _fx_write_blob(blob: dict) -> None:
     try:
         os.makedirs(_FX_SNAPSHOT_DIR, exist_ok=True)
         tmp = _FX_SNAPSHOT_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(
-                {"at": datetime.now(timezone.utc).isoformat(), "rates": rates}, fh
-            )
+            json.dump(blob, fh)
         os.replace(tmp, _FX_SNAPSHOT_PATH)  # atomic on POSIX
     except Exception as e:
         print(f"[showcase] fx snapshot save failed — {e}")
+
+
+def _fx_save_snapshot(rates: dict) -> None:
+    """Persist good rates and clear any failure marker."""
+    _fx_write_blob({"at": datetime.now(timezone.utc).isoformat(), "rates": rates})
+
+
+def _fx_record_failure(blob: Optional[dict]) -> None:
+    """Stamp the backoff, PRESERVING whatever rates are already on file so the
+    outage window can keep serving them."""
+    out = dict(blob or {})
+    out["failed_at"] = datetime.now(timezone.utc).isoformat()
+    _fx_write_blob(out)
 
 
 def _fx_to_gbp() -> dict:
@@ -1559,18 +1662,38 @@ def _fx_to_gbp() -> dict:
 
     Reads memory, then the shared snapshot, then Yahoo — see the tier notes
     above the cache constants for why a process-local dict is not enough.
+
+    On failure it backs off for 30 minutes and keeps serving the last known
+    rates (bounded at 7 days) rather than retrying every run, so an outage
+    degrades quietly instead of turning into a retry storm against a host that
+    is already refusing us.
     """
     now = datetime.now(timezone.utc)
     cached, at = _FX_CACHE["rates"], _FX_CACHE["at"]
     if cached is not None and at and (now - at).total_seconds() < _FX_TTL_SECONDS:
         return cached
 
-    # Tier 2: a recent snapshot from another process (usually an earlier cron
-    # run). Seeds this process's memory so the rest of the run is free.
-    snap = _fx_load_snapshot()
-    if snap:
-        _FX_CACHE["rates"], _FX_CACHE["at"] = snap, now
-        return snap
+    # Tier 2: a snapshot from another process (usually an earlier cron run).
+    blob = _fx_read_blob()
+    stored, age = _fx_blob_rates(blob)
+    if stored and age < _FX_TTL_SECONDS:
+        # Fresh. Seeds this process's memory so the rest of the run is free.
+        _FX_CACHE["rates"], _FX_CACHE["at"] = stored, now
+        return stored
+
+    def _degraded() -> dict:
+        """What to serve without a successful fetch. Deliberately NOT written
+        to the memory cache: that slot means "fresh for 6h", and holding a
+        stale or sterling-only result there would suppress the retry once the
+        backoff expires."""
+        if stored and age < _FX_STALE_MAX_SECONDS:
+            print(f"[showcase] fx using stale rates ({age / 3600:.1f}h old)")
+            return stored
+        return {"GBP": 1.0}
+
+    # Tier 3 gate: a recent total failure means don't call Yahoo yet.
+    if _fx_in_backoff(blob):
+        return _degraded()
 
     rates = {"GBP": 1.0}
     try:
@@ -1599,17 +1722,23 @@ def _fx_to_gbp() -> dict:
                     print(f"[showcase] fx rate {ticker} unavailable — {e}")
     except Exception as e:
         # Non-fatal by design: sterling names keep the check, foreign ones
-        # skip it for this run. Not cached, so the next run retries.
-        print(f"[showcase] fx lookup failed, non-GBP leverage-vs-cap skipped — {e}")
-        return {"GBP": 1.0}
+        # fall back to stale rates or lose it for this run.
+        print(f"[showcase] fx lookup failed — {e}")
+        _fx_record_failure(blob)
+        return _degraded()
 
-    _FX_CACHE["rates"], _FX_CACHE["at"] = rates, now
-    # Only worth persisting once a real rate was actually resolved — a
-    # sterling-only dict is the degraded result and must not be written, or a
-    # Yahoo outage would pin every foreign name's check off for the full TTL.
     if len(rates) > 1:
+        # A real rate resolved. Cache, and clear any failure marker.
+        _FX_CACHE["rates"], _FX_CACHE["at"] = rates, now
         _fx_save_snapshot(rates)
-    return rates
+        return rates
+
+    # Reached Yahoo but resolved nothing — every pair failed. Same treatment as
+    # an outright exception: back off, and keep serving what we already had.
+    # Never persist the sterling-only dict as if it were good rates.
+    print("[showcase] fx resolved no rates — backing off")
+    _fx_record_failure(blob)
+    return _degraded()
 
 
 # ── Auto-flag ─────────────────────────────────────────────────────────────────
@@ -2106,14 +2235,22 @@ def _enrich(entries: list[dict]) -> list[dict]:
         if baseline and cur is not None and baseline > 0:
             pct = round((cur / baseline - 1) * 100, 2)
 
-        # % since next-day open: what you'd have made buying the morning after
-        # the story broke, instead of at the (unobtainable) story-date close.
-        # Can't be snapshotted at flag time — the next session hasn't happened
-        # yet — so it's always looked up fresh.
-        next_open = _next_open(e["symbol"], e["published_at"])
-        pct_next_open = None
-        if next_open and cur is not None and next_open > 0:
-            pct_next_open = round((cur / next_open - 1) * 100, 2)
+        # The same split /gates shows, because the single "% since news" figure
+        # hid which half of it was ever available:
+        #   gap_pct  — pre-news close -> the first open you could deal at. The
+        #              move the market made while nobody could trade it.
+        #   pct_since_entry_open — that open -> now. The part a reader could
+        #              actually have captured.
+        # They compound back to pct_since_news, so nothing is lost by splitting.
+        # Neither can be snapshotted at flag time: for a 07:00 story the entry
+        # open is hours away, so both are looked up fresh.
+        entry_open = _entry_open(e["symbol"], e["published_at"])
+        gap_pct = None
+        if baseline and entry_open and baseline > 0:
+            gap_pct = round((entry_open / baseline - 1) * 100, 2)
+        pct_entry_open = None
+        if entry_open and cur is not None and entry_open > 0:
+            pct_entry_open = round((cur / entry_open - 1) * 100, 2)
 
         out.append({
             **base,
@@ -2127,8 +2264,9 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "days_since_news": (now.date() - e["published_at"].date()).days + 1,
             "pct_since_news": pct,
             "story_close": baseline,
-            "pct_since_next_open": pct_next_open,
-            "next_open": next_open,
+            "gap_pct": gap_pct,
+            "pct_since_entry_open": pct_entry_open,
+            "entry_open": entry_open,
             "spark_since": _spark_since_count(e["symbol"], e["published_at"]),
             # Forward multiple (extraction-only LLM + Python arithmetic; see
             # showcase_fwd.py). fwd_multiple is NULL when nothing usable was
@@ -2212,7 +2350,11 @@ def list_showcase(response: Response):
     """Public — the approved showcase, newest story first."""
     response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=60"
     entries = _q(
-        "SELECT * FROM high_impact_rns WHERE status = 'approved' ORDER BY published_at DESC"
+        "SELECT * FROM high_impact_rns WHERE status = 'approved' "
+        # Display floor only — the rows stay in the table (see the constant).
+        "AND (published_at AT TIME ZONE 'Europe/London')::date >= %s::date "
+        "ORDER BY published_at DESC",
+        (SHOWCASE_MIN_STORY_DATE,),
     )
     return _enrich(entries)
 
@@ -2242,7 +2384,13 @@ def list_shadow():
     """
     entries = _q(
         "SELECT * FROM high_impact_rns WHERE status = 'shadow' "
-        "ORDER BY vet_score DESC NULLS LAST, flagged_at DESC"
+        # Same display floor as the public list — these rows are interleaved
+        # into the same table, so a cutoff that applied to only one of the two
+        # would leave withheld stories sitting above published ones that the
+        # page no longer shows.
+        "AND (published_at AT TIME ZONE 'Europe/London')::date >= %s::date "
+        "ORDER BY vet_score DESC NULLS LAST, flagged_at DESC",
+        (SHOWCASE_MIN_STORY_DATE,),
     )
     return _enrich(entries)
 

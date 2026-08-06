@@ -13,10 +13,11 @@ so the pick ranges over the whole week instead of pinning a day.
 
 PRICE CONVENTION (load-bearing): RNS drops ~07:00, before the 08:00 LSE open, so
 the news is priced into THAT day's session. The gap is previous close ->
-announcement-day open. Do NOT reuse showcase._next_open() here: it deliberately
-takes the day AFTER the story, and that off-by-one flattened the entire signal in
-the score-performance work (backend/analysis/rns_score_perf.py has the right
-convention). Prices are pence throughout, matching price_history.
+announcement-day open. Taking the day AFTER the story instead is an off-by-one
+that flattened the entire signal in the score-performance work
+(backend/analysis/rns_score_perf.py has the right convention, and
+showcase._entry_open now shares it — the old showcase._next_open did not).
+Prices are pence throughout, matching price_history.
 
 The pick is a curated best case by construction — we take the biggest move that
 agreed with the score's direction. Page copy must therefore describe what the
