@@ -21,7 +21,21 @@ const LOGO_DOMAIN_OVERRIDES: Record<string, string> = {
 // HTML — including the <img> or initials — is still server-rendered, so crawlers
 // see the badge. Extracted from CompanyDetail so the server-rendered header can
 // use it too.
-export default function LogoBadge({ symbol }: { symbol: string }) {
+export default function LogoBadge({
+  symbol,
+  size = 64,
+  // logo.dev sometimes serves a wide wordmark rather than a square icon, and at
+  // the small tile size the results calendar uses, "cover" crops the ends off it
+  // ("...erizo..."). Callers that want the original edge-to-edge avatar keep the
+  // default.
+  fit = "cover",
+  background = "transparent",
+}: {
+  symbol: string;
+  size?: number;
+  fit?: "cover" | "contain";
+  background?: string;
+}) {
   const [failed, setFailed] = useState(false);
   const label = symbol.replace(".L", "").slice(0, 4);
   const token = process.env.NEXT_PUBLIC_LOGODEV_TOKEN;
@@ -35,20 +49,20 @@ export default function LogoBadge({ symbol }: { symbol: string }) {
   const showLogo = !!logoUrl && !failed;
 
   const base = {
-    width: 64, height: 64, borderRadius: 12, flexShrink: 0,
+    width: size, height: size, borderRadius: 12, flexShrink: 0,
     display: "flex", alignItems: "center", justifyContent: "center",
     overflow: "hidden", textDecoration: "none",
   } as const;
   const wrapStyle = showLogo
-    ? { ...base, background: "transparent" }
-    : { ...base, background: "#6366f1", color: "#fff", fontFamily: "DM Serif Display,serif", fontSize: 13, fontWeight: 700 };
+    ? { ...base, background }
+    : { ...base, background: "#6366f1", color: "#fff", fontFamily: "DM Serif Display,serif", fontSize: Math.max(11, size * 0.2), fontWeight: 700 };
 
   const inner = showLogo ? (
     <img
       src={logoUrl as string}
       alt={label}
       onError={() => setFailed(true)}
-      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+      style={{ width: "100%", height: "100%", objectFit: fit }}
     />
   ) : (
     label

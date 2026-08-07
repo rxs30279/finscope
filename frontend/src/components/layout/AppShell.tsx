@@ -20,6 +20,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "RNS",
     children: [
       { href: "/rns", label: "RNS Daily News" },
+      { href: "/results-calendar", label: "Results Calendar" },
       { href: "/subscribe", label: "RNS Daily Email" },
     ],
   },

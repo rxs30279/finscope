@@ -34,6 +34,7 @@ from research import router as research_router, published_slugs as _research_slu
 from dividends import router as dividends_router
 from shorts import router as shorts_router
 from landing_story import router as landing_story_router
+from results_calendar import router as results_calendar_router
 from email_events import router as email_events_router, recent_summary as _email_event_summary
 from email_monitor import router as email_monitor_router
 from email_rns_digest import main as run_digest, send_locked as send_digest_locked
@@ -87,6 +88,7 @@ app.include_router(research_router)
 app.include_router(dividends_router)
 app.include_router(shorts_router)
 app.include_router(landing_story_router)
+app.include_router(results_calendar_router)
 app.include_router(email_events_router)
 app.include_router(email_monitor_router)
 
