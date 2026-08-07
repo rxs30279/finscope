@@ -6,7 +6,7 @@ import CompanyEnrichment from "@/components/company/CompanyEnrichment";
 import EmailDigestCTA from "@/components/EmailDigestCTA";
 import { getCompanyData, getCompanyExtras } from "@/lib/companyData";
 import { slugToSymbol, tickerSlug } from "@/lib/company";
-import { fmt } from "@/lib/format";
+import { fmt, fmtPrice } from "@/lib/format";
 
 interface PageProps {
   params: Promise<{ symbol: string }>;
@@ -23,9 +23,18 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const name = meta?.name || ticker(symbol);
   const canonical = `/company/${tickerSlug(symbol)}`;
 
-  const cur = (meta?.financial_currency as string) || "GBP";
+  // Market cap comes from Yahoo's `info`, denominated in the QUOTE (trading)
+  // currency — not the reporting currency. Using financial_currency here labelled
+  // Anglo American's £40.00B cap as "$40.00B" in the indexed meta description,
+  // contradicting the header on the same page. Same fallback chain as
+  // CompanyHeader's quoteCurrency().
+  const cur = (meta?.currency as string) || (meta?.financial_currency as string) || "GBP";
   const bits: string[] = [];
   if (meta?.sector) bits.push(meta.sector as string);
+  // Price first — it's what "<name> share price" searchers are looking for, and
+  // it's the one fact the title promises.
+  if (snap?.last_close != null)
+    bits.push(`last close ${fmtPrice(snap.last_close as number, (snap.price_currency as string) || "GBp")}`);
   if (snap?.market_cap != null) bits.push(`mkt cap ${fmt(snap.market_cap, "currency", cur)}`);
   if (snap?.price_to_earnings != null) bits.push(`P/E ${fmt(snap.price_to_earnings, "x")}`);
   if (snap?.dividend_yield != null && (snap.dividend_yield as number) > 0)

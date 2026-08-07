@@ -14,7 +14,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { API } from "@/lib/api";
-import { currSym, fmtUKDate } from "@/lib/format";
+import { fmtPrice, fmtUKDate } from "@/lib/format";
 import { latestSessionDate, lsePriceMayChange } from "@/lib/lse";
 import { loadChartPrefs, saveChartPrefs } from "@/lib/storage";
 import { useIsMobile } from "@/hooks/useMediaQuery";
@@ -463,7 +463,7 @@ export default function PriceChart({ symbol, fcur = "GBP", simple = false }: Pro
   const priceContent = shownPrice == null ? null : (
     <>
       <div style={{ fontFamily: "DM Serif Display,serif", fontSize: 28, color: "#f1f5f9", lineHeight: 1.1 }}>
-        {currSym(fcur)}{Number(fcur === "GBP" || fcur === "GBp" ? shownPrice / 100 : shownPrice).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        {fmtPrice(shownPrice, fcur)}
       </div>
       {dayPct != null && (
         <div style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 600, marginTop: 2, color: dayPct >= 0 ? "#22c55e" : "#ef4444" }}>

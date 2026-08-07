@@ -237,6 +237,88 @@ def company(symbol: str = Query(...), response: Response = None):
     return rows[0]
 
 
+def _attach_last_close(row: dict, symbol: str, currency: Optional[str]) -> None:
+    """Add last_close / prev_close / price_change_pct / price_date / price_currency.
+
+    The company page is titled "<Name> (<TICKER>) Share Price & Fundamentals" but
+    the price itself was client-fetched, so the server HTML crawlers index never
+    contained one. This puts the last daily close into the SSR payload.
+
+    It is a CLOSE, not a live quote: /api/snapshot is cached for a day at the edge
+    and the page is ISR'd, so anything intraday would be stale the moment it was
+    stored. The frontend labels it with `price_date` for exactly that reason — the
+    live price still comes from PriceChart on the client.
+
+    Failures leave the row untouched: the price is an enhancement, and a company
+    page that renders without it is the status quo, not an error.
+    """
+    try:
+        rows = query(
+            # Bounded to 30 days off the newest stored date for the same reason as
+            # /api/heatmap — and because a symbol with no bar in that window should
+            # show NO price rather than a months-old one presented as "last close".
+            """
+            SELECT date, close
+            FROM price_history
+            WHERE symbol = %s
+              AND date >= (SELECT MAX(date) FROM price_history) - INTERVAL '30 days'
+            ORDER BY date DESC
+            LIMIT 2
+            """,
+            (symbol,),
+        )
+    except Exception:
+        return
+    if not rows:
+        return
+    last = float(rows[0]["close"]) if rows[0]["close"] is not None else None
+    prev = float(rows[1]["close"]) if len(rows) > 1 and rows[1]["close"] is not None else None
+    if last is None or last <= 0:
+        return
+
+    # price_history carries a known 100x pence/pounds unit glitch (see the
+    # price-history faults note). A wrong-by-100x price in the indexed HTML is far
+    # worse than no price, so cross-check the close against an INDEPENDENT quote —
+    # analyst_snapshots.current_price, falling back to valuation_estimates — and
+    # publish nothing when they disagree by an order of magnitude.
+    #
+    # Audited 2026-08-07 across all 755 active companies: 754 have a reference
+    # price and exactly two fail this check, FXPO.L and SAVE.L, both at a ratio of
+    # 0.01. The 20x band is deliberately far wider than any real drift between the
+    # reference snapshot and the last close, so only unit errors trip it.
+    ref_rows = query(
+        """
+        SELECT COALESCE(
+                 (SELECT current_price FROM analyst_snapshots s
+                  WHERE s.symbol = %s ORDER BY snapshot_date DESC LIMIT 1),
+                 (SELECT current_price FROM valuation_estimates v WHERE v.symbol = %s)
+               ) AS ref
+        """,
+        (symbol, symbol),
+    )
+    ref = ref_rows[0]["ref"] if ref_rows else None
+    if ref is not None and float(ref) > 0:
+        ratio = last / float(ref)
+        if ratio > 20 or ratio < 1 / 20:
+            return
+    elif prev and prev > 0:
+        # No independent quote (1 symbol in 755). Fall back to the weaker test:
+        # no listed company moves 100x in a session, so an exact-100x step between
+        # consecutive closes is the glitch flipping units mid-series.
+        step = last / prev
+        if abs(step - 100) / 100 < 0.02 or abs(step - 0.01) / 0.01 < 0.02:
+            return
+
+    row["last_close"] = last
+    row["price_date"] = rows[0]["date"]
+    if prev and prev > 0:
+        row["prev_close"] = prev
+        row["price_change_pct"] = last / prev - 1
+    # Quote currency, not the reporting currency — LSE lines store pence (GBp) but
+    # a handful quote in EUR/USD, so the frontend must not assume pence.
+    row["price_currency"] = currency or "GBp"
+
+
 @app.get("/api/snapshot")
 def snapshot(symbol: str = Query(...), response: Response = None):
     # Does a price_history scan + risk computation per call; the underlying data
@@ -246,7 +328,7 @@ def snapshot(symbol: str = Query(...), response: Response = None):
         response.headers["Cache-Control"] = "public, s-maxage=86400, stale-while-revalidate=86400"
     rows = query(
         """
-        SELECT t.*, m.sector
+        SELECT t.*, m.sector, m.currency AS quote_currency
         FROM ttm_financials t
         LEFT JOIN company_metadata m ON m.symbol = t.company_symbol
         WHERE t.company_symbol = %s
@@ -256,6 +338,7 @@ def snapshot(symbol: str = Query(...), response: Response = None):
     if not rows:
         raise HTTPException(404, "No data")
     row = rows[0]
+    quote_currency = row.pop("quote_currency", None)
     # _attach_risk_score expects a 'symbol' key (screener convention)
     row["symbol"] = symbol
     _attach_risk_score([row])
@@ -275,6 +358,7 @@ def snapshot(symbol: str = Query(...), response: Response = None):
         row["momentum_score"] = m.get("momentum_score")
         row["quality_score"] = _quality_score(m)
         row["value_score"] = _value_score(m)
+    _attach_last_close(row, symbol, quote_currency)
     return row
 
 

@@ -24,6 +24,22 @@ export const fmt = (
   return v.toLocaleString();
 };
 
+// Share price, in the QUOTE currency. Sterling LSE lines are stored in pence
+// (GBp) and shown as pounds; USD/EUR lines are already in major units. Shared by
+// the server-rendered CompanyHeader and the client PriceChart so the two prices
+// stacked on the company page can never drift apart in format.
+export const fmtPrice = (
+  v: number | null | undefined,
+  currency: string = "GBp",
+): string => {
+  if (v === null || v === undefined || isNaN(v)) return "—";
+  const n = currency === "GBP" || currency === "GBp" ? v / 100 : v;
+  return (
+    currSym(currency) +
+    n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  );
+};
+
 // British date format (dd/mm/yyyy) for chart tooltip labels. Falls back to the
 // raw value if it isn't a parseable date.
 export const fmtUKDate = (d: string | number | Date): string => {

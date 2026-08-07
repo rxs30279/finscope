@@ -22,6 +22,16 @@ export interface CompanySnap {
   dividend_yield?: number;
   revenue?: number;
   net_income?: number;
+  // Last daily close, server-side, so the price the page is titled for is in the
+  // HTML crawlers see. Absent when the symbol has no recent bar or when the close
+  // failed the backend's unit-glitch cross-check — render nothing in that case,
+  // never a fallback number. `price_currency` is the QUOTE currency (GBp for most
+  // LSE lines); use fmtPrice(), which handles the pence conversion.
+  last_close?: number;
+  prev_close?: number;
+  price_change_pct?: number;
+  price_date?: string;
+  price_currency?: string;
   [k: string]: unknown;
 }
 
