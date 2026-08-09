@@ -921,10 +921,13 @@ def _classify(headline: str, slug: str) -> dict:
 
 # ── HTML fetch + parse ────────────────────────────────────────────────────────
 
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-)
+# Identify the crawler honestly. The pipeline makes ~130-210 requests/day on
+# weekdays only (measured 2026-08-09: ~110 list pages + 20-100 detail pages),
+# which is light enough that a spoofed browser string bought nothing and only
+# looked evasive in someone else's logs. If investegate ever blocks on the UA,
+# reverting this commit is the fix — but check the cron log for a 429/403
+# first, since _urlopen_polite now reports throttling explicitly.
+_USER_AGENT = "AlphaMoveAI/1.0 (+https://app.alphamoveai.co.uk; UK RNS aggregator)"
 _BASE_URL = "https://www.investegate.co.uk"
 
 
