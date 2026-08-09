@@ -18,7 +18,7 @@ import re
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone, time as _dt_time
 from typing import Optional
 
 from zoneinfo import ZoneInfo
@@ -927,6 +927,95 @@ _USER_AGENT = (
 )
 _BASE_URL = "https://www.investegate.co.uk"
 
+
+class _RateLimited(Exception):
+    """Investegate throttled us (429/403) — deliberately NOT a URLError subclass.
+
+    HTTPError *is* a URLError, so before this existed a throttle was caught by
+    the generic `except urllib.error.URLError` handlers and silently ended the
+    run. A block and a quiet news day looked identical in the data. Callers
+    must catch this separately and surface it.
+    """
+
+    def __init__(self, code: int, url: str, retry_after: Optional[float] = None):
+        self.code = code
+        self.url = url
+        self.retry_after = retry_after
+        super().__init__(f"HTTP {code} from {url} (retry_after={retry_after})")
+
+
+_THROTTLE_CODES = {429, 403}
+_THROTTLE_BACKOFF_S = (5.0, 20.0)   # waits before retry 1 and retry 2
+_RETRY_AFTER_CAP_S = 60.0           # longer than this, give up to the next cron run
+
+# The 07:00 RNS drop has to be ingested, summarised and ranked before the 07:30
+# digest send (email_rns_digest). Measured 2026-08-09 over 21 days: the 07:00
+# batch finishes scoring at 07:05-07:08 on a normal day, so there is ~22 min of
+# slack — but sleeping through a throttle is still the wrong trade inside that
+# window. The */15 cron retries within 15 min, and a late row costs far less
+# than a thin digest. So cap backoff hard here and fail fast to the next run.
+_URGENT_WINDOW = (_dt_time(6, 30), _dt_time(7, 30))
+_URGENT_BACKOFF_CAP_S = 5.0
+
+
+def _backoff_cap_s(now: Optional[datetime] = None) -> float:
+    """Longest single backoff we're willing to sleep at the current clock time."""
+    t = (now or datetime.now(_UK_TZ)).time()
+    lo, hi = _URGENT_WINDOW
+    return _URGENT_BACKOFF_CAP_S if lo <= t < hi else _RETRY_AFTER_CAP_S
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Parse a Retry-After header — either delta-seconds or an HTTP-date."""
+    if not value:
+        return None
+    v = value.strip()
+    if v.isdigit():
+        return float(v)
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (dt - datetime.now(timezone.utc)).total_seconds())
+    except Exception:
+        return None
+
+
+def _urlopen_polite(url: str, timeout: int) -> str:
+    """GET a URL, backing off and retrying on 429/403 before giving up.
+
+    Honours Retry-After when investegate sends one, but never sleeps longer
+    than _backoff_cap_s() allows — waiting past the cap just collides with the
+    next */15 cron run, and inside the 07:30 digest window it risks the send.
+    Raises _RateLimited once retries are exhausted or a wait exceeds the cap;
+    every other HTTP or network error propagates unchanged.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    cap = _backoff_cap_s()
+    attempts = len(_THROTTLE_BACKOFF_S)
+    for attempt in range(attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            if e.code not in _THROTTLE_CODES:
+                raise
+            retry_after = _parse_retry_after(e.headers.get("Retry-After"))
+            # Exhaustion check first — _THROTTLE_BACKOFF_S has one entry per
+            # retry, so there is no backoff to look up on the final attempt.
+            if attempt == attempts:
+                raise _RateLimited(e.code, url, retry_after) from e
+            wait = retry_after if retry_after is not None else _THROTTLE_BACKOFF_S[attempt]
+            if wait > cap:
+                raise _RateLimited(e.code, url, retry_after) from e
+            print(
+                f"[rns] THROTTLED {e.code} on {url} — backing off {wait:.0f}s "
+                f"(retry {attempt + 1}/{attempts}, cap {cap:.0f}s)"
+            )
+            time.sleep(wait)
+    raise AssertionError("unreachable")  # pragma: no cover
+
 # Investegate URL: /announcement/{wire}/{company-slug}--{ticker}/{headline-slug}/{id}
 _ANN_URL_RE = re.compile(r"/announcement/([^/]+)/[^/]+--([^/]+)/([^/]+)/(\d+)")
 
@@ -941,9 +1030,7 @@ _EXCLUDED_WIRES = {"FNW"}
 def _fetch_page(page: int = 1, timeout: int = 20) -> str:
     """Fetch one list page of the investegate announcement feed."""
     url = _BASE_URL + ("/" if page == 1 else f"/?page={page}")
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+    return _urlopen_polite(url, timeout)
 
 
 def _parse_timestamp(text: str) -> Optional[datetime]:
@@ -1193,9 +1280,17 @@ def _run_ingest(
     If stop_on_known is True, stops early once a whole page produced no new rows.
     """
     processed = inserted = updated = errors = 0
+    rate_limited = False
     for page in range(1, max_pages + 1):
         try:
             html = _fetch_page(page)
+        except _RateLimited as e:
+            # Distinct from a network failure: we were throttled, so the run is
+            # short on data by decision rather than because the feed was quiet.
+            print(f"[rns] RATE LIMITED on page {page} — aborting ingest ({e})")
+            rate_limited = True
+            errors += 1
+            break
         except (urllib.error.URLError, TimeoutError) as e:
             print(f"[rns] page {page} fetch failed: {e}")
             errors += 1
@@ -1228,6 +1323,7 @@ def _run_ingest(
         "inserted": inserted,
         "updated": updated,
         "errors": errors,
+        "rate_limited": rate_limited,
     }
     print(f"[rns] ingest done — {result}")
     return result
@@ -1313,9 +1409,7 @@ def _fetch_summary_and_body(url: str, timeout: int = 15) -> tuple[Optional[str],
     Returns (summary, body) — either may be None (no AI summary on this wire,
     or no recognised body container on the page).
     """
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        html = resp.read().decode("utf-8", errors="replace")
+    html = _urlopen_polite(url, timeout)
     from bs4 import BeautifulSoup  # deferred — only the ingest/scrape path needs it
     soup = BeautifulSoup(html, "html.parser")
     return _extract_summary(soup), _fetch_body(soup)
@@ -1378,6 +1472,7 @@ def _backfill_summaries(
 
     fetched = with_summary = missing = errors = 0
     with_body = stub = 0
+    rate_limited = False
     for r in rows:
         try:
             summary, body_raw = _fetch_summary_and_body(r["url"])
@@ -1394,6 +1489,15 @@ def _backfill_summaries(
                 with_summary += 1
             else:
                 missing += 1
+        except _RateLimited as e:
+            # Stop the whole backfill, not just this row — continuing would
+            # spend the remaining `limit` fetches hammering a host that has
+            # just told us to back off. The rows keep body_fetched_at NULL, so
+            # the next cron run picks them up unchanged.
+            print(f"[rns] RATE LIMITED on {r['id']} — aborting summary backfill ({e})")
+            rate_limited = True
+            errors += 1
+            break
         except (urllib.error.URLError, TimeoutError) as e:
             print(f"[rns] summary fetch failed for {r['id']}: {e}")
             errors += 1
@@ -1406,6 +1510,7 @@ def _backfill_summaries(
         "with_body": with_body,
         "body_stub": stub,
         "errors": errors,
+        "rate_limited": rate_limited,
     }
     print(f"[rns] summary backfill done — {result}")
     return result
