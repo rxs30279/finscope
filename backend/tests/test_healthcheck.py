@@ -9,6 +9,7 @@ skipping run_http_checks (which would otherwise make a real network call).
 from datetime import datetime, timedelta, timezone
 
 import healthcheck
+from rns import DIGEST_SEND_UK
 
 
 def _ses_row(status="ok", days_ago=1.0, detail=None):
@@ -70,6 +71,16 @@ def _naive(h, m, s=0):
     return datetime(2026, 7, 23, h, m, s)  # a Thursday, tz-naive UK wall time
 
 
+def _send_offset(minutes=0, seconds=0):
+    """A naive UK datetime offset from rns.DIGEST_SEND_UK, same day as _naive().
+
+    Derives from the real constant rather than a hardcoded clock time so these
+    fixtures can't drift out of sync with the actual send time the way the
+    07:12-vs-07:30 mis-calibration (2026-07-31) did."""
+    base = _naive(DIGEST_SEND_UK.hour, DIGEST_SEND_UK.minute, DIGEST_SEND_UK.second)
+    return base + timedelta(minutes=minutes, seconds=seconds)
+
+
 def _batch_stub(row):
     def query_one(sql):
         if "'06:30'" in " ".join(sql.split()):
@@ -105,22 +116,25 @@ def test_morning_batch_finished_early_passes(monkeypatch):
 
 
 def test_morning_batch_drift_warns(monkeypatch):
-    # Completed 07:27 — past the 07:25 warn line but before the 07:30 fail line.
+    # Completed 3 min before the send — past the 5-min-before warn line but
+    # before the fail line (the send itself).
     monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
-    row = {"now_uk": _naive(9, 0), "n": 30, "unscored": 0, "done_uk": _naive(7, 27)}
+    row = {"now_uk": _naive(9, 0), "n": 30, "unscored": 0,
+           "done_uk": _send_offset(minutes=-3)}
     status, _ = _run_batch(_batch_stub(row))
     assert status == healthcheck.WARN
 
 
 def test_morning_batch_before_send_passes(monkeypatch):
-    """Completed 07:22 — comfortably inside the 07:30 send.
+    """Completed 6 min before the send — comfortably ahead of the warn line.
 
     Regression guard for the mis-calibration fixed on 2026-07-31: this case
     used to FAIL, because the check judged against an 07:12 send the project
     was aiming at but had never deployed.
     """
     monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
-    row = {"now_uk": _naive(9, 0), "n": 30, "unscored": 0, "done_uk": _naive(7, 22)}
+    row = {"now_uk": _naive(9, 0), "n": 30, "unscored": 0,
+           "done_uk": _send_offset(minutes=-6)}
     status, _ = _run_batch(_batch_stub(row))
     assert status == healthcheck.PASS
 
@@ -143,10 +157,11 @@ def test_morning_batch_in_progress_passes(monkeypatch):
 
 
 def test_morning_batch_unscored_before_send_passes(monkeypatch):
-    # 07:25 with rows still ranking: tight, but the send has not fired yet, so
-    # they are in flight rather than missed.
+    # 1 min before the send, with rows still ranking: tight, but the send has
+    # not fired yet (settled = send + 1 min), so they are in flight rather
+    # than missed.
     monkeypatch.setitem(healthcheck.DB_CONFIG, "host", "test-host")
-    row = {"now_uk": _naive(7, 25), "n": 20, "unscored": 3, "done_uk": None}
+    row = {"now_uk": _send_offset(minutes=-1), "n": 20, "unscored": 3, "done_uk": None}
     status, detail = _run_batch(_batch_stub(row))
     assert status == healthcheck.PASS
     assert "still ranking" in detail

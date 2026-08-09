@@ -139,16 +139,40 @@ def _at(h, m):
     return datetime(2026, 8, 10, h, m, tzinfo=rns._UK_TZ)
 
 
-@pytest.mark.parametrize("h,m", [(6, 30), (7, 0), (7, 29)])
-def test_cap_is_tight_inside_digest_window(h, m):
-    """07:00 drop must reach the 07:30 send — don't sleep through it."""
-    assert rns._backoff_cap_s(_at(h, m)) == rns._URGENT_BACKOFF_CAP_S
+def _clock_offset(t, minutes):
+    """`t` (a datetime.time) shifted by `minutes`, same day as _at()."""
+    total = t.hour * 60 + t.minute + minutes
+    return _at((total // 60) % 24, total % 60)
 
 
-@pytest.mark.parametrize("h,m", [(6, 29), (7, 30), (12, 0), (17, 45)])
-def test_cap_is_relaxed_outside_digest_window(h, m):
-    """Boundaries included: 07:30 is the send itself, the risk has passed."""
-    assert rns._backoff_cap_s(_at(h, m)) == rns._RETRY_AFTER_CAP_S
+# The window is rns._URGENT_WINDOW = (lo, DIGEST_SEND_UK) — DIGEST_SEND_UK is
+# env-configurable (see rns.py), so these must be derived from the live bounds
+# rather than fixed clock times or a fixed window width. A test written
+# against "45 minutes before send" silently assumed the window is exactly 45
+# min wide, which only held while the send was hardcoded at 07:30 (lo=06:30).
+
+@pytest.mark.parametrize("offset_from", ["lo", "lo_plus_1", "hi_minus_1"])
+def test_cap_is_tight_inside_digest_window(offset_from):
+    """The morning drop must reach the send — don't sleep through it."""
+    lo, hi = rns._URGENT_WINDOW
+    now = {
+        "lo": _at(lo.hour, lo.minute),
+        "lo_plus_1": _clock_offset(lo, 1),
+        "hi_minus_1": _clock_offset(hi, -1),
+    }[offset_from]
+    assert rns._backoff_cap_s(now) == rns._URGENT_BACKOFF_CAP_S
+
+
+@pytest.mark.parametrize("offset_from", ["lo_minus_1", "hi", "far_after_hi"])
+def test_cap_is_relaxed_outside_digest_window(offset_from):
+    """Boundaries included: the send itself is when the risk has passed."""
+    lo, hi = rns._URGENT_WINDOW
+    now = {
+        "lo_minus_1": _clock_offset(lo, -1),
+        "hi": _at(hi.hour, hi.minute),
+        "far_after_hi": _clock_offset(hi, 600),  # 10h later — well clear of any morning send
+    }[offset_from]
+    assert rns._backoff_cap_s(now) == rns._RETRY_AFTER_CAP_S
 
 
 def test_morning_throttle_fails_fast_rather_than_sleeping(monkeypatch):

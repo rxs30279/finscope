@@ -21,11 +21,17 @@ What it checks
                        refresh (stale > ~1.5 weeks, or last run degraded)
     - Shorts           pipeline_runs marker for the daily FCA short-position
                        refresh (stale > 3 days, or last run degraded)
-    - Digest           pipeline_runs marker for the weekday 07:30 RNS email
-                       send (stale > 3 days, or last send in fallback/partial)
+    - Digest           pipeline_runs marker for the weekday RNS email send
+                       (send time: rns.DIGEST_SEND_UK; stale > 3 days, or
+                       last send in fallback/partial)
+    - RNS ingest       pipeline_runs marker for the RNS ingest stage — FAILs
+                       if the last run aborted mid-sweep (rate limit / fetch
+                       error), which otherwise silently drops rows with no
+                       trace in the data
     - RNS morning batch when today's pre-send A/B batch finished LLM ranking —
-                       guards the 07:30 digest send (WARN as it nears 07:25,
-                       FAIL if the batch ranks after the send would have fired)
+                       guards the digest send (WARN 5 min before
+                       rns.DIGEST_SEND_UK, FAIL if the batch ranks after the
+                       send would have fired)
     - RNS body capture share of recent tier A/B rows with a non-stub
                        announcement body (guards against silent selector rot
                        — see docs/rns-body-context-plan.md)
@@ -57,7 +63,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime, date, time as dtime, timezone
+from datetime import datetime, date, timedelta, timezone
 
 import psycopg2
 import psycopg2.extras
@@ -311,8 +317,9 @@ def run_db_checks(query_one=None) -> None:
         if not row or row["last_run_at"] is None:
             return FAIL, "no rns_digest marker in pipeline_runs"
         d = _age_hours(row["last_run_at"]) / 24.0
-        # Weekday 07:30 cron-job.org send — weekend gaps are expected, so give
-        # a few days' slack before flagging a miss (warn > 3 days, fail > 5).
+        # Weekday cron-job.org send (see rns.DIGEST_SEND_UK) — weekend gaps
+        # are expected, so give a few days' slack before flagging a miss
+        # (warn > 3 days, fail > 5).
         status = _tier(d, warn_at=3, fail_at=5)
         if row["status"] != "ok":
             # Non-ok = fallback mode / partial send / nothing sent. This is the
@@ -321,11 +328,38 @@ def run_db_checks(query_one=None) -> None:
             status = FAIL
         return status, f"last send {d:.1f}d ago, status '{row['status']}', {row['detail']}"
 
+    @check("rns.ingest_complete")
+    def _rns_ingest_complete():
+        # _run_ingest aborts its page loop on the first rate-limit or fetch
+        # error (rns.py), and because stop_on_known then breaks at page 2 on
+        # the NEXT run too, the pages beyond the abort are never re-read —
+        # the rows on them are lost silently. A truncated ingest is invisible
+        # in the data (a thin digest and a quiet news day look identical), so
+        # this pipeline_runs('rns_ingest') marker (stamped by run_rns.py) is
+        # the only signal that distinguishes them. run_rns.py already forces
+        # a deep sweep on the run after an incomplete one; this just makes
+        # that state visible instead of only living in the cron log.
+        row = query_one(
+            "SELECT last_run_at, status, detail FROM pipeline_runs "
+            "WHERE pipeline = 'rns_ingest'"
+        )
+        if not row or row["last_run_at"] is None:
+            return WARN, "no rns_ingest marker yet (stamp lands on the next run)"
+        if row["status"] != "ok":
+            return FAIL, (
+                f"last ingest stopped early: '{row['status']}' — pages beyond "
+                f"the abort were not read, next run sweeps deeper, {row['detail']}"
+            )
+        h = _age_hours(row["last_run_at"])
+        # */15 sweep on weekdays; generous slack for weekends/off-hours.
+        status = _tier(h / 24.0, warn_at=3, fail_at=5)
+        return status, f"last ingest ok, {h:.1f}h ago"
+
     @check("rns.morning_batch")
     def _rns_morning_batch():
-        # Guards the 07:30 UK digest send (cron-job.org -> /api/digest, see
-        # main.py). The morning RNS batch must be fully LLM-ranked before the
-        # send fires; if the early burst crons (07:01/07:04 UK) ever slip later,
+        # Guards the digest send (cron-job.org -> /api/digest, see main.py).
+        # The morning RNS batch must be fully LLM-ranked before the send
+        # fires; if the early burst crons (07:01/07:04 UK) ever slip later,
         # completion drifts past the send and high-impact stories get missed —
         # that regression should show here.
         #
@@ -333,17 +367,18 @@ def run_db_checks(query_one=None) -> None:
         # project was *aiming* at, never the one in production, which left this
         # check ~18 minutes stricter than reality — it would fail a batch that
         # comfortably made the real email, and a monitor that cries wolf gets
-        # ignored. Judge against the send that actually fires.
+        # ignored. Judge against the send that actually fires — imported from
+        # rns.DIGEST_SEND_UK rather than a local literal, since that literal is
+        # exactly what drifted out of sync with production before.
         #
-        # Scope = A/B stories published BEFORE the send (06:30-07:20 UK today),
-        # i.e. everything that could be in that morning's email. Legitimately
-        # late-published stories (08:00+) are excluded on purpose: they don't
-        # exist at send time, so they must not drag the metric late. The upper
-        # bound is 07:20 rather than the send time itself because ingest lags
-        # publication by ~5 min (07:00 stories enter the pipeline ~07:04-07:05)
-        # and ranking takes another minute or two: a story published at 07:25
-        # cannot make an 07:30 send however healthy the pipeline is, so judging
-        # one would be crying wolf about physics.
+        # Scope = A/B stories published BEFORE the send (up to 10 min ahead of
+        # it, UK today), i.e. everything that could be in that morning's email.
+        # Legitimately late-published stories are excluded on purpose: they
+        # don't exist at send time, so they must not drag the metric late. The
+        # 10-minute margin (not the send time itself) is because ingest lags
+        # publication by ~5 min and ranking takes another minute or two: a
+        # story published 5 min before the send cannot make it however healthy
+        # the pipeline is, so judging one would be crying wolf about physics.
         #
         # Publication time alone is not enough to define that scope. A story can
         # be published at 07:00, classified Tier C, and only become a ranking
@@ -360,7 +395,10 @@ def run_db_checks(query_one=None) -> None:
         # have been in that morning's email; it is counted and reported, but not
         # judged. NULL stays IN scope on purpose: an A/B story that never even
         # reached the summariser is a genuine stall, not a backfill.
-        send_uk = "07:30"
+        from rns import DIGEST_SEND_UK
+        send_today = datetime.combine(date.today(), DIGEST_SEND_UK)
+        send_uk = DIGEST_SEND_UK.strftime("%H:%M")
+        scope_upper_uk = (send_today - timedelta(minutes=10)).strftime("%H:%M")
         row = query_one(f"""
             WITH batch AS (
                 SELECT llm_processed_at,
@@ -371,7 +409,7 @@ def run_db_checks(query_one=None) -> None:
                    AND (published_at AT TIME ZONE 'Europe/London')::date
                        = (NOW() AT TIME ZONE 'Europe/London')::date
                    AND (published_at AT TIME ZONE 'Europe/London')::time
-                       BETWEEN '06:30' AND '07:20'
+                       BETWEEN '06:30' AND '{scope_upper_uk}'
             ), scoped AS (
                 SELECT llm_processed_at,
                        (entered_uk IS NULL OR entered_uk <= TIME '{send_uk}')
@@ -406,7 +444,8 @@ def run_db_checks(query_one=None) -> None:
         # in-scope story with no score is precisely the miss this check exists
         # to catch, so the line sits just past the send rather than giving the
         # batch further grace it no longer has any use for.
-        settled = now_uk.time() >= dtime(7, 31)
+        settled_dt = send_today + timedelta(minutes=1)
+        settled = now_uk.time() >= settled_dt.time()
         unscored = row["unscored"] or 0
         if unscored:
             if not settled:
@@ -416,17 +455,18 @@ def run_db_checks(query_one=None) -> None:
                           f"{now_uk:%H:%M} UK — pipeline stalled{extra}")
         done = row["done_uk"]
         lag = (done.hour * 60 + done.minute) - 7 * 60
-        # The send fires at 07:30:25, tightly (every weekday 22-31 Jul 2026 the
-        # first send event landed 07:30:25.2-07:30:26.6), and the digest query
-        # runs seconds ahead of it. WARN as completion creeps toward that, FAIL
-        # once it lands after the send had already gone out — i.e. the batch was
-        # missed. There is deliberately no grace past 07:30: the old three-minute
-        # one existed because "~07:11-07:12" was an estimate, and the real send
-        # time is known to the second.
+        # The send fires within a few seconds of DIGEST_SEND_UK (every weekday
+        # 22-31 Jul 2026 the 07:30 send landed 07:30:25.2-07:30:26.6), and the
+        # digest query runs seconds ahead of it. WARN as completion creeps
+        # toward that, FAIL once it lands after the send had already gone out
+        # — i.e. the batch was missed. There is deliberately no grace past the
+        # send: the old three-minute one existed because the send time was an
+        # estimate, and the real one is known to the second.
+        send_secs = DIGEST_SEND_UK.hour * 3600 + DIGEST_SEND_UK.minute * 60
         status = _tier(
             done.hour * 3600 + done.minute * 60 + done.second,
-            warn_at=7 * 3600 + 25 * 60,   # 07:25
-            fail_at=7 * 3600 + 30 * 60,   # 07:30
+            warn_at=send_secs - 5 * 60,
+            fail_at=send_secs,
         )
         return status, (f"{n} stories ranked by {done:%H:%M:%S} UK "
                         f"(~{lag}m past 07:00){extra}")

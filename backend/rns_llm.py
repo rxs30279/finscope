@@ -191,6 +191,23 @@ def _use_thinking(category: Optional[str]) -> bool:
 # (the var is otherwise unset, so this default applies); 1 ranks serially.
 _RANK_WORKERS = max(1, int(os.environ.get("RNS_RANK_WORKERS", "5")))
 
+# Per-call ceiling on a DeepSeek request. openai-python defaults to a 600s
+# timeout with 2 retries, so one hung call can hold a ranking worker for ~30
+# minutes; because _rank_pending blocks on pool.map that holds the pipeline
+# lock too, and every burst cron behind it exits without ingesting. The
+# morning batch has minutes of slack, not tens of minutes.
+#
+# Two values because the two callers have genuinely different tails: the
+# ranker's fast path is ~6.5s/call, while the showcase vet runs thinking=True
+# and was measured at 85-172s (rns_llm) / ~40s (showcase, 2026-08-06). A
+# single cap would either strangle the vet or be useless for the ranker.
+_TIMEOUT_FAST_S     = float(os.environ.get("DEEPSEEK_TIMEOUT_FAST", "60"))
+_TIMEOUT_THINKING_S = float(os.environ.get("DEEPSEEK_TIMEOUT_THINKING", "240"))
+# One retry, not openai's default 2: _call_deepseek already retries on
+# truncation, and the cron re-runs every 3 min. Stacking three layers of retry
+# is how a 6s call becomes a 30-minute lock hold.
+_CLIENT_MAX_RETRIES = int(os.environ.get("DEEPSEEK_MAX_RETRIES", "1"))
+
 _client = None
 
 
@@ -202,7 +219,12 @@ def _get_client():
             raise RuntimeError("DEEPSEEK_API_KEY not set in environment")
         from openai import OpenAI
 
-        _client = OpenAI(api_key=_DEEPSEEK_API_KEY, base_url=_DEEPSEEK_BASE_URL)
+        _client = OpenAI(
+            api_key=_DEEPSEEK_API_KEY,
+            base_url=_DEEPSEEK_BASE_URL,
+            timeout=_TIMEOUT_THINKING_S,   # per-call override below
+            max_retries=_CLIENT_MAX_RETRIES,
+        )
     return _client
 
 
@@ -1209,6 +1231,7 @@ def _call_deepseek(
             temperature=_DEFAULT_TEMPERATURE,
             max_tokens=attempt_budget,
             extra_body=_THINKING_ON if thinking else _THINKING_OFF,
+            timeout=_TIMEOUT_THINKING_S if thinking else _TIMEOUT_FAST_S,
         )
         label = tag or ("rns_llm" if thinking else "rns_llm:fast")
         _log_cache_usage(label, resp)

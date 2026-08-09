@@ -951,13 +951,41 @@ _THROTTLE_CODES = {429, 403}
 _THROTTLE_BACKOFF_S = (5.0, 20.0)   # waits before retry 1 and retry 2
 _RETRY_AFTER_CAP_S = 60.0           # longer than this, give up to the next cron run
 
-# The 07:00 RNS drop has to be ingested, summarised and ranked before the 07:30
+def _parse_send_time(raw: str) -> _dt_time:
+    try:
+        h, m = raw.strip().split(":")
+        return _dt_time(int(h), int(m))
+    except Exception:
+        return _dt_time(7, 30)
+
+
+# THE send time, in one place. cron-job.org holds the trigger (see main.py's
+# /api/digest) and cannot import this, so the two must be kept in sync by
+# hand — but everything INSIDE the backend derives from here: the fail-fast
+# throttle window below, run_rns's deferral of post-ranking stages, and
+# healthcheck's rns.morning_batch bar. If this runs ahead of the real
+# cron-job.org trigger, all three misfire in the gap between them: the
+# throttle window relaxes early (weaker protection right before the real
+# send), the vet/gates/prune deferral stops early (reintroducing the lock
+# contention it exists to avoid, now right before the real send), and
+# morning_batch cries wolf against a bar the real send doesn't have to meet
+# yet — the same class of bug as the 07:12-vs-07:30 mis-calibration fixed
+# 2026-07-31, just pointed the other way.
+#
+# Defaults to matching the LIVE cron-job.org schedule (07:30) rather than the
+# 07:15 target, precisely so this file staying ahead of an unmoved cron isn't
+# the default state. Override with the DIGEST_SEND_UK env var (e.g. "07:15")
+# to test a moved target without deploying — set it back once cron-job.org's
+# own trigger actually moves to match, then this default can follow it.
+DIGEST_SEND_UK = _parse_send_time(os.environ.get("DIGEST_SEND_UK", "07:30"))
+
+# The 07:00 RNS drop has to be ingested, summarised and ranked before the
 # digest send (email_rns_digest). Measured 2026-08-09 over 21 days: the 07:00
-# batch finishes scoring at 07:05-07:08 on a normal day, so there is ~22 min of
-# slack — but sleeping through a throttle is still the wrong trade inside that
-# window. The */15 cron retries within 15 min, and a late row costs far less
-# than a thin digest. So cap backoff hard here and fail fast to the next run.
-_URGENT_WINDOW = (_dt_time(6, 30), _dt_time(7, 30))
+# batch finishes scoring at 07:05-07:08 on a normal day — but sleeping through
+# a throttle is still the wrong trade inside this window. The */15 cron
+# retries within 15 min, and a late row costs far less than a thin digest. So
+# cap backoff hard here and fail fast to the next run.
+_URGENT_WINDOW = (_dt_time(6, 30), DIGEST_SEND_UK)
 _URGENT_BACKOFF_CAP_S = 5.0
 
 
@@ -966,6 +994,19 @@ def _backoff_cap_s(now: Optional[datetime] = None) -> float:
     t = (now or datetime.now(_UK_TZ)).time()
     lo, hi = _URGENT_WINDOW
     return _URGENT_BACKOFF_CAP_S if lo <= t < hi else _RETRY_AFTER_CAP_S
+
+
+def in_urgent_window(now: Optional[datetime] = None) -> bool:
+    """True while the morning batch is racing the digest send.
+
+    Public because run_rns uses it to defer post-ranking work: the vet, the
+    gate sweep and the prune all run AFTER the digest's content is settled
+    (the digest reads llm_score, never vet_score), but they hold the pipeline
+    lock while they do it, which stops the next burst run ingesting.
+    """
+    t = (now or datetime.now(_UK_TZ)).time()
+    lo, hi = _URGENT_WINDOW
+    return lo <= t < hi
 
 
 def _parse_retry_after(value: Optional[str]) -> Optional[float]:
@@ -1284,6 +1325,11 @@ def _run_ingest(
     """
     processed = inserted = updated = errors = 0
     rate_limited = False
+    # Why the loop ended. "caught_up" is the only outcome that proves we saw
+    # every new row: an abort leaves rows on the unread pages, and because the
+    # next run's page 2 will be all-known, stop_on_known guarantees no future
+    # run ever reaches them. The caller must force a deep sweep instead.
+    stopped = "ceiling"
     for page in range(1, max_pages + 1):
         try:
             html = _fetch_page(page)
@@ -1293,14 +1339,17 @@ def _run_ingest(
             print(f"[rns] RATE LIMITED on page {page} — aborting ingest ({e})")
             rate_limited = True
             errors += 1
+            stopped = "rate_limited"
             break
         except (urllib.error.URLError, TimeoutError) as e:
             print(f"[rns] page {page} fetch failed: {e}")
             errors += 1
+            stopped = "fetch_error"
             break
         raws = _parse_rows(html)
         if not raws:
             print(f"[rns] page {page}: no rows parsed")
+            stopped = "caught_up"
             break
         page_new = 0
         for raw in raws:
@@ -1318,6 +1367,7 @@ def _run_ingest(
                 print(f"[rns] upsert failed id={raw.get('id')}: {e}")
         print(f"[rns] page {page}: parsed={len(raws)} new={page_new}")
         if stop_on_known and page_new == 0 and page > 1:
+            stopped = "caught_up"
             break
         if page < max_pages:
             time.sleep(sleep_s)
@@ -1327,6 +1377,8 @@ def _run_ingest(
         "updated": updated,
         "errors": errors,
         "rate_limited": rate_limited,
+        "stopped": stopped,
+        "complete": stopped == "caught_up",
     }
     print(f"[rns] ingest done — {result}")
     return result

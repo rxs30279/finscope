@@ -2471,7 +2471,11 @@ def digest(
 ):
     """HTTP endpoint for cron-job.org to trigger the RNS email digest.
 
-    Called by cron-job.org Mon–Fri at 07:30 UK time. Authenticate with the
+    Called by cron-job.org Mon–Fri at the time in rns.DIGEST_SEND_UK (that
+    module holds the single source of truth — this comment is not it and
+    will drift if edited alone; update cron-job.org's own schedule to match
+    whenever DIGEST_SEND_UK changes, since it cannot import Python).
+    Authenticate with the
     DIGEST_CRON_TOKEN, supplied either as the `X-Digest-Token` header (preferred
     — keeps the secret out of URLs and access logs) or, for back-compat, as the
     `?token=` query param.
