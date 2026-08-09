@@ -10,6 +10,11 @@ Each stage is wrapped so one failure doesn't stop the next: if investegate
 summary fetching fails transiently, we still attempt the LLM rank on rows
 that already have summaries from a previous run.
 
+Each run reads up to DEFAULT_MAX_PAGES (10 x 50 = 500 items) but stops as soon
+as a page yields nothing new, so a quiet run costs two page fetches. The
+ceiling matters only at 07:00, which is the busiest 15 minutes of every
+trading day without exception.
+
 Smart catch-up: if the newest stored announcement is more than 6h old (e.g.
 after the PC was off for a few days), the ingest dynamically bumps
 max_pages so the run catches up to the present. Capped at 24 pages — that
@@ -33,8 +38,20 @@ from rns import _run_ingest, _backfill_summaries, _query
 from rns_llm import _rank_pending
 
 
-DEFAULT_MAX_PAGES    = 5
-PAGES_PER_DAY_BUDGET = 6    # investegate ≈ 50 items/page; a trading day ≈ 300 items
+# 10 pages = 500 items of reach per run. Was 5 (=250), which the 07:00 drop
+# overflowed: measured over 14 days the busiest 15-minute bucket is 07:00 on
+# every single day, normally 87-149 items but 253 on 2026-08-03 — past the old
+# ceiling, and overflow is lost permanently (see _run_ingest's early exit).
+# Raising the ceiling is nearly free because it is a ceiling, not a target: the
+# loop stops as soon as a page yields no new rows, so a quiet run still reads
+# two pages and stops.
+DEFAULT_MAX_PAGES    = 10
+# 12 pages/day = 600 items. Was 6 (=300), which described the feed before it
+# was measured: over 14 days a trading day actually runs 300-720 items (720 on
+# 2026-08-03). Under-counting here silently loses the middle of a 1-2 day gap,
+# because a catch-up run that doesn't reach far enough back can never recover
+# the rows it skipped. Beyond ~2 days CATCHUP_PAGE_CAP dominates anyway.
+PAGES_PER_DAY_BUDGET = 12
 CATCHUP_BUFFER_PAGES = 3    # extra headroom beyond the computed need
 CATCHUP_PAGE_CAP     = 24   # investegate's hard listing limit — page 25+ returns empty
 CATCHUP_THRESHOLD_H  = 6    # don't bother bumping unless we're 6h+ stale
