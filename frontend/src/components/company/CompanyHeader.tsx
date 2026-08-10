@@ -83,44 +83,19 @@ function describe(name: string, symbol: string, meta: CompanyMeta | null, snap: 
   );
 }
 
-// The last close, server-rendered. This page is titled "<Name> (<TICKER>) Share
-// Price & Fundamentals", so the price has to be in the server HTML — before this
-// it was client-only and search engines indexed a share-price page with no price
-// on it. It is explicitly a CLOSE with its date shown, not a live quote: the
-// payload is day-cached and the page is ISR'd, so labelling it "live" would be a
-// lie. PriceChart supplies the live number on the client.
+// NOTE: this header deliberately shows NO price. It used to server-render
+// `snap.last_close` (a CLOSE, dated) while PriceChart independently polls
+// /api/quotes for the live quote — so on the default Chart tab the page carried
+// two different prices AND two different day-change percentages side by side
+// (e.g. BP.L: header £5.17 / −0.48% for Friday's close vs chart £5.25 / +1.41%
+// live). The live number on the chart is the correct one, so the header's copy
+// was removed rather than reconciled. Do not reintroduce a price here without
+// sourcing it from the same live quote the chart uses.
 //
-// Renders nothing when last_close is absent — the backend withholds it for
-// symbols that fail its unit-glitch cross-check, and a missing price is much
-// cheaper than a wrong one.
-function PriceBlock({ snap, size }: { snap: CompanySnap | null; size: number }) {
-  if (snap?.last_close == null) return null;
-  const pct = snap.price_change_pct;
-  const cur = (snap.price_currency as string) || "GBp";
-  const when = snap.price_date
-    ? new Date(snap.price_date as string).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })
-    : "";
-  return (
-    <>
-      <div style={{ fontSize: size, fontFamily: '"DM Serif Display", serif', color: "#f1f5f9", lineHeight: 1.1 }}>
-        {fmtPrice(snap.last_close as number, cur)}
-      </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", marginTop: 2 }}>
-        {pct != null && (
-          <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 600, color: (pct as number) >= 0 ? "#22c55e" : "#ef4444" }}>
-            {(pct as number) >= 0 ? "+" : "−"}
-            {Math.abs((pct as number) * 100).toFixed(2)}%
-          </span>
-        )}
-        {when && <span style={{ fontSize: 11, color: "#64748b" }}>Close {when}</span>}
-      </div>
-    </>
-  );
-}
+// Trade-off accepted: PriceChart is dynamic({ ssr: false }), so no price now
+// appears in the server HTML for a page titled "… Share Price & Fundamentals".
+// The templated describe() fallback below still carries a last-close sentence
+// for companies with no business description.
 
 export default function CompanyHeader({ symbol, meta, snap }: Props) {
   const name = (meta?.name as string) || ticker(symbol);
@@ -129,9 +104,7 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
   const website = (meta?.website as string) || "";
   const { identity: idFacts, metrics: metricFacts } = factList(symbol, meta, snap);
   const qcur = quoteCurrency(meta);
-  // The aside used to exist only for market cap; it now also carries the price,
-  // so either one alone is enough to render it.
-  const hasAside = snap?.market_cap != null || snap?.last_close != null;
+  const hasAside = snap?.market_cap != null;
 
   // Keep the ★ glued to the last word of the name rather than dropping to its
   // own line (matches the old dashboard header behaviour).
@@ -244,28 +217,14 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
 
         {hasAside && (
           <div className="company-header__aside">
-            {/* Price leads: it's the headline number the page title promises. Market
-                cap keeps its own line below rather than being replaced. */}
-            <PriceBlock snap={snap} size={30} />
-            {snap?.market_cap != null && (
-              <>
-                <div
-                  style={{
-                    fontSize: snap.last_close != null ? 20 : 30,
-                    fontFamily: '"DM Serif Display", serif',
-                    color: "#f1f5f9",
-                    marginTop: snap.last_close != null ? 10 : 0,
-                  }}
-                >
-                  {fmt(snap.market_cap, "currency", qcur)}
-                </div>
-                <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
-                {snap.enterprise_value != null && (
-                  <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>
-                    EV: {fmt(snap.enterprise_value as number, "currency", qcur)}
-                  </div>
-                )}
-              </>
+            <div style={{ fontSize: 30, fontFamily: '"DM Serif Display", serif', color: "#f1f5f9" }}>
+              {fmt(snap!.market_cap, "currency", qcur)}
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>Market Cap</div>
+            {snap?.enterprise_value != null && (
+              <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 2 }}>
+                EV: {fmt(snap.enterprise_value as number, "currency", qcur)}
+              </div>
             )}
             <div style={{ marginTop: 10 }}>
               <ScoreStrip snap={snap} align="right" />
@@ -288,7 +247,10 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
             display: "flex",
             justifyContent: "flex-start",
             alignItems: "flex-start",
-            minHeight: hasAside ? 144 : 64,
+            // Reserves the absolutely-positioned logo + market-cap column's
+            // height so the score strip clears it. 144 when this block also
+            // carried a price; the cap/EV lines alone need ~120.
+            minHeight: hasAside ? 120 : 64,
           }}
         >
           {/* Logo + market cap, pinned left and out of flow so the block below
@@ -310,26 +272,15 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
             )}
             {hasAside && (
               <div style={{ marginTop: 18 }}>
-                <PriceBlock snap={snap} size={22} />
-                {snap?.market_cap != null && (
-                  <div style={{ marginTop: snap.last_close != null ? 8 : 0 }}>
-                    <div
-                      style={{
-                        fontSize: snap.last_close != null ? 16 : 22,
-                        fontFamily: '"DM Serif Display", serif',
-                        color: "#f1f5f9",
-                      }}
-                    >
-                      {fmt(snap.market_cap, "currency", qcur)}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#64748b" }}>
-                      Market Cap
-                      {snap.enterprise_value != null
-                        ? ` · EV ${fmt(snap.enterprise_value as number, "currency", qcur)}`
-                        : ""}
-                    </div>
-                  </div>
-                )}
+                <div style={{ fontSize: 22, fontFamily: '"DM Serif Display", serif', color: "#f1f5f9" }}>
+                  {fmt(snap!.market_cap, "currency", qcur)}
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>
+                  Market Cap
+                  {snap?.enterprise_value != null
+                    ? ` · EV ${fmt(snap.enterprise_value as number, "currency", qcur)}`
+                    : ""}
+                </div>
               </div>
             )}
           </div>
