@@ -565,6 +565,7 @@ def _render_html(rows: list[dict], total_all: int = 0, sub_footer_html: str = ""
     <div style="border-bottom:2px solid #f97316;padding-bottom:12px;margin-bottom:16px;">
       <h1 style="margin:0;font-size:18px;font-family:monospace;color:#f97316;letter-spacing:2px;text-transform:uppercase;">Alpha Move AI · RNS Morning Digest</h1>
       <div style="margin-top:4px;color:#666;font-size:12px;">{date_s} · last 24h · {len(rows)} items · <span style="color:#10b981;">&#9650; {n_pos}</span> · <span style="color:#ef4444;">&#9660; {n_neg}</span> · <span style="color:#60a5fa;">&mdash; {n_neu}</span> · AI-ranked: <b>{n_ranked}/{total_all}</b></div>
+      <div style="margin-top:8px;"><a href="{_SITE_URL}/results-calendar" style="display:inline-block;color:#f97316;text-decoration:none;font-family:monospace;font-size:12px;font-weight:700;letter-spacing:0.5px;border:1px solid #f97316;border-radius:4px;padding:4px 10px;">&#128197; Results Calendar &rarr;</a></div>
     </div>
     {body}
     <div style="margin-top:24px;text-align:center;">
@@ -595,6 +596,7 @@ def _render_text(rows: list[dict], total_all: int = 0,
     lines = [
         "Alpha Move AI - RNS Morning Digest",
         f"{date_s} - last 24h - {len(rows)} items",
+        f"Results Calendar: {_SITE_URL}/results-calendar",
         "",
     ]
 
