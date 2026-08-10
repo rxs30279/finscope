@@ -136,7 +136,11 @@ aside::-webkit-scrollbar {
 .company-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  /* stretch (not flex-start) so the aside column runs the full height of the
+     main column. That lets the score strip sit on `margin-top: auto` and land
+     level with the P/E / P/B pill row that ends the main column, instead of
+     floating wherever the market cap / EV lines happen to finish. */
+  align-items: stretch;
   flex-wrap: wrap;
   gap: 16px;
 }
@@ -155,6 +159,10 @@ aside::-webkit-scrollbar {
 .company-header__aside {
   text-align: right;
   flex-shrink: 0;
+  /* Column flex so the score strip's `margin-top: auto` has free space to eat. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
 /* A-Z directory columns (/companies) */

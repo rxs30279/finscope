@@ -226,7 +226,12 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
                 EV: {fmt(snap.enterprise_value as number, "currency", qcur)}
               </div>
             )}
-            <div style={{ marginTop: 10 }}>
+            {/* marginTop:auto drops the strip to the bottom of the stretched
+                aside so it lines up with the metric pill row ending the main
+                column. paddingTop is the floor for the case where the aside is
+                the taller side (short description, no pills) and auto collapses
+                to zero. */}
+            <div style={{ marginTop: "auto", paddingTop: 10 }}>
               <ScoreStrip snap={snap} align="right" />
             </div>
           </div>
@@ -248,9 +253,11 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
             justifyContent: "flex-start",
             alignItems: "flex-start",
             // Reserves the absolutely-positioned logo + market-cap column's
-            // height so the score strip clears it. 144 when this block also
-            // carried a price; the cap/EV lines alone need ~120.
-            minHeight: hasAside ? 120 : 64,
+            // height so the score strip below clears it. The column is out of
+            // flow, so this number is the ONLY thing holding the strip off it —
+            // too small and they overlap. Measured at 128px (logo 64 + 18 margin
+            // + the 22px cap figure + the 11px caption); 130 leaves slack.
+            minHeight: hasAside ? 130 : 64,
           }}
         >
           {/* Logo + market cap, pinned left and out of flow so the block below
@@ -297,7 +304,14 @@ export default function CompanyHeader({ symbol, meta, snap }: Props) {
             </h1>
           </div>
         </div>
-        {snap && <ScoreStrip snap={snap} />}
+        {/* The block above ends in the absolutely-positioned market cap / EV
+            column, so the parent's 10px flex gap alone left the strip crowding
+            it. The extra margin buys a clear break between the two. */}
+        {snap && (
+          <div style={{ marginTop: 8 }}>
+            <ScoreStrip snap={snap} />
+          </div>
+        )}
         <div>
           {description ? (
             <ExpandableText text={description} />
