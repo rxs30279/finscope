@@ -81,6 +81,24 @@ HIGH_IMPACT_MIN_MARKET_CAP = 50_000_000  # £50m — keep to genuinely tradeable
 HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA = 3.0  # skip net debt > 3x profit (same currency both sides, no FX)
 HIGH_IMPACT_MIN_NET_MARGIN = 0.02         # fallback margin floor when no usable peer median exists
 HIGH_IMPACT_MIN_ROCE = 0.15               # capital-returns escape hatch past the margin floor (profitable names only)
+# Second capital-returns hatch, added 2026-08-12 alongside ROCE. ROCE divides by
+# total assets - current liabilities, so a cash pile and a non-operating
+# investment portfolio both inflate the denominator without contributing EBIT,
+# and a genuinely efficient operator can read as capital-inefficient. ROIC
+# subtracts cash from that denominator (updater.calc_roic), which is the
+# distinction that matters here. Balfour Beatty is the worked example: ROCE 7.2%
+# against ROIC 16.0% and ROE 23.0%, on £842m NET CASH plus the Infrastructure
+# Investments portfolio — blocked on 2026-08-12 with an llm_score of 75.
+#
+# Kept at the same 0.15 as ROCE deliberately, and it is NOT the loose setting it
+# looks. ROIC's numerator is after-tax (x ~0.79), so for a cash-poor name the
+# ROIC test is STRICTER than the ROCE one and never fires alone; it only opens
+# the gate where the cash/investment denominator was the thing distorting ROCE.
+# Measured against the 700-name universe the day it was added, it admits three
+# extra companies in total (APTD.L, TENG.L, BBY.L), and across six weeks of
+# stored RNS candidates it changes exactly one outcome. Raising it to 0.20
+# admits nobody at all, so a higher floor is a no-op, not a safety margin.
+HIGH_IMPACT_MIN_ROIC = 0.15               # cash-adjusted twin of the ROCE hatch (profitable names only)
 PEER_MARGIN_MIN_GROUP = 5                 # industry margin medians need at least this many names to count
 HIGH_IMPACT_DEDUPE_DAYS = 30             # don't re-flag the same symbol within a month
 # Display floor for the page (2026-08-06). Stories published before this date
@@ -1833,10 +1851,18 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
           -- low-margin/high-ROCE model (reseller, distributor) is structure,
           -- not fragility. Loss-makers and over-levered names never pass via
           -- the hatch (margin > 0 here, leverage floor above).
+          --
+          -- The hatch reads ROCE *or* ROIC (2026-08-12). ROCE alone punishes a
+          -- cash-rich or investment-portfolio balance sheet for holding assets
+          -- that earn no EBIT; ROIC nets the cash off. See HIGH_IMPACT_MIN_ROIC
+          -- for why the shared 0.15 threshold is tight rather than loose.
+          -- NULL handling is unchanged: one NULL return leaves the other to
+          -- decide (NULL OR TRUE = TRUE), and both NULL yields NULL, so the
+          -- row still needs the margin branch to survive.
           AND (
               t.net_income_margin IS NULL
               OR t.net_income_margin >= GREATEST(0, COALESCE(pm.margin_median, %s))
-              OR (t.net_income_margin > 0 AND t.roce >= %s)
+              OR (t.net_income_margin > 0 AND (t.roce >= %s OR t.roic >= %s))
           )
           -- Dedupe on PUBLISHED history only. A shadow row (vetted, scored
           -- below the publish floor) must not suppress the same symbol's next
@@ -1883,6 +1909,7 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
             HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA,
             HIGH_IMPACT_MIN_NET_MARGIN,
             HIGH_IMPACT_MIN_ROCE,
+            HIGH_IMPACT_MIN_ROIC,
             HIGH_IMPACT_DEDUPE_DAYS,
         ),
     )

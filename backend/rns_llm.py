@@ -957,8 +957,10 @@ def _build_messages(
     # loss-making) is fragile and a positive catalyst deserves a tempered score.
     # Escape hatch: profitable + strong ROCE passes without the flag — a
     # low-margin/high-ROCE model (reseller, distributor) is structure, not
-    # fragility. Floors (0.02 fallback, 0.15 ROCE) kept in sync with the
-    # showcase selection gates in showcase.py.
+    # fragility. Floors (0.02 fallback, 0.15 ROCE, 0.15 ROIC) kept in sync with
+    # the showcase selection gates in showcase.py — this flag only tempers a
+    # score, but if the two disagree the ranker argues against a name the gate
+    # is about to admit, which is how a good story picks up a phantom risk line.
     #
     # There used to be a second, PRECEDING branch here firing
     # "!! LOW QUALITY (weak fundamentals)" on quality_score <= 3. It was removed
@@ -980,11 +982,23 @@ def _build_messages(
     nim = cand.get("net_income_margin")
     nim_median = cand.get("peer_margin_median")
     roce = cand.get("roce")
+    roic = cand.get("roic")
     margin_floor = max(0.0, nim_median) if nim_median is not None else 0.02
+    # ROCE *or* ROIC clears the hatch (2026-08-12). ROCE's denominator is total
+    # assets less current liabilities, so net cash and a non-operating
+    # investment portfolio both depress it without any operating cause; ROIC
+    # nets the cash out. Either one at 0.15 is enough — see HIGH_IMPACT_MIN_ROIC
+    # in showcase.py for the measured effect (three names universe-wide).
     margin_ok = (
         nim is None
         or nim >= margin_floor
-        or (nim > 0 and roce is not None and roce >= 0.15)
+        or (
+            nim > 0
+            and (
+                (roce is not None and roce >= 0.15)
+                or (roic is not None and roic >= 0.15)
+            )
+        )
     )
     quality_flag = ""
     if not margin_ok:

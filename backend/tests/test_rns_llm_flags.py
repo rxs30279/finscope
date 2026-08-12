@@ -2,8 +2,14 @@
 
 The WEAK MARGINS flag is judged against the industry-peer median (computed in
 the candidate query) with a capital-returns escape hatch — a profitable name
-with ROCE >= 0.15 is never flagged for thin margins, but loss-makers always
-are. Floors mirror the showcase selection gates in showcase.py.
+with ROCE **or ROIC** >= 0.15 is never flagged for thin margins, but loss-makers
+always are. Floors mirror the showcase selection gates in showcase.py.
+
+NOTE the base fixture sets roic=0.20, which is above the hatch. Since ROIC
+joined the hatch (2026-08-12) any test meaning "weak capital returns" has to say
+so on BOTH metrics — passing roce alone leaves the fixture's ROIC to open the
+hatch and silently negates the case under test. Two tests here failed exactly
+that way when the hatch was widened.
 
 It is now the ONLY weakness flag. The "!! LOW QUALITY (weak fundamentals)"
 banner that used to fire on quality_score <= 3 was removed 2026-07-30 — half
@@ -62,13 +68,41 @@ def test_thin_margin_high_roce_not_flagged():
     assert "WEAK MARGINS" not in user
 
 
-def test_thin_margin_weak_roce_flagged():
-    user = _user_prompt(net_income_margin=0.0167, peer_margin_median=0.04, roce=0.07)
+def test_thin_margin_weak_capital_returns_flagged():
+    # Weak on BOTH hatch metrics — thin margin with no capital-efficiency
+    # defence is the case the flag exists for.
+    user = _user_prompt(
+        net_income_margin=0.0167, peer_margin_median=0.04, roce=0.07, roic=0.06,
+    )
     assert "WEAK MARGINS (below industry median)" in user
+
+
+def test_thin_margin_high_roic_low_roce_not_flagged():
+    """The Balfour Beatty case (2026-08-12), and why ROIC joined the hatch.
+
+    ROCE divides by total assets less current liabilities, so £842m of net cash
+    and a non-operating investment portfolio drag it to 7.2% while ROIC — which
+    nets the cash off — reads 16.0%. Judged on ROCE alone this is a weak
+    business; judged on the capital actually invested in operations it is not,
+    and the row was blocked from the vet on an llm_score of 75.
+    """
+    user = _user_prompt(
+        net_income_margin=0.0277, peer_margin_median=0.0349, roce=0.072, roic=0.160,
+    )
+    assert "WEAK MARGINS" not in user
 
 
 def test_loss_maker_flagged_despite_high_roce():
     user = _user_prompt(net_income_margin=-0.05, peer_margin_median=0.04, roce=0.90)
+    assert "WEAK MARGINS (loss-making)" in user
+
+
+def test_loss_maker_flagged_despite_high_roic():
+    """SYNT.L-shaped: ROIC 0.81 on a -9% net margin. The profitability
+    precondition is what stops the widened hatch admitting loss-makers, and it
+    has to hold on the ROIC arm exactly as it does on the ROCE one."""
+    user = _user_prompt(net_income_margin=-0.0903, peer_margin_median=0.0295,
+                        roce=0.02, roic=0.81)
     assert "WEAK MARGINS (loss-making)" in user
 
 
@@ -79,10 +113,16 @@ def test_margin_above_peer_median_not_flagged():
 
 def test_missing_peer_median_uses_absolute_fallback():
     # No usable peer group (industry too small): the 0.02 absolute floor
-    # applies, and the hatch still rescues strong capital returns.
-    user = _user_prompt(net_income_margin=0.015, peer_margin_median=None, roce=None)
+    # applies, and the hatch still rescues strong capital returns. Both hatch
+    # metrics have to be weak for the first case to be about the fallback floor.
+    user = _user_prompt(net_income_margin=0.015, peer_margin_median=None,
+                        roce=None, roic=None)
     assert "WEAK MARGINS (below industry median)" in user
     user = _user_prompt(net_income_margin=0.015, peer_margin_median=None, roce=0.20)
+    assert "WEAK MARGINS" not in user
+    # ...and via the ROIC arm alone, with ROCE missing entirely.
+    user = _user_prompt(net_income_margin=0.015, peer_margin_median=None,
+                        roce=None, roic=0.20)
     assert "WEAK MARGINS" not in user
 
 

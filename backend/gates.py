@@ -876,13 +876,13 @@ _MATRIX_SQL = """
     SELECT r.id AS rns_id, r.symbol, r.company_name, r.headline, r.url, r.category,
            r.published_at, r.llm_score, r.llm_sentiment, r.llm_action,
            m.sector, m.industry, m.ftse_index,
-           t.market_cap, t.net_debt, t.ebitda, t.net_income_margin, t.roce,
+           t.market_cap, t.net_debt, t.ebitda, t.net_income_margin, t.roce, t.roic,
            pm.margin_median,
            h.vet_verdict, h.vet_rationale, h.vet_score, h.status AS showcase_status
     FROM rns_announcements r
     LEFT JOIN company_metadata m ON m.symbol = r.symbol
     LEFT JOIN LATERAL (
-        SELECT market_cap, net_debt, ebitda, net_income_margin, roce FROM ttm_financials
+        SELECT market_cap, net_debt, ebitda, net_income_margin, roce, roic FROM ttm_financials
         WHERE company_symbol = r.symbol
         ORDER BY period_end_date DESC NULLS LAST LIMIT 1
     ) t ON TRUE
@@ -918,7 +918,7 @@ _FLOOR_LABEL = {
     "category": "category not in the High Impact category list",
     "mkt_cap": "market cap below the £50m floor (or missing)",
     "leverage": "net debt > 3x EBITDA (or unprofitable with debt, or debt > market cap)",
-    "margin": "net income margin below the industry-peer floor (no ROCE escape)",
+    "margin": "net income margin below the industry-peer floor (no ROCE/ROIC escape)",
     "dedup": "same symbol already flagged in the last 30 days",
 }
 # NB "score" now means "below the vet ENTRY floor (60)" — clearing every floor
@@ -930,6 +930,7 @@ def _public_flag_fails(row: dict, recently_flagged: set) -> list[str]:
     from showcase import (
         HIGH_IMPACT_VET_ENTRY_SCORE, HIGH_IMPACT_CATEGORIES, HIGH_IMPACT_MIN_MARKET_CAP,
         HIGH_IMPACT_MAX_NET_DEBT_TO_EBITDA, HIGH_IMPACT_MIN_NET_MARGIN, HIGH_IMPACT_MIN_ROCE,
+        HIGH_IMPACT_MIN_ROIC,
     )
 
     def _f(key):
@@ -961,11 +962,16 @@ def _public_flag_fails(row: dict, recently_flagged: set) -> list[str]:
     ):
         fails.append("leverage")
 
-    margin, roce = _f("net_income_margin"), _f("roce")
+    margin, roce, roic = _f("net_income_margin"), _f("roce"), _f("roic")
     if margin is not None:
         peer_median = _f("margin_median")
         floor = max(0.0, peer_median if peer_median is not None else HIGH_IMPACT_MIN_NET_MARGIN)
-        if margin < floor and not (margin > 0 and (roce or 0.0) >= HIGH_IMPACT_MIN_ROCE):
+        # Mirrors the SQL hatch in showcase.py: ROCE *or* ROIC clears it, because
+        # ROCE reads a cash pile or an investment portfolio as idle capital.
+        hatch = margin > 0 and (
+            (roce or 0.0) >= HIGH_IMPACT_MIN_ROCE or (roic or 0.0) >= HIGH_IMPACT_MIN_ROIC
+        )
+        if margin < floor and not hatch:
             fails.append("margin")
 
     if row["symbol"] in recently_flagged:
