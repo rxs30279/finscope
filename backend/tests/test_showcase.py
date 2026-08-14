@@ -1446,28 +1446,37 @@ def test_list_showcase_empty(client):
     assert r.json() == []
 
 
-def test_list_showcase_public_never_returns_shadow_rows(client):
-    """The public list must stay keyed on status='approved'. A shadow row is a
-    story the vet REJECTED — leaking it onto the public page would undo the one
-    thing the vet exists to do."""
+def test_list_showcase_public_includes_shadow_rows(client):
+    """Shadow rows (the vet's own withheld near-misses) are public now, badged
+    "why withheld" by the frontend rather than suppressed — a reader sees the
+    caveat instead of nothing. The status list must stay an explicit IN so a
+    future status value defaults to hidden rather than silently public."""
     with patch("main.query", return_value=[]) as q:
         client.get("/api/showcase")
     sql = q.call_args[0][0]
-    assert "status = 'approved'" in sql
-    assert "shadow" not in sql
+    assert "status IN ('approved', 'shadow')" in sql
+    assert "pending" not in sql
+    assert "rejected" not in sql
 
 
 def test_list_showcase_hides_old_stories_without_deleting_them(client):
-    """The page restarts at SHOWCASE_MIN_STORY_DATE. This is a display floor in
-    the SELECT and nothing else: the rows stay in high_impact_rns, keep their
-    follow-ups, and still answer /gates and every calibration query. If this
-    ever becomes a DELETE the calibration history goes with it."""
+    """The page rolls a SHOWCASE_ROLLING_WINDOW_DAYS window, floored at
+    SHOWCASE_MIN_STORY_DATE. This is a display floor in the SELECT and nothing
+    else: the rows stay in high_impact_rns, keep their follow-ups, and still
+    answer /gates and every calibration query. If this ever becomes a DELETE
+    the calibration history goes with it."""
     with patch("main.query", return_value=[]) as q:
         r = client.get("/api/showcase")
     assert r.status_code == 200
     sql = " ".join(q.call_args[0][0].split())
-    assert "(published_at AT TIME ZONE 'Europe/London')::date >= %s::date" in sql
-    assert q.call_args[0][1] == (showcase.SHOWCASE_MIN_STORY_DATE,)
+    assert (
+        "(published_at AT TIME ZONE 'Europe/London')::date >= GREATEST("
+        "%s::date, (NOW() AT TIME ZONE 'Europe/London')::date - %s::int)" in sql
+    )
+    assert q.call_args[0][1] == (
+        showcase.SHOWCASE_MIN_STORY_DATE,
+        showcase.SHOWCASE_ROLLING_WINDOW_DAYS,
+    )
     assert "DELETE" not in sql.upper()
 
 

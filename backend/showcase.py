@@ -17,8 +17,16 @@ Pipeline (all driven from run_rns.py after the LLM ranking stage):
      AFTER selection (Luceco-style CEO exit) is captured even though Tier C
      source rows still prune at 14 days (A/B rows themselves are now kept).
 
-Entries stay on the public page indefinitely — there is no auto-archive; the
-admin archives a story manually when it no longer belongs.
+The public page (/api/showcase) also carries 'shadow' rows — the vet-withheld
+stories a reader used to only find on the admin-only /archive page — labelled
+with a "withheld"/"why withheld" badge (frontend HighImpactRnsTab.js) rather
+than hidden, so a near-miss is visible with its caveat attached instead of
+disappearing. Both statuses share one rolling display window,
+SHOWCASE_ROLLING_WINDOW_DAYS: a story stops being served ~1 month after its own
+published_at, automatically, with no admin action and no row deletion — see
+SHOWCASE_MIN_STORY_DATE below for why the window has a hard floor under it.
+The admin can still archive a story manually (status='rejected') to pull it
+before the window would.
 
 Endpoints serve the approved (public) and pending (admin) lists enriched with the
 same per-stock metrics as the watchlist plus MQVR scores, days-since / %-since the
@@ -68,7 +76,10 @@ router = APIRouter(prefix="/api/showcase", tags=["showcase"])
 # malfunction.
 HIGH_IMPACT_VET_ENTRY_SCORE = 60
 # Publish floor, applied to the VET's score. Rows that clear the entry score but
-# not this land as status='shadow' — vetted, stored, invisible.
+# not this land as status='shadow'. Shadow no longer means invisible (see
+# SHOWCASE_ROLLING_WINDOW_DAYS below) — it still renders on the public page
+# within the rolling window, just with a "why withheld" badge naming the vet's
+# catch, so a reader sees the near-miss with its caveat rather than nothing.
 HIGH_IMPACT_MIN_VET_SCORE = 75
 HIGH_IMPACT_CATEGORIES = ("trading_update", "final_results", "interim_results", "quarterly")
 HIGH_IMPACT_MIN_MARKET_CAP = 50_000_000  # £50m — keep to genuinely tradeable names
@@ -101,14 +112,21 @@ HIGH_IMPACT_MIN_ROCE = 0.15               # capital-returns escape hatch past th
 HIGH_IMPACT_MIN_ROIC = 0.15               # cash-adjusted twin of the ROCE hatch (profitable names only)
 PEER_MARGIN_MIN_GROUP = 5                 # industry margin medians need at least this many names to count
 HIGH_IMPACT_DEDUPE_DAYS = 30             # don't re-flag the same symbol within a month
-# Display floor for the page (2026-08-06). Stories published before this date
-# are NOT deleted — they stay in high_impact_rns with their follow-ups intact,
-# still feed /gates and every calibration query — they are simply no longer
-# served to /high-impact-rns. The list restarts from the vet-as-scorer regime
-# (migration 029, 2026-08-03) rather than mixing in picks published under the
-# old single-score rule, which are not comparable and mostly render "—" where
-# the vet score should be. Move the date to change what the page shows; there
-# is no other switch.
+# Rolling display window (2026-08-14). A story stops being served exactly this
+# many days after its own published_at — no admin action, no row deletion, it
+# just ages out of the SELECT below. Same mechanism as SHOWCASE_MIN_STORY_DATE,
+# now applied as a moving floor instead of a fixed one.
+SHOWCASE_ROLLING_WINDOW_DAYS = 30
+# Absolute floor under the rolling window (2026-08-06). Stories published
+# before this date are NOT deleted — they stay in high_impact_rns with their
+# follow-ups intact, still feed /gates and every calibration query — they are
+# simply never served to /high-impact-rns, no matter how the rolling window
+# above moves. Exists because the list restarts from the vet-as-scorer regime
+# (migration 029, 2026-08-03): picks published under the old single-score rule
+# are not comparable and mostly render "—" where the vet score should be, and
+# once the rolling window's own start date passes this floor it stops doing
+# anything — it is a one-time guard against the old regime, not a knob to
+# keep moving forward.
 SHOWCASE_MIN_STORY_DATE = "2026-08-01"
 
 
@@ -2619,14 +2637,25 @@ def _enrich(entries: list[dict], detail: bool = False) -> list[dict]:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @router.get("")
 def list_showcase(response: Response):
-    """Public — the approved showcase, newest story first."""
+    """Public — approved + vet-withheld (shadow) stories from the last
+    SHOWCASE_ROLLING_WINDOW_DAYS, newest story first.
+
+    Shadow rows carry a "why withheld" badge on the frontend (isWithheld in
+    HighImpactRnsTab.js) rather than being hidden — a near-miss is shown with
+    its caveat instead of vanishing. status NOT IN ('pending', 'rejected') is
+    the effective rule; spelled as an explicit IN so a future status value
+    defaults to hidden rather than silently public.
+    """
     response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=60"
     entries = _q(
-        "SELECT * FROM high_impact_rns WHERE status = 'approved' "
-        # Display floor only — the rows stay in the table (see the constant).
-        "AND (published_at AT TIME ZONE 'Europe/London')::date >= %s::date "
+        "SELECT * FROM high_impact_rns WHERE status IN ('approved', 'shadow') "
+        # Rolling floor — the rows stay in the table either way (see the
+        # constants). GREATEST keeps the window from ever dipping before the
+        # absolute SHOWCASE_MIN_STORY_DATE floor.
+        "AND (published_at AT TIME ZONE 'Europe/London')::date >= GREATEST("
+        "%s::date, (NOW() AT TIME ZONE 'Europe/London')::date - %s::int) "
         "ORDER BY published_at DESC",
-        (SHOWCASE_MIN_STORY_DATE,),
+        (SHOWCASE_MIN_STORY_DATE, SHOWCASE_ROLLING_WINDOW_DAYS),
     )
     return _enrich(entries)
 
@@ -2642,24 +2671,26 @@ def list_pending():
 
 @router.get("/shadow", dependencies=[Depends(require_admin_token)])
 def list_shadow():
-    """Admin — rows the vet scored but withheld (vet_score < HIGH_IMPACT_MIN_VET_SCORE).
+    """Admin — rows the vet scored but withheld (vet_score < HIGH_IMPACT_MIN_VET_SCORE),
+    with the ReportedNumbers detail the admin view needs to judge a near-miss.
 
-    Admin-only on purpose. These are the vet's own rejections, so putting them on
-    the public page would undo the thing the vet exists to do; the point here is
-    that its decisions are otherwise invisible — a shadow row appears in no UI at
-    all, only in the cron log. Ordered by vet_score DESC so the near-misses (the
-    band that actually decides whether 75 is the right floor) sort to the top.
+    Shadow rows are no longer admin-exclusive — /api/showcase now also serves
+    them, badged "why withheld", within SHOWCASE_ROLLING_WINDOW_DAYS. This
+    endpoint stays admin-only because it still does two things the public list
+    doesn't: no rolling-window cutoff (the full withheld history, not just the
+    last month) and detail=True's extra per-row queries. Ordered by vet_score
+    DESC so the near-misses (the band that actually decides whether 75 is the
+    right floor) sort to the top.
 
     A NULL vet_score means the vet call FAILED, not that the story scored zero
     (see flag_high_impact_candidates). Those sort last and the UI labels them
     separately — do not present them as low-conviction.
     """
     entries = _q(
+        # Absolute floor only, deliberately not the rolling one — this is the
+        # full withheld archive, not a mirror of what the public list shows
+        # this week.
         "SELECT * FROM high_impact_rns WHERE status = 'shadow' "
-        # Same display floor as the public list — these rows are interleaved
-        # into the same table, so a cutoff that applied to only one of the two
-        # would leave withheld stories sitting above published ones that the
-        # page no longer shows.
         "AND (published_at AT TIME ZONE 'Europe/London')::date >= %s::date "
         "ORDER BY vet_score DESC NULLS LAST, flagged_at DESC",
         (SHOWCASE_MIN_STORY_DATE,),

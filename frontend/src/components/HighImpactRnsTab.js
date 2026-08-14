@@ -1364,7 +1364,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
         }
         subtitle={
           archiveOnly ? (
-            "Stories the vet scored but withheld from the public page — cleared the ranker at 60+, scored under 75 on the vet's second read. Not rejected outright, just not published. Newest vet score first."
+            "Stories the vet scored below the publish floor — cleared the ranker at 60+, scored under 75 on the vet's second read. Still shown on the public page within the rolling window, badged \"withheld\"; this is the full history, with no window cutoff. Newest vet score first."
           ) : (
             <>
               Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication.
@@ -1700,21 +1700,24 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                                 </a>
                                 {isAdmin && (
                                   <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
-                                    {/* Override the vet. Publishes to the PUBLIC
-                                        page, so it is confirmed — every other
-                                        button here is reversible, this one is
-                                        outward-facing. */}
+                                    {/* Override the vet. The story is already
+                                        public (shadow rows show on
+                                        /high-impact-rns within the rolling
+                                        window, badged "withheld") — this just
+                                        clears that badge, so it is confirmed
+                                        like the other outward-facing action
+                                        here. */}
                                     {isWithheld(r) && (
                                       <button
                                         onClick={() => {
-                                          if (window.confirm(`Publish ${r.symbol.replace(".L", "")} to the public page, overriding the vet's score of ${st.vet_score ?? "none"}?`)) {
+                                          if (window.confirm(`Clear the "withheld" badge on ${r.symbol.replace(".L", "")}, overriding the vet's score of ${st.vet_score ?? "none"}?`)) {
                                             setStatus(r.showcase_id, "approved");
                                           }
                                         }}
-                                        title="Override the vet and publish this story to the public page"
+                                        title="Override the vet and clear the withheld badge on the public page"
                                         style={btn("#10b981")}
                                       >
-                                        Publish anyway
+                                        Clear withheld
                                       </button>
                                     )}
                                     <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
