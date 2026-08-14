@@ -23,6 +23,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
@@ -838,6 +839,54 @@ do not pick a score and then justify it:
                                       figure)
                        quote          the verbatim sentence(s) the figure
                                       appears in, copied exactly
+  net_debt_reported object — the company's OWN net debt (or net cash) figure as
+                   printed in this announcement, if it prints one. Like
+                   fwd_profit this is a copying task that does NOT feed the
+                   score; do it last and let it change nothing.
+                     COPY ONLY, and this one matters more than it looks. Do not
+                   compute net debt yourself from borrowings and cash, do not
+                   take it from a balance-sheet table you have to subtract two
+                   rows of, and do not recall it. Only a figure the
+                   announcement itself calls net debt, net cash, net financial
+                   debt or the like. If it prints none, return
+                   {"found": false} with every other field null.
+                     NET CASH IS NOT NEGATIVE NET DEBT HERE. Copy the wording
+                   the company used — "net cash of £41.2m" stays "net cash of
+                   £41.2m". Never convert it to a minus sign; the sign
+                   convention is the single easiest thing to invert, and read
+                   backwards it reverses a leverage judgement.
+                     The prior comparator on this line is normally the PREVIOUS
+                   BALANCE SHEET DATE, not the same date a year earlier —
+                   announcements print it as "(31 December 2025: $2,749.5
+                   million)". Copy whichever date the company gives and put it
+                   in prior_as_at exactly as printed. Leave prior_value null if
+                   it gives none rather than reaching for a figure elsewhere.
+                     A LEVERAGE RATIO IS NOT A NET DEBT FIGURE. Some
+                   announcements print only "net debt to EBITDA of 4.3 times"
+                   and never an absolute amount. That is found: false with the
+                   ratio in `leverage` — never "4.3x" in `value`, which must
+                   always be an amount of money with its currency.
+                     Fields:
+                       found           boolean
+                       value           the AMOUNT as printed, with currency,
+                                       e.g. "$3,966.1 million", "net cash of
+                                       £41.2m". Never a ratio or a multiple.
+                       as_at           the balance-sheet date as printed, e.g.
+                                       "30 June 2026", else null
+                       prior_value     the comparator as printed, e.g.
+                                       "$2,749.5 million", else null
+                       prior_as_at     that comparator's date as printed, e.g.
+                                       "31 December 2025", else null
+                       leverage        the company's own net debt to EBITDA
+                                       ratio as printed, e.g. "0.68x", else
+                                       null
+                       prior_leverage  its comparator as printed, e.g. "0.53x",
+                                       else null
+                       quote           the verbatim text the figure appears in,
+                                       copied exactly — the narrative sentence
+                                       or the table row, whichever you took it
+                                       from. The amount in `value` must be one
+                                       of the numbers in it.
 
 Return JSON only — no preamble, no code fence."""
 
@@ -1483,6 +1532,138 @@ def _clean_fwd_profit(raw) -> Optional[dict]:
     }
 
 
+# Mechanical checks on net_debt_reported.value. Same job as
+# showcase_fwd._quote_contains_value and deliberately the same shape, kept as a
+# local copy rather than an import because showcase_fwd pulls in the whole
+# showcase module and this runs inside the ranker's hot path.
+_ND_NUM_RE = re.compile(
+    r"(\d[\d,]*(?:\.\d+)?)\s*(bn|billion|m|million|k|thousand)?", re.I
+)
+_ND_SCALE = {
+    "bn": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6,
+    "k": 1e3, "thousand": 1e3,
+}
+# A ratio is not a net debt figure. DP World's HY26 prints leverage but no
+# absolute net debt, and the model answered with "4.3 times" and "3.7x" on
+# different runs of the same row.
+_ND_RATIO_RE = re.compile(r"\btimes\b|\d\s*x\b", re.I)
+_ND_CURRENCY_RE = re.compile(r"[£$€]|\b[A-Z]{3}\b")
+_ND_MAGNITUDE_RE = re.compile(r"\b(bn|billion|m|million|k|thousand)\b", re.I)
+_ND_MATCH_TOL = 0.005
+
+
+def _nd_numbers(text: str) -> list:
+    """Every number in `text`, in units, applying any magnitude word attached."""
+    out = []
+    for raw, suffix in _ND_NUM_RE.findall(text or ""):
+        try:
+            v = float(raw.replace(",", ""))
+        except ValueError:
+            continue
+        out.append(v * _ND_SCALE.get((suffix or "").lower(), 1.0))
+    return out
+
+
+def _nd_mantissa(x: float):
+    """Reduce a positive number to [1, 1000) so a figure matches its own printed
+    form at any scale.
+
+    Load-bearing: announcements print the same number three ways within one
+    document. "$68,709 thousand" in the narrative is "68,709" in a table headed
+    in thousands, and "£5,054,000" is "5,054" in a £000s column. A literal
+    string compare rejected both — 6 of the first 24 measured runs — while
+    letting nothing extra through, because a fabricated figure (borrowings
+    minus cash) shares no mantissa with anything the announcement prints.
+    """
+    if x <= 0:
+        return None
+    while x >= 1000:
+        x /= 1000
+    while x < 1:
+        x *= 1000
+    return x
+
+
+def _nd_quote_supports_value(value: str, quote: str) -> bool:
+    vals = _nd_numbers(value)
+    if not vals:
+        return False
+    target = _nd_mantissa(vals[0])
+    if target is None:
+        return False
+    for q in _nd_numbers(quote):
+        m = _nd_mantissa(q)
+        if m is not None and abs(m - target) <= _ND_MATCH_TOL * target:
+            return True
+    return False
+
+
+def _clean_net_debt_reported(raw) -> Optional[dict]:
+    """Normalise the model's net_debt_reported object before it is stored.
+
+    Same None-vs-{"found": false} contract as _clean_fwd_profit: NULL means the
+    row was ranked before this field existed, a stored false means the ranker
+    read the announcement and it printed no net-debt figure.
+
+    Values stay VERBATIM strings, as in _clean_earnings_quality, because the
+    forms actually printed span "$3,966.1 million", "net cash of £41.2m" and
+    "net debt of c.£1.2bn". Parsing is showcase's job so a parse failure is
+    visible against the stored quote.
+
+    THE QUOTE GUARD IS THE POINT OF THIS FUNCTION. The whole reason the field
+    exists is that our own computed net debt is untrustworthy for cash-rich
+    filers, so a fabricated "reported" figure would be worse than no figure at
+    all — it would look authoritative next to the number it is contradicting.
+    The measured failure mode on fwd_profit was the model deriving a number and
+    presenting it as stated (3 of 24 runs), and the prompt alone did not stop
+    it; showcase_fwd._quote_contains_value did. This is the same guard in its
+    cheapest form: `value` is copied AS PRINTED, so it must survive as a
+    substring of the quote it was allegedly printed in. A model that computed
+    borrowings minus cash fails it, because its answer appears nowhere.
+    """
+    if not isinstance(raw, dict):
+        return None
+    if not raw.get("found"):
+        return {"found": False}
+
+    def _s(key, limit):
+        return str(raw.get(key) or "").strip()[:limit] or None
+
+    value = _s("value", 120)
+    quote = _s("quote", 600)
+    if not value:
+        return {"found": False}
+
+    # A leverage multiple is not a net debt figure. Where an announcement prints
+    # only the ratio, the honest answer is found: false with the ratio in
+    # `leverage` — the page has no use for "4.3 times" in a money field.
+    if _ND_RATIO_RE.search(value) or not (
+        _ND_CURRENCY_RE.search(value) or _ND_MAGNITUDE_RE.search(value)
+    ):
+        print(f"[rns-llm] net_debt_reported {value!r} is not a money figure, dropping")
+        return {"found": False}
+
+    # No quote is a failed guard, not a pass: the schema asks for one, and the
+    # figure cannot be checked against anything without it.
+    if not quote or not _nd_quote_supports_value(value, quote):
+        print(
+            f"[rns-llm] net_debt_reported {value!r} does not appear in its own "
+            f"quote, dropping: {(quote or '')[:160]!r}"
+        )
+        return {"found": False}
+
+    return {
+        "found": True,
+        "value": value,
+        "as_at": _s("as_at", 60),
+        "prior_value": _s("prior_value", 120),
+        "prior_as_at": _s("prior_as_at", 60),
+        "leverage": _s("leverage", 30),
+        "prior_leverage": _s("prior_leverage", 30),
+        "quote": quote,
+    }
+
+
 def _save_ranking(ann_id: int, result: dict, model: str) -> None:
     # Sentiment is constrained to the three known values — anything else the
     # model invents is stored as NULL so _sentiment falls back to its scan.
@@ -1492,6 +1673,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
     guidance_checks = _clean_guidance_checks(result.get("guidance_checks"))
     earnings_quality = _clean_earnings_quality(result.get("earnings_quality"))
     fwd_profit = _clean_fwd_profit(result.get("fwd_profit"))
+    net_debt_reported = _clean_net_debt_reported(result.get("net_debt_reported"))
     # Optional — most announcements state no explicit forward guidance figure.
     guidance_metric = (result.get("guidance_metric") or "").strip()[:200] or None
     guidance_value = (result.get("guidance_value") or "").strip()[:200] or None
@@ -1521,7 +1703,8 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 guidance_period  = %s,
                 guidance_checks  = %s,
                 earnings_quality = %s,
-                fwd_profit       = %s
+                fwd_profit       = %s,
+                net_debt_reported = %s
             WHERE id = %s
         """,
             (
@@ -1538,6 +1721,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 Json(guidance_checks) if guidance_checks is not None else None,
                 Json(earnings_quality) if earnings_quality is not None else None,
                 Json(fwd_profit) if fwd_profit is not None else None,
+                Json(net_debt_reported) if net_debt_reported is not None else None,
                 ann_id,
             ),
         )

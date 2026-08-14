@@ -584,6 +584,21 @@ function fmtReportingMoney(v, ccy) {
   return `${prefix}${n.toFixed(n >= 100 ? 0 : 1)}${unit}`;
 }
 
+// Millions with one decimal, matching how the announcements themselves print
+// and how showcase._fmt_money_m renders the same figure inside the vet prompt —
+// so "$4,479.0m" on the page is character-for-character the string the vet
+// rationale above it quotes. fmtReportingMoney's bn/m/k rounding would say
+// "$4.5bn" and break that tie for the reader.
+function fmtReportingM(v, ccy) {
+  if (v == null) return "—";
+  const sym = CCY_SYMBOL[ccy] || "";
+  const prefix = sym || (ccy ? `${ccy} ` : "");
+  const n = (v / 1e6).toLocaleString("en-GB", {
+    minimumFractionDigits: 1, maximumFractionDigits: 1,
+  });
+  return `${prefix}${n}m`;
+}
+
 // Net cash reads as net cash, never as negative net debt — the same double
 // negative showcase._fmt_net_debt_m exists to avoid, for the same reason: read
 // backwards it inverts a leverage judgement.
@@ -601,7 +616,9 @@ function NetDebtFigure({ v, ccy }) {
 function ReportedNumbers({ r }) {
   const lines = r.reported_lines || [];
   const debt = r.net_debt_series || [];
-  if (!lines.length && !debt.length) return null;
+  const seq = r.sequential_base;
+  const ownDebt = r.reported_net_debt;
+  if (!lines.length && !debt.length && !seq && !ownDebt) return null;
   const ccy = r.financial_currency;
 
   return (
@@ -620,7 +637,12 @@ function ReportedNumbers({ r }) {
           <table style={{ borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace", width: "100%" }}>
             <thead>
               <tr>
-                {["Period", "Line", "This period", "Prior"].map((h, i) => (
+                {/* "Prior" is named for its source, not its date: it is
+                    whatever comparator the filer chose (usually the same period
+                    a year earlier), and it is NOT the sequential comparator the
+                    vet rationale uses. Saying so in the header is what stops the
+                    two revenue reads on this page looking contradictory. */}
+                {["Period", "Line", "This period", "Prior · company’s own"].map((h, i) => (
                   <th
                     key={h}
                     style={{
@@ -673,10 +695,99 @@ function ReportedNumbers({ r }) {
         </div>
       )}
 
-      {debt.length > 0 && (
+      {/* The OTHER revenue comparison — the one the vet rationale quotes. It
+          measures against the half that just finished rather than the same half
+          a year earlier, so it can point the opposite way to the table above it
+          and still be right (ANTO: +18% year-on-year, -7.1% sequentially). The
+          vet was handed this exact figure as a fact, from this exact function
+          (showcase._sequential_base_from_earnings_quality), so the two cannot
+          drift apart. Labelled as derived because it is: no company published
+          it. */}
+      {seq && (
+        <div
+          style={{
+            marginTop: 10, padding: "7px 9px", borderRadius: 4,
+            background: "#0f172a", border: "1px solid #1e293b",
+          }}
+        >
+          <div style={{ fontSize: 8.5, color: "#475569", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+            Sequential · derived by us
+          </div>
+          <div style={{ fontSize: 11, color: "#cbd5e1", lineHeight: 1.55, fontFamily: "monospace" }}>
+            {seq.period} {seq.metric || "revenue"}{" "}
+            <span style={{ color: "#e2e8f0", fontWeight: 700 }}>
+              {fmtReportingM(seq.current_value, ccy)}
+            </span>{" "}
+            is{" "}
+            <span style={{ color: seq.delta_pct >= 0 ? "#10b981" : "#f87171", fontWeight: 700 }}>
+              {Math.abs(seq.delta_pct).toFixed(1)}% {seq.delta_pct >= 0 ? "above" : "below"}
+            </span>{" "}
+            the preceding half, {fmtReportingM(seq.preceding_value, ccy)}.
+          </div>
+          <div style={{ fontSize: 9.5, color: "#475569", marginTop: 4, lineHeight: 1.5 }}>
+            {seq.basis === "derived_from_fy_total" ? (
+              <>
+                {seq.preceding_period} derived as the latest full fiscal year’s{" "}
+                {seq.metric || "revenue"} minus the prior-year {seq.period} figure of{" "}
+                {fmtReportingM(seq.prior_year_value, ccy)} printed above — the company
+                did not publish it. Compares against the half just gone, not the same
+                half a year earlier, so it can disagree with the table above and both
+                still be correct.
+              </>
+            ) : (
+              <>
+                Both halves printed in the announcement itself. Compares against the
+                half just gone, not the same half a year earlier.
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* The company's own figure, above ours, because where the two disagree
+          this is the one that is right. Verbatim as printed — including "net
+          cash of ..." where that is the wording — since the sign convention is
+          the easiest thing in this panel to invert. */}
+      {ownDebt && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 8.5, color: "#475569", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
-            Net debt · reported full years
+            Net debt · as the company reports it
+          </div>
+          <div style={{ fontSize: 11, color: "#cbd5e1", lineHeight: 1.55, fontFamily: "monospace" }}>
+            <span style={{ color: "#e2e8f0", fontWeight: 700 }}>{ownDebt.value}</span>
+            {ownDebt.as_at && <span style={{ color: "#64748b" }}> at {ownDebt.as_at}</span>}
+            {ownDebt.leverage && <span style={{ color: "#64748b" }}> · {ownDebt.leverage} EBITDA</span>}
+            {ownDebt.prior_value && (
+              <div style={{ color: "#64748b", marginTop: 2 }}>
+                was {ownDebt.prior_value}
+                {ownDebt.prior_as_at && ` at ${ownDebt.prior_as_at}`}
+                {ownDebt.prior_leverage && ` · ${ownDebt.prior_leverage} EBITDA`}
+              </div>
+            )}
+          </div>
+          <div style={{ fontSize: 9.5, color: "#475569", marginTop: 4, lineHeight: 1.5 }}>
+            Copied from this announcement. Where it disagrees with our figure
+            below, this one is right — and the comparator is usually the previous
+            balance-sheet date, not the same date a year earlier.
+          </div>
+        </div>
+      )}
+
+      {debt.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          {/* NOT "reported": this series is our own borrowings-minus-cash, and it
+              is not the number the company prints. updater.py computes net_debt
+              = st_debt + lt_debt - cash_and_equiv and never deducts short-term
+              investments, for which there is no live source at all (nothing in
+              the codebase writes annual_financials.st_investments). A cash-rich
+              filer therefore reads far more levered here than in its own
+              accounts — ANTO.L FY2025 shows $4.2bn / 0.80x against the
+              $2,749.5m / 0.53x its own HY26 statement prints for the very same
+              date. Labelling that "reported" put it directly under a vet
+              rationale quoting the company's figure, and made the LLM look
+              wrong when it was reading the announcement correctly. */}
+          <div style={{ fontSize: 8.5, color: "#475569", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+            Net debt · our calculation, full years
           </div>
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             {debt.map((d) => (
@@ -690,6 +801,12 @@ function ReportedNumbers({ r }) {
                 </span>
               </div>
             ))}
+          </div>
+          <div style={{ fontSize: 9.5, color: "#475569", marginTop: 5, lineHeight: 1.5 }}>
+            Borrowings minus cash at each year end, computed by us from annual
+            financials — not the company’s own net-debt definition. Short-term
+            investments are not deducted, so a company that parks its liquidity
+            there reports a lower figure than this one.
           </div>
         </div>
       )}

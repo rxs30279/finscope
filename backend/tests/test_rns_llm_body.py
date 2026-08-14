@@ -10,6 +10,8 @@ import sys, os
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rns_llm
@@ -587,3 +589,131 @@ def test_prompt_forbids_deriving_the_fwd_figure():
     # derived profit would put an invented number on the public page.
     assert "fwd_profit" in rns_llm._JSON_SCHEMA_BLOCK
     assert "COPY ONLY" in rns_llm._JSON_SCHEMA_BLOCK
+
+
+# ── _clean_net_debt_reported (migration 033) ─────────────────────────────────
+# ANTO.L 9719041 is the row that motivated the column: its HY26 statement prints
+# net debt of $3,966.1m at 30 June 2026 against 31 Dec 2025's $2,749.5m, while
+# our own annual_financials series says $4,194.8m for that same date.
+_ANTO_QUOTE = (
+    "Net debt at the end of the period was $3,966.1 million (31 December 2025: "
+    "$2,749.5 million), reflecting a balance of strong cash flows, capital "
+    "expenditures, payment of dividends"
+)
+
+
+def test_clean_net_debt_reported_keeps_the_figures_verbatim():
+    out = rns_llm._clean_net_debt_reported({
+        "found": True,
+        "value": "$3,966.1 million", "as_at": "30 June 2026",
+        "prior_value": "$2,749.5 million", "prior_as_at": "31 December 2025",
+        "leverage": "0.68x", "prior_leverage": "0.53x",
+        "quote": _ANTO_QUOTE,
+    })
+    assert out["value"] == "$3,966.1 million"
+    assert out["prior_as_at"] == "31 December 2025"
+    assert out["leverage"] == "0.68x"
+
+
+def test_clean_net_debt_reported_drops_a_value_absent_from_its_quote():
+    """The guard that matters. fwd_profit's measured failure was the model
+    computing a figure and presenting it as stated, and prompt wording alone did
+    not stop it. A fabricated *reported* net debt is worse than a blank here,
+    because the whole point of the column is to contradict our own number."""
+    out = rns_llm._clean_net_debt_reported({
+        "found": True,
+        # borrowings 7,659.4 - cash 2,716.5, i.e. exactly what a model that
+        # computed it instead of copying it would return. Appears nowhere in
+        # the sentence it claims to come from.
+        "value": "$4,942.9 million",
+        "quote": _ANTO_QUOTE,
+    })
+    assert out == {"found": False}
+
+
+@pytest.mark.parametrize("value,quote", [
+    # Same figure, three printed scales — all measured on live rows. A literal
+    # string compare rejected the last two.
+    ("$3,966.1m", "Net debt at the end of the period was $3,966.1 million"),
+    # Narrative in thousands, quote a table row headed in thousands.
+    ("$68,709 thousand", "Net debt (3) 68,709 63,887 8"),
+    # Narrative in units, quote a £000s column.
+    ("£5,054,000 net cash", "(Net debt)/cash (18,464) 23,518 - 5,054"),
+])
+def test_clean_net_debt_reported_matches_across_printed_scales(value, quote):
+    """Announcements print the same number several ways in one document, and
+    rejecting the table-row forms threw away 6 of the first 24 measured runs
+    while letting nothing extra through."""
+    assert rns_llm._clean_net_debt_reported(
+        {"found": True, "value": value, "quote": quote}
+    )["found"] is True
+
+
+@pytest.mark.parametrize("value", ["4.3 times", "3.7x", "net leverage of 4.3x"])
+def test_clean_net_debt_reported_refuses_a_leverage_ratio(value):
+    """DP World's HY26 prints leverage and no absolute net debt; the model
+    answered "4.3 times" on two runs and "3.7x" on a third — pre- and
+    post-IFRS16, i.e. not even the same quantity. A money field must hold
+    money."""
+    assert rns_llm._clean_net_debt_reported({
+        "found": True, "value": value,
+        "quote": f"net debt to adjusted EBITDA stands at {value}",
+    }) == {"found": False}
+
+
+def test_clean_net_debt_reported_requires_a_quote_at_all():
+    # No quote is a failed guard, not a pass — there is nothing to check against.
+    assert rns_llm._clean_net_debt_reported(
+        {"found": True, "value": "$3,966.1 million"}
+    ) == {"found": False}
+
+
+def test_clean_net_debt_reported_keeps_net_cash_wording():
+    """Never converted to a negative — read backwards a sign flip reverses a
+    leverage judgement, the same reason showcase._fmt_net_debt_m exists."""
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "net cash of £41.2m",
+        "quote": "The Group ended the period with net cash of £41.2m",
+    })
+    assert out["value"] == "net cash of £41.2m"
+
+
+def test_clean_net_debt_reported_keeps_a_negative_answer():
+    # Most RNS print no net-debt figure; that is a completed extraction, not a
+    # missing one, and NULL is reserved for rows ranked before the column.
+    assert rns_llm._clean_net_debt_reported({"found": False}) == {"found": False}
+    for raw in (None, [], "not a dict", 42):
+        assert rns_llm._clean_net_debt_reported(raw) is None
+
+
+def test_save_ranking_persists_net_debt_reported_as_json():
+    with patch("rns_llm._get_pool") as mock_pool:
+        conn = mock_pool.return_value.getconn.return_value
+        cur = conn.cursor.return_value
+        rns_llm._save_ranking(
+            1,
+            {
+                "score": 60, "sentiment": "neutral",
+                "net_debt_reported": {
+                    "found": True, "value": "$3,966.1 million",
+                    "as_at": "30 June 2026", "quote": _ANTO_QUOTE,
+                },
+            },
+            "deepseek-v4-flash:fast",
+        )
+    nd = cur.execute.call_args[0][1][13]
+    assert nd.adapted["value"] == "$3,966.1 million"
+    assert nd.adapted["as_at"] == "30 June 2026"
+
+
+def test_save_ranking_stores_null_when_no_net_debt_reported():
+    with patch("rns_llm._get_pool") as mock_pool:
+        conn = mock_pool.return_value.getconn.return_value
+        cur = conn.cursor.return_value
+        rns_llm._save_ranking(1, {"score": 60, "sentiment": "neutral"}, "m")
+    assert cur.execute.call_args[0][1][13] is None
+
+
+def test_prompt_forbids_computing_net_debt():
+    assert "net_debt_reported" in rns_llm._JSON_SCHEMA_BLOCK
+    assert "NET CASH IS NOT NEGATIVE NET DEBT HERE" in rns_llm._JSON_SCHEMA_BLOCK

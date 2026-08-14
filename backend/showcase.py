@@ -2245,8 +2245,61 @@ def _reported_lines(entries: list[dict]) -> dict[int, list]:
     return out
 
 
+def _reported_net_debt(entries: list[dict]) -> dict[int, dict]:
+    """The company's OWN net debt figure for each entry, as printed.
+
+    Exists because _net_debt_series below is NOT the company's number and for
+    a cash-rich filer is nowhere near it: updater.py computes net_debt as
+    borrowings minus cash and never deducts short-term investments, which have
+    no live source at all. ANTO.L's HY26 statement prints $3,966.1m at 30 June
+    2026 against 31 Dec 2025's $2,749.5m, where our FY2025 row says $4,194.8m
+    for that same date.
+
+    Verbatim strings, and a separate query from _reported_lines because it is a
+    different column with a different shape — one extra round trip on an
+    admin-only page. Absent (rather than a partial dict) whenever the ranker
+    found nothing or the row predates migration 033, so the UI shows our
+    figure alone rather than an empty comparison.
+    """
+    ids = [e["id"] for e in entries]
+    rows = _q(
+        """
+        SELECT h.id AS showcase_id, r.net_debt_reported
+        FROM high_impact_rns h
+        JOIN rns_announcements r ON r.id = h.rns_id
+        WHERE h.id = ANY(%s) AND r.net_debt_reported IS NOT NULL
+        """,
+        (ids,),
+    )
+    out: dict[int, dict] = {}
+    for r in rows:
+        nd = r["net_debt_reported"]
+        if isinstance(nd, str):
+            try:
+                nd = json.loads(nd)
+            except ValueError:
+                continue
+        # {"found": false} is a real, stored answer — the ranker read the text
+        # and it printed no net-debt figure — but there is nothing to render,
+        # so it drops out here rather than reaching the payload.
+        if isinstance(nd, dict) and nd.get("found") and nd.get("value"):
+            out[r["showcase_id"]] = nd
+    return out
+
+
 def _net_debt_series(symbols: list[str], years: int = 5) -> dict[str, list]:
-    """Reported net debt by fiscal year, oldest first, per symbol.
+    """OUR net debt by fiscal year, oldest first, per symbol.
+
+    NOT the company's reported figure, despite what this used to say — see
+    _reported_net_debt above for that. updater.py:314 computes
+    net_debt = st_debt + lt_debt - cash_and_equiv, which deducts cash but not
+    short-term investments, and there is no live source for the latter at all
+    (nothing writes annual_financials.st_investments). A cash-rich filer
+    therefore reads far more levered here than in its own accounts: ANTO.L
+    FY2025 is $4,194.8m / 0.80x against the $2,749.5m / 0.53x its own HY26
+    statement prints for 31 December 2025. The shape of the series is sound;
+    the level is not comparable with an announcement's own figure, and the UI
+    labels it as ours for exactly that reason.
 
     From annual_financials, which carried net_debt on every one of the 19
     showcase symbols checked on 2026-08-14 — the one balance-sheet series with
@@ -2295,6 +2348,54 @@ def _net_debt_series(symbols: list[str], years: int = 5) -> dict[str, list]:
     return out
 
 
+def _sequential_summary(entries: list[dict], reported: dict[int, list]) -> dict[int, dict]:
+    """The sequential comparison the vet rationale quotes, per showcase entry.
+
+    Exists because the two revenue comparisons on the archive page read as a
+    contradiction when only one of them is labelled. The reported-lines table
+    shows the company's OWN comparator — ANTO's H1 2026 revenue of $4,479.0m
+    against H1 2025's $3,799.4m, up 18% — while the vet rationale for the same
+    row says it is "about 7% below H2 2025's $4,820.9m". Both are right: the
+    second compares against the half that just finished, which nobody printed
+    and which we derive as FY2025 total minus the prior-year H1. Neither
+    number was wrong; the page just never said which was which.
+
+    Reuses _sequential_base_from_earnings_quality, i.e. the SAME
+    gates.compute_sequential_base arithmetic the vet was handed as a fact, so
+    the page cannot drift from the prompt. `preceding_period` is added here
+    (the compute function has no reason to care) purely so the UI does not
+    have to know that the half before H1 is H2.
+
+    Silent — absent from the map — on anything unestablishable, which is the
+    majority: it needs a revenue line, no named one-off on it, a parseable
+    value and prior, and an annual history to derive against.
+    """
+    out: dict[int, dict] = {}
+    for e in entries:
+        eq = reported.get(e["id"])
+        if not eq:
+            continue
+        # One _annual_history query per entry with a usable revenue line.
+        # Fine on the admin archive (detail=True never runs on the cached
+        # public list); revisit if this ever moves onto a hot path.
+        base = _sequential_base_from_earnings_quality(
+            {"symbol": e["symbol"], "earnings_quality": eq}
+        )
+        if not base:
+            continue
+        out[e["id"]] = {
+            "period": base["period"],
+            "preceding_period": "H2" if base["period"] == "H1" else "H1",
+            "metric": base["metric"],
+            "current_value": base["current_value"],
+            "preceding_value": base["preceding_value"],
+            "delta_pct": base["delta_pct"],
+            "basis": base["basis"],
+            "prior_year_value": base["prior_year_value"],
+        }
+    return out
+
+
 def _enrich(entries: list[dict], detail: bool = False) -> list[dict]:
     """Turn raw high_impact_rns rows into full showcase rows: watchlist parity +
     MQVR scores + days/%-since-news + follow-up tally + the story block.
@@ -2329,6 +2430,8 @@ def _enrich(entries: list[dict], detail: bool = False) -> list[dict]:
 
     reported = _reported_lines(entries) if detail else {}
     debt = _net_debt_series(symbols) if detail else {}
+    reported_debt = _reported_net_debt(entries) if detail else {}
+    sequential = _sequential_summary(entries, reported) if detail else {}
 
     ids = [e["id"] for e in entries]
     furows = _q(
@@ -2434,6 +2537,11 @@ def _enrich(entries: list[dict], detail: bool = False) -> list[dict]:
             # would be the same mislabel _size_context exists to prevent.
             "reported_lines": reported.get(e["id"]) or None,
             "net_debt_series": debt.get(e["symbol"]) or None,
+            # The company's own net-debt figure, which our series above is not.
+            "reported_net_debt": reported_debt.get(e["id"]) or None,
+            # The comparator the vet rationale uses, so the page can say which
+            # of the two revenue reads is which. See _sequential_summary.
+            "sequential_base": sequential.get(e["id"]) or None,
             "financial_currency": m.get("financial_currency") if detail else None,
             "followup_pos": sum(1 for f in fus if f["sentiment"] == "positive"),
             "followup_neg": sum(1 for f in fus if f["sentiment"] == "negative"),

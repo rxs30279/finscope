@@ -1881,6 +1881,37 @@ def test_reported_lines_skips_rows_with_nothing_extracted():
             assert showcase._reported_lines([{"id": 7}]) == {}
 
 
+def test_reported_net_debt_passes_the_company_figure_through():
+    rows = [{"showcase_id": 7, "net_debt_reported": {
+        "found": True, "value": "$3,966.1 million", "as_at": "30 June 2026",
+        "prior_value": "$2,749.5 million", "prior_as_at": "31 December 2025",
+        "leverage": "0.68x",
+    }}]
+    with patch.object(showcase, "_q", return_value=rows):
+        out = showcase._reported_net_debt([{"id": 7}])
+    assert out[7]["value"] == "$3,966.1 million"
+    assert out[7]["prior_as_at"] == "31 December 2025"
+
+
+def test_reported_net_debt_drops_the_negative_answer():
+    """{"found": false} is a real stored answer — the ranker read the text and
+    it printed no net-debt figure — but there is nothing to render, so the UI
+    shows our own series alone rather than an empty comparison."""
+    for nd in ({"found": False}, {"found": True, "value": ""}, None):
+        with patch.object(showcase, "_q",
+                          return_value=[{"showcase_id": 7, "net_debt_reported": nd}]):
+            assert showcase._reported_net_debt([{"id": 7}]) == {}
+
+
+def test_reported_net_debt_reads_jsonb_delivered_as_text():
+    rows = [{"showcase_id": 7, "net_debt_reported":
+             json.dumps({"found": True, "value": "net cash of £41.2m"})}]
+    with patch.object(showcase, "_q", return_value=rows):
+        out = showcase._reported_net_debt([{"id": 7}])
+    # Net cash stays the company's wording, never a negative number.
+    assert out[7]["value"] == "net cash of £41.2m"
+
+
 def test_net_debt_series_computes_leverage_only_where_it_means_something():
     rows = [
         {"company_symbol": "A.L", "fiscal_year": 2024, "period_end_date": None,
@@ -1908,6 +1939,65 @@ def test_net_debt_series_keeps_net_cash_negative():
     with patch.object(showcase, "_q", return_value=rows):
         out = showcase._net_debt_series(["A.L"])
     assert out["A.L"][0]["net_debt"] == -198.6
+
+
+# ── sequential comparator on the archive ─────────────────────────────────────
+# The defect this closes: ANTO.L 9719041's table showed H1'26 revenue $4,479.0m
+# against the company's own $3,799.4m comparator (+18%) while the vet rationale
+# on the same row said "about 7% below H2 2025's $4,820.9m". Both correct,
+# different comparators, and nothing on the page said so.
+_ANTO_EQ = [
+    {"item": "Revenue", "kind": "income", "period": "H1 2026",
+     "value": "$4,479.0m", "prior_value": "$3,799.4m", "one_off_named": None},
+    {"item": "EBITDA", "kind": "income", "period": "H1 2026",
+     "value": "$2,840.5m", "prior_value": "$2,234.2m", "one_off_named": None},
+]
+
+
+def test_sequential_summary_reproduces_the_figure_the_vet_quotes():
+    """Same arithmetic the vet was handed as a fact, so the page cannot drift
+    from the prompt: FY25 $8,620.3m - H1'25 $3,799.4m = H2'25 $4,820.9m, and
+    $4,479.0m is 7.1% below it."""
+    with patch.object(showcase, "_annual_history",
+                      return_value=[{"revenue": 8_620_300_000.0}]):
+        out = showcase._sequential_summary(
+            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}
+        )
+    assert out[7]["preceding_value"] == 4_820_900_000.0
+    assert out[7]["delta_pct"] == -7.1
+    assert out[7]["basis"] == "derived_from_fy_total"
+    # The prior-year half stays available so the UI can show what was subtracted
+    # from what, rather than asserting a derived number with no working.
+    assert out[7]["prior_year_value"] == 3_799_400_000.0
+
+
+def test_sequential_summary_names_the_half_the_ui_must_label():
+    """The UI must not have to know that the half before H1 is H2."""
+    with patch.object(showcase, "_annual_history",
+                      return_value=[{"revenue": 8_620_300_000.0}]):
+        out = showcase._sequential_summary(
+            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}
+        )
+    assert out[7]["period"] == "H1"
+    assert out[7]["preceding_period"] == "H2"
+
+
+def test_sequential_summary_is_silent_rather_than_guessing():
+    """Absent from the map, never a partial entry — the archive renders nothing
+    instead of a comparison it cannot establish."""
+    # No revenue line at all.
+    assert showcase._sequential_summary(
+        [{"id": 7, "symbol": "A.L"}],
+        {7: [{"item": "EBITDA", "period": "H1 2026", "value": "$1m",
+              "prior_value": "$1m"}]},
+    ) == {}
+    # Nothing extracted for this entry.
+    assert showcase._sequential_summary([{"id": 7, "symbol": "A.L"}], {}) == {}
+    # Revenue there, but no annual history to derive the preceding half from.
+    with patch.object(showcase, "_annual_history", return_value=[]):
+        assert showcase._sequential_summary(
+            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}
+        ) == {}
 
 
 def test_archive_endpoint_asks_for_the_detail(client):

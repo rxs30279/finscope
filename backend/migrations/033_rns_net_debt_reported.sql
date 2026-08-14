@@ -1,0 +1,55 @@
+-- Store the company's OWN net debt figure, as printed in the announcement.
+--
+-- Why: /high-impact-rns/archive shows a net-debt-by-fiscal-year strip built
+-- from annual_financials, and that series is NOT what the company reports.
+-- updater.py:314 computes
+--     net_debt = st_debt + lt_debt - cash_and_equiv
+-- and never deducts short-term investments — for which there is no live source
+-- at all: nothing in the codebase writes annual_financials.st_investments, and
+-- the 30 of 750 latest-year rows that carry a value are leftovers from an old
+-- import.
+--
+-- ANTO.L is the worked example that prompted this. Its HY26 statement prints
+-- net debt of $3,966.1m at 30 June 2026 "(31 December 2025: $2,749.5 million)"
+-- and leverage of 0.68x (31 Dec 2025: 0.53x). Our FY2025 row says $4,194.8m and
+-- 0.80x for that same date — $1.45bn apart, reconciling exactly as $2,193m of
+-- liquidity we do not count less $748m of debt we count that the company groups
+-- elsewhere. EBITDA agrees to within 1%, so the whole gap is the debt figure.
+--
+-- The consequence on the page was worse than a wrong number: the archive
+-- printed a vet rationale correctly quoting the company ("net debt also rose to
+-- $3.97bn") directly above a strip reading $4.2bn, which reads as the LLM
+-- getting it wrong when the LLM was right and we were not.
+--
+-- Free to collect: the ranker already reads the whole body and already extracts
+-- guidance_checks, earnings_quality and fwd_profit from it, so this is ~60 more
+-- output tokens on a response being generated anyway. No second call, same as
+-- migration 032.
+--
+-- Shape: JSONB object, at most one per announcement, values VERBATIM as printed
+-- (the forms really occur as "$3,966.1 million", "net cash of £41.2m", "c.£1.2bn"):
+--   {found, value, as_at, prior_value, prior_as_at, leverage, prior_leverage, quote}
+--
+-- Deliberately NOT an earnings_quality entry. That array is capped at ~8 lines
+-- and its `kind` whitelist is income|cost_or_charge, which the earnings-quality
+-- gate matches on; a balance-sheet item would both compete for slots the gate
+-- needs and land as kind "unclear". A separate object costs no gate re-testing.
+--
+-- rns_llm._clean_net_debt_reported drops any value that does not appear
+-- literally in its own quote. On fwd_profit the model derived a figure and
+-- presented it as stated on 3 of 24 measured runs, and prompt wording alone did
+-- not stop it — the mechanical guard did. A fabricated "reported" net debt
+-- would be strictly worse than the blank, because it would appear to settle the
+-- very disagreement this column exists to expose.
+--
+-- {"found": false} means the ranker read the announcement and it printed no
+-- net-debt figure — the common case for non-results RNS. SQL NULL means the row
+-- was ranked before this column existed.
+--
+-- Idempotent. Apply with:
+--   python backend/run_migration.py migrations/033_rns_net_debt_reported.sql
+
+ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS net_debt_reported JSONB;
+
+-- Read one row at a time by id from the showcase archive query, never scanned
+-- across issuers, so no index is warranted — same call as fwd_profit in 032.
