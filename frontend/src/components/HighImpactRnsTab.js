@@ -859,7 +859,6 @@ function LabelledPill({ label, value, invert }) {
 function MobileCard({
   r, isOpen, onToggle, onSelect, isAdmin, live, price, gapPct, sinceOpenPct,
   totalPct, rangePosValue, isNewsSelected, onNewsSelect, vet, st, setStatus,
-  archiveOnly = false,
 }) {
   const [showMqvrInfo, setShowMqvrInfo] = useState(false);
   const caretColor = isOpen ? "#f97316" : "#93c5fd";
@@ -1088,9 +1087,11 @@ function MobileCard({
             )}
           </div>
 
-          {/* Archive only, same as desktop — the table inside scrolls on its
-              own so the card itself never scrolls sideways. */}
-          {archiveOnly && <ReportedNumbers r={r} />}
+          {/* Shown everywhere now (both public and archive, same as desktop)
+              — the table inside scrolls on its own so the card itself never
+              scrolls sideways. ReportedNumbers itself renders nothing when
+              the row has no reported lines/net-debt/sequential data. */}
+          <ReportedNumbers r={r} />
 
           {(r.followups || []).length > 0 && (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
@@ -1454,7 +1455,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                     onToggle={() => toggleStory(r.showcase_id)}
                     onSelect={() => onSelect && onSelect(r.symbol)}
                     isAdmin={isAdmin}
-                    archiveOnly={archiveOnly}
                     live={isLive(r)}
                     price={priceOf(r)}
                     gapPct={gapPct(r)}
@@ -1744,11 +1744,12 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                                 )}
                               </div>
 
-                              {/* Archive only — the withheld rows are the ones
-                                  read closely enough to want the underlying
-                                  figures, and /showcase/shadow is the only
-                                  endpoint that ships them (detail=True). */}
-                              {archiveOnly && <ReportedNumbers r={r} />}
+                              {/* Shown everywhere now — both /api/showcase and
+                                  /showcase/shadow ship detail=True as of
+                                  2026-08-14. ReportedNumbers itself renders
+                                  nothing when the row has no reported
+                                  lines/net-debt/sequential data. */}
+                              <ReportedNumbers r={r} />
 
                               {/* Prior announcements before this story — builds up over time now
                                   that tier A/B rows outlive the 14-day source prune (most stories

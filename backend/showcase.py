@@ -2401,8 +2401,9 @@ def _sequential_summary(
         if not eq:
             continue
         # One _annual_history query per entry with a usable revenue line.
-        # Fine on the admin archive (detail=True never runs on the cached
-        # public list); revisit if this ever moves onto a hot path.
+        # Fine on a small showcase (public + archive combined run well under
+        # 100 rows) behind a CDN/ISR cache; revisit if this ever moves onto
+        # an uncached hot path.
         base = _sequential_base_from_earnings_quality({
             "symbol": e["symbol"],
             "earnings_quality": eq,
@@ -2428,8 +2429,10 @@ def _enrich(entries: list[dict], detail: bool = False) -> list[dict]:
     MQVR scores + days/%-since-news + follow-up tally + the story block.
 
     `detail=True` adds the announcement's own reported lines and the net-debt
-    series. Off by default because it costs two extra queries per call and only
-    the admin archive renders them — the public list is the hot, cached path.
+    series. Off by default (`/pending` doesn't need it) but on for both the
+    public list and the admin archive since 2026-08-14 — the extra queries are
+    batched per call, not per row, and the public list is CDN- and
+    ISR-cached, so they run on a cache miss, not on every request.
     """
     if not entries:
         return []
@@ -2640,11 +2643,17 @@ def list_showcase(response: Response):
     """Public — approved + vet-withheld (shadow) stories from the last
     SHOWCASE_ROLLING_WINDOW_DAYS, newest story first.
 
-    Shadow rows carry a "why withheld" badge on the frontend (isWithheld in
-    HighImpactRnsTab.js) rather than being hidden — a near-miss is shown with
-    its caveat instead of vanishing. status NOT IN ('pending', 'rejected') is
-    the effective rule; spelled as an explicit IN so a future status value
-    defaults to hidden rather than silently public.
+    Shadow rows get a darker card + a "Why withheld" AI-vet label on the
+    frontend (isWithheld in HighImpactRnsTab.js) rather than being hidden — a
+    near-miss is shown with its caveat instead of vanishing. status NOT IN
+    ('pending', 'rejected') is the effective rule; spelled as an explicit IN
+    so a future status value defaults to hidden rather than silently public.
+
+    detail=True (2026-08-14): the reported-lines/net-debt/sequential-base
+    block (ReportedNumbers on the frontend) used to be archive-only, but the
+    extra queries it costs are batched and cheap (see _enrich), and this
+    endpoint is CDN-cached (Cache-Control below) plus 300s ISR-cached on the
+    frontend, so they run on a cache miss/revalidate, not per request.
     """
     response.headers["Cache-Control"] = "public, s-maxage=60, stale-while-revalidate=60"
     entries = _q(
@@ -2657,7 +2666,7 @@ def list_showcase(response: Response):
         "ORDER BY published_at DESC",
         (SHOWCASE_MIN_STORY_DATE, SHOWCASE_ROLLING_WINDOW_DAYS),
     )
-    return _enrich(entries)
+    return _enrich(entries, detail=True)
 
 
 @router.get("/pending", dependencies=[Depends(require_admin_token)])
@@ -2671,16 +2680,14 @@ def list_pending():
 
 @router.get("/shadow", dependencies=[Depends(require_admin_token)])
 def list_shadow():
-    """Admin — rows the vet scored but withheld (vet_score < HIGH_IMPACT_MIN_VET_SCORE),
-    with the ReportedNumbers detail the admin view needs to judge a near-miss.
+    """Admin — rows the vet scored but withheld (vet_score < HIGH_IMPACT_MIN_VET_SCORE).
 
     Shadow rows are no longer admin-exclusive — /api/showcase now also serves
-    them, badged "why withheld", within SHOWCASE_ROLLING_WINDOW_DAYS. This
-    endpoint stays admin-only because it still does two things the public list
-    doesn't: no rolling-window cutoff (the full withheld history, not just the
-    last month) and detail=True's extra per-row queries. Ordered by vet_score
-    DESC so the near-misses (the band that actually decides whether 75 is the
-    right floor) sort to the top.
+    them (also with the ReportedNumbers detail, since 2026-08-14). This
+    endpoint stays admin-only for the one thing the public list still doesn't
+    do: no rolling-window cutoff, i.e. the full withheld history rather than
+    just the last month. Ordered by vet_score DESC so the near-misses (the
+    band that actually decides whether 75 is the right floor) sort to the top.
 
     A NULL vet_score means the vet call FAILED, not that the story scored zero
     (see flag_high_impact_candidates). Those sort last and the UI labels them

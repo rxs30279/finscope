@@ -2039,13 +2039,16 @@ def test_archive_endpoint_asks_for_the_detail(client):
     assert enrich.call_args.kwargs.get("detail") is True
 
 
-def test_public_showcase_pays_for_no_detail(client):
-    """The public list is the hot, cached path and must not pay for two extra
-    queries it never renders."""
+def test_public_showcase_asks_for_the_detail(client):
+    """The reported-lines/net-debt/sequential-base block (ReportedNumbers on
+    the frontend) is no longer archive-only (2026-08-14) — the public list
+    renders it too, so it must fetch it. The extra queries are batched, not
+    per-row, and this endpoint is CDN- and ISR-cached, so the cost lands on a
+    cache miss, not on every request."""
     with patch.object(showcase, "_q", return_value=[]), \
          patch.object(showcase, "_enrich", return_value=[]) as enrich:
         client.get("/api/showcase")
-    assert enrich.call_args.kwargs.get("detail") in (None, False)
+    assert enrich.call_args.kwargs.get("detail") is True
 
 
 def test_pending_endpoint_pays_for_no_detail(client):
