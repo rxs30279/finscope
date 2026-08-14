@@ -499,10 +499,13 @@ function PendingCard({ entry, onApprove, onReject }) {
   );
 }
 
-// A story the vet scored but withheld (status='shadow'). No longer shown on
-// this page at all (see /high-impact-rns/archive) — isWithheld and the
-// styling below only still run here because this same table component
-// renders that page too, in archiveOnly mode, where every row IS a shadow row.
+// A story the vet scored but withheld (status='shadow'). Shows on this page
+// too now (within the rolling window — see SHOWCASE_ROLLING_WINDOW_DAYS in
+// showcase.py), not just on /high-impact-rns/archive, but with no inline
+// badge — the darker card background/border below and the "Why withheld"
+// analysis label are the only visual cues; there used to also be a small
+// "WITHHELD" pill next to the symbol, removed 2026-08-14 at the user's
+// request.
 //
 // isWithheld is keyed on status, NOT on `vet_score < 75`. A row can be shadow
 // with a NULL score (the vet CALL failed), and an admin can publish a shadow row
@@ -514,29 +517,6 @@ const isWithheld = (r) => (r.story || {}).status === "shadow";
 // scored zero. Kept visually distinct everywhere: presenting a failure as a low
 // score would poison the calibration sample these rows exist to provide.
 const vetFailed = (r) => isWithheld(r) && (r.story || {}).vet_score == null;
-
-function WithheldBadge({ r, size = 8.5 }) {
-  if (!isWithheld(r)) return null;
-  const failed = vetFailed(r);
-  return (
-    <span
-      title={
-        failed
-          ? "Withheld: the vet call failed, so no score was produced. Not a judgement on the story."
-          : `Withheld: vet scored ${(r.story || {}).vet_score}, below the 75 publish floor. Expand the row to read why. Not visible to the public.`
-      }
-      style={{
-        fontSize: size, fontWeight: 700, color: failed ? "#f87171" : "#f59e0b",
-        background: failed ? "rgba(248,113,113,0.12)" : "rgba(245,158,11,0.12)",
-        border: `1px solid ${failed ? "#f87171" : "#f59e0b"}55`,
-        borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap",
-        fontFamily: "monospace",
-      }}
-    >
-      {failed ? "VET FAILED" : "WITHHELD"}
-    </span>
-  );
-}
 
 const btn = (color) => ({
   background: "transparent",
@@ -927,7 +907,6 @@ function MobileCard({
             <Link prefetch={false} href={companyHref(r.symbol)} onClick={(e) => e.stopPropagation()} style={{ color: "#e5e5e5", fontWeight: 700, textDecoration: "none" }}>{r.symbol.replace(".L", "")}</Link>
             <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
               <IndexBadge index={r.ftse_index} full />
-              <WithheldBadge r={r} />
               {vet && (
                 <span style={{ fontSize: 8.5, fontWeight: 700, color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "capitalize" }}>
                   {st.vet_verdict}
@@ -1579,7 +1558,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                                 </Link>
                                 <div style={{ marginTop: 3, display: "flex", flexWrap: "wrap", gap: 3 }}>
                                   <IndexBadge index={r.ftse_index} full />
-                                  <WithheldBadge r={r} />
                                   {vet && (
                                     <span style={{ fontSize: 8.5, fontWeight: 700, color: vet.color, background: vet.bg, border: `1px solid ${vet.color}55`, borderRadius: 2, padding: "1px 4px", letterSpacing: 0.3, whiteSpace: "nowrap", textTransform: "capitalize" }}>
                                       {st.vet_verdict}
