@@ -668,6 +668,54 @@ def test_clean_net_debt_reported_requires_a_quote_at_all():
     ) == {"found": False}
 
 
+def test_clean_net_debt_reported_rejects_a_gross_cash_balance():
+    """FOUR.L 9704828, live on 2026-08-14: the model answered net_debt_reported
+    with "Cash and bank deposits 136.9 102.3 +34%" — a gross balance the
+    announcement never called net of anything (4imprint never uses the words
+    "net debt" or "net cash" anywhere in the release). The mantissa guard alone
+    passed this, because $136.9m genuinely is the number printed; only a check
+    for the word "net" catches it."""
+    assert rns_llm._clean_net_debt_reported({
+        "found": True, "value": "$136.9m",
+        "quote": "Cash and bank deposits 136.9 102.3 +34%",
+    }) == {"found": False}
+
+
+def test_clean_net_debt_reported_rejects_a_dropped_cash_qualifier():
+    """BBY.L 9716718, live on 2026-08-14: the model correctly copied the
+    number (1,708 appears verbatim in the quote) but dropped the word "cash"
+    from a table row headed "Net cash - recourse", storing "£1,708m" — which,
+    shown with no computed sign on the page, reads as debt when Balfour Beatty
+    is genuinely net CASH £1,708m."""
+    assert rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£1,708m",
+        "quote": "Net cash - recourse 3 1,708 1,446 1,237",
+    }) == {"found": False}
+
+
+def test_clean_net_debt_reported_accepts_the_qualifier_when_present():
+    """The fix for the case above: same row, value corrected to carry the word
+    the table's own header used."""
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "net cash of £1,708m",
+        "quote": "Net cash - recourse 3 1,708 1,446 1,237",
+    })
+    assert out["found"] is True
+    assert out["value"] == "net cash of £1,708m"
+
+
+def test_clean_net_debt_reported_does_not_require_cash_wording_on_a_dual_header():
+    """PSN.L 9707275's own convention: "Net (debt)/cash" with the sign already
+    encoded in value's own parentheses ("£(165.0)m"). The pure-net-cash check
+    must not fire here — it isn't a plain "net cash" label, it's a dual
+    debt/cash toggle header, and the parenthetical already carries the sign."""
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£(165.0)m",
+        "quote": "Net (debt)/cash at 30 June £(165.0)m £123.0m £(288.0)m",
+    })
+    assert out["found"] is True
+
+
 def test_clean_net_debt_reported_keeps_net_cash_wording():
     """Never converted to a negative — read backwards a sign flip reverses a
     leverage judgement, the same reason showcase._fmt_net_debt_m exists."""
@@ -676,6 +724,22 @@ def test_clean_net_debt_reported_keeps_net_cash_wording():
         "quote": "The Group ended the period with net cash of £41.2m",
     })
     assert out["value"] == "net cash of £41.2m"
+
+
+def test_clean_net_debt_reported_accepts_a_bracket_meaning_debt_not_cash():
+    """HILS.L 9716717's own net-debt bridge: "Net debt (170.9)" — checked by
+    hand against the surrounding note (cash 83.4 minus borrowings and lease
+    liabilities of 254.3 = -170.9), the bracket here means the FUNDS position
+    is negative, i.e. this genuinely is net debt of £170.9m, not net cash. A
+    bare "$170.9m" is the right answer for this one; the net-cash-wording check
+    must not fire on it, because the quote's label is "Net debt", not "net
+    cash"."""
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "$170.9m",
+        "quote": "Net debt at the end of the period (170.9)",
+    })
+    assert out["found"] is True
+    assert out["value"] == "$170.9m"
 
 
 def test_clean_net_debt_reported_keeps_a_negative_answer():
@@ -717,3 +781,11 @@ def test_save_ranking_stores_null_when_no_net_debt_reported():
 def test_prompt_forbids_computing_net_debt():
     assert "net_debt_reported" in rns_llm._JSON_SCHEMA_BLOCK
     assert "NET CASH IS NOT NEGATIVE NET DEBT HERE" in rns_llm._JSON_SCHEMA_BLOCK
+
+
+def test_prompt_forbids_a_gross_cash_balance_and_a_dropped_qualifier():
+    # The two live defects found 2026-08-14 (FOUR.L, BBY.L) both got their own
+    # prompt paragraph in addition to the mechanical guard, same as fwd_profit's
+    # derivation defect did — prompt wording alone didn't stop that one either.
+    assert "A GROSS CASH BALANCE IS NOT THIS FIELD" in rns_llm._JSON_SCHEMA_BLOCK
+    assert "MUST SURVIVE OUT OF A TABLE ROW TOO" in rns_llm._JSON_SCHEMA_BLOCK

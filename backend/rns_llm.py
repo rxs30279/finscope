@@ -850,11 +850,31 @@ do not pick a score and then justify it:
                    announcement itself calls net debt, net cash, net financial
                    debt or the like. If it prints none, return
                    {"found": false} with every other field null.
+                     A GROSS CASH BALANCE IS NOT THIS FIELD, however
+                   prominently the announcement leads with it. "Cash and bank
+                   deposits of $136.9m", "cash and cash equivalents of £50m" —
+                   these have nothing netted off them and are not "net" of
+                   anything; a debt-light company reporting one is telling you
+                   its cash position, not its net-debt position, and the two
+                   only coincide by chance. Take these ONLY where the
+                   announcement's own words attach "net" to debt, cash, funds
+                   or borrowings somewhere. No such wording anywhere in the
+                   announcement means found: false — a cash headline is not a
+                   consolation prize to fall back on.
                      NET CASH IS NOT NEGATIVE NET DEBT HERE. Copy the wording
                    the company used — "net cash of £41.2m" stays "net cash of
                    £41.2m". Never convert it to a minus sign; the sign
                    convention is the single easiest thing to invert, and read
                    backwards it reverses a leverage judgement.
+                     THE WORD "CASH" MUST SURVIVE OUT OF A TABLE ROW TOO, not
+                   just out of a sentence. A table headed "Net cash -
+                   recourse" with the number 1,708 in it is reporting net cash
+                   of 1,708, exactly as much as a sentence saying "net cash of
+                   £1,708m" would be — copy the row's own label into value
+                   ("net cash of £1,708m"), never just the bare number
+                   ("£1,708m"). This field carries no sign of its own; a bare
+                   positive number reads as debt to anyone who doesn't re-read
+                   the announcement, so the word is not optional decoration.
                      The prior comparator on this line is normally the PREVIOUS
                    BALANCE SHEET DATE, not the same date a year earlier —
                    announcements print it as "(31 December 2025: $2,749.5
@@ -1551,6 +1571,26 @@ _ND_CURRENCY_RE = re.compile(r"[£$€]|\b[A-Z]{3}\b")
 _ND_MAGNITUDE_RE = re.compile(r"\b(bn|billion|m|million|k|thousand)\b", re.I)
 _ND_MATCH_TOL = 0.005
 
+# The word NET is not optional. FOUR.L 9704828's quote was "Cash and bank
+# deposits 136.9 102.3 +34%" — a gross cash balance, no debt netted off it
+# anywhere — and the model reported it as net_debt_reported anyway, because
+# nothing forced it to check that the announcement actually used the word.
+# `\(?` lets this match "Net (debt)/cash" too (PSN.L's own header), where the
+# label sits between "net" and "debt" rather than immediately after it.
+_ND_NET_LABEL_RE = re.compile(
+    r"net\s*\(?\s*(?:debt|cash|funds|borrowings|financial\s+debt)", re.I
+)
+# BBY.L 9716718's quote was "Net cash - recourse 3 1,708 1,446 1,237" — a
+# genuine net-cash figure — but the model's `value` came back as bare
+# "£1,708m", dropping the one word that says which side of zero it is. Shown
+# on the page with no computed sign (this field is verbatim text, not a signed
+# number like showcase._net_debt_series), that reads as debt to anyone who
+# doesn't go back to the announcement. Excludes the dual "(debt)/cash" header
+# style (PSN.L), where the sign already survives inside `value`'s own
+# parentheses and requiring the word "cash" there would wrongly reject it.
+_ND_PURE_NET_CASH_RE = re.compile(r"\bnet\s+cash\b", re.I)
+_ND_DUAL_HEADER_RE = re.compile(r"\(\s*debt\s*\)\s*/\s*cash", re.I)
+
 
 def _nd_numbers(text: str) -> list:
     """Every number in `text`, in units, applying any magnitude word attached."""
@@ -1620,6 +1660,23 @@ def _clean_net_debt_reported(raw) -> Optional[dict]:
     cheapest form: `value` is copied AS PRINTED, so it must survive as a
     substring of the quote it was allegedly printed in. A model that computed
     borrowings minus cash fails it, because its answer appears nowhere.
+
+    THE MANTISSA MATCH IS NOT ENOUGH ON ITS OWN, and two live rows proved it on
+    the same day this shipped (2026-08-14, both found by manually cross-
+    checking the archive against the underlying RNS — no repeat harness caught
+    either because the number itself was correct in both cases):
+      - FOUR.L 9704828 answered with "Cash and bank deposits 136.9 102.3 +34%"
+        — a gross balance, no debt netted off anywhere in the announcement.
+        _ND_NET_LABEL_RE below requires the word "net" attached to
+        debt/cash/funds/borrowings SOMEWHERE in the quote; this quote has none.
+      - BBY.L 9716718 answered `value` "£1,708m" against quote "Net cash -
+        recourse 3 1,708 1,446 1,237" — mantissa-correct, sign-silent. Shown
+        bare on the page (this field carries no computed sign, unlike
+        showcase._net_debt_series), it reads as debt when it is genuinely net
+        CASH of the same amount. _ND_PURE_NET_CASH_RE below requires `value`
+        to carry the word "cash" whenever the quote's own label is a plain
+        "net cash" (not the dual "(debt)/cash" header, where the sign already
+        lives inside value's own parentheses — see PSN.L 9707275).
     """
     if not isinstance(raw, dict):
         return None
@@ -1649,6 +1706,29 @@ def _clean_net_debt_reported(raw) -> Optional[dict]:
         print(
             f"[rns-llm] net_debt_reported {value!r} does not appear in its own "
             f"quote, dropping: {(quote or '')[:160]!r}"
+        )
+        return {"found": False}
+
+    # FOUR.L class: a gross balance ("Cash and bank deposits") is not a net
+    # position just because it's a number near the word "cash". Require the
+    # announcement to have actually said "net" of something.
+    if not _ND_NET_LABEL_RE.search(quote):
+        print(
+            f"[rns-llm] net_debt_reported {value!r} — quote has no net debt/cash "
+            f"label, dropping: {quote[:160]!r}"
+        )
+        return {"found": False}
+
+    # BBY.L class: the quote calls it net CASH but `value` dropped the word,
+    # which on a page with no computed sign for this field reads as debt.
+    if (
+        _ND_PURE_NET_CASH_RE.search(quote)
+        and not _ND_DUAL_HEADER_RE.search(quote)
+        and "cash" not in value.lower()
+    ):
+        print(
+            f"[rns-llm] net_debt_reported {value!r} — quote says net CASH but "
+            f"value doesn't say so, dropping: {quote[:160]!r}"
         )
         return {"found": False}
 
