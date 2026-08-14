@@ -693,6 +693,55 @@ def test_fetch_body_prefers_rns_over_prn_when_both_present():
     assert _fetch_body(soup) == "RNS text"
 
 
+def test_fetch_body_falls_back_to_news_window_for_other_wires():
+    # eqs/gnw/bzw/mfn each wrap their text in their own class, so neither wire
+    # selector matches; the shared `news-window` parent is what carries them.
+    soup = BeautifulSoup(
+        '<div class="news-window">'
+        '<div class="eqs-announcement"><p>Full EQS text.</p></div>'
+        "</div>",
+        "html.parser",
+    )
+    assert _fetch_body(soup) == "Full EQS text."
+
+
+def test_fetch_body_prefers_wire_selector_over_news_window_superset():
+    # On a real RNS page `news-window` contains `fr-view-element` plus the
+    # registered-address header and the RNS footer. The precise selector must
+    # win so those captures stay free of that chrome.
+    soup = BeautifulSoup(
+        '<div class="news-window">'
+        "One Waterside Drive Reading"
+        '<div class="fr-view-element">RNS text</div>'
+        "This information is provided by RNS."
+        "</div>",
+        "html.parser",
+    )
+    assert _fetch_body(soup) == "RNS text"
+
+
+def test_fetch_body_ignores_repeated_news_window():
+    # The guard that keeps `.art-board`'s failure mode from recurring: if a
+    # layout change ever makes this a repeated wrapper, return nothing rather
+    # than storing page chrome as announcement text.
+    soup = BeautifulSoup(
+        '<div class="news-window">chrome</div>'
+        '<div class="news-window">real body</div>',
+        "html.parser",
+    )
+    assert _fetch_body(soup) is None
+
+
+def test_fetch_body_empty_news_window_returns_none():
+    # The `ukn` case: the container is present but carries no text at all
+    # (PDF-only or JS-rendered). There is genuinely nothing to capture.
+    soup = BeautifulSoup(
+        '<div class="news-window"><div class="ukn-announcement"></div></div>',
+        "html.parser",
+    )
+    assert _fetch_body(soup) is None
+
+
 # ── _truncate_body ─────────────────────────────────────────────────────────────
 
 def test_truncate_body_under_cap_kept_whole():

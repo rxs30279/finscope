@@ -1394,6 +1394,27 @@ _BODY_SELECTORS = (
     ("PRN", "prn-announcement"),
 )
 
+# Generic fallback for the wires above's long tail. Investegate carries at least
+# seven wires (rns, prn, eqs, gnw, bzw, mfn, ukn) and each non-RNS one wraps its
+# text in its own `{wire}-announcement` / `mfn-body` div, so the two selectors
+# above captured nothing at all for five of them — those bodies never reached the
+# ranker or the vet. Rather than hardcode (and have to maintain) a class per
+# wire, fall back to the one container common to every wire's page.
+#
+# Checked second, not first: on RNS pages `news-window` is a superset of
+# `fr-view-element` that also picks up the registered-address header and the
+# "This information is provided by RNS" footer (4709 vs 3918 chars on a sampled
+# announcement), so the precise selectors stay ahead of it and only pages with no
+# recognised container reach this. Measured over the 15 tier A/B rows that missed
+# in the three days to 2026-08-14, it recovers 12 — including two half-year
+# reports and a 49k-char interim — and costs no chrome on the wires that need it
+# (on an eqs page `news-window` and `eqs-announcement` are the same 1627 chars).
+#
+# Guarded on an exact single match for the same reason `.art-board` was rejected:
+# a layout change that turned this into a repeated wrapper would otherwise start
+# silently returning page chrome as announcement text.
+_BODY_FALLBACK_SELECTOR = "news-window"
+
 # Bodies under this many chars are stubs — announcements that only point at an
 # external PDF rather than carrying the text themselves.
 _BODY_STUB_CHARS = 600
@@ -1423,9 +1444,12 @@ def _extract_summary(soup) -> Optional[str]:
 def _fetch_body(soup) -> Optional[str]:
     """Pull the full announcement text out of an already-parsed announcement page.
 
-    Tries each wire's container in turn; returns None if none matched (page
-    layout changed, or genuinely nothing there). A short body that DOES match
-    a container is a stub, not a miss — see _BODY_STUB_CHARS / body_is_stub.
+    Tries each wire's container in turn, then the generic cross-wire fallback;
+    returns None if none matched (page layout changed, or genuinely nothing
+    there — a `ukn-announcement` div that is present but empty reaches here as
+    None, which is correct: there is no text on the page to capture). A short
+    body that DOES match a container is a stub, not a miss — see
+    _BODY_STUB_CHARS / body_is_stub.
     """
     for _wire, cls in _BODY_SELECTORS:
         node = soup.find("div", class_=cls)
@@ -1433,6 +1457,11 @@ def _fetch_body(soup) -> Optional[str]:
             text = node.get_text(" ", strip=True)
             if text:
                 return text
+    nodes = soup.find_all("div", class_=_BODY_FALLBACK_SELECTOR)
+    if len(nodes) == 1:
+        text = nodes[0].get_text(" ", strip=True)
+        if text:
+            return text
     return None
 
 
