@@ -907,6 +907,58 @@ do not pick a score and then justify it:
                                        or the table row, whichever you took it
                                        from. The amount in `value` must be one
                                        of the numbers in it.
+                       breakdown      array or null — ONLY when the announcement
+                                       itself prints a reconciliation bridging
+                                       net debt to its components (borrowings,
+                                       cash, lease liabilities and similar).
+                                       Most announcements print no such bridge —
+                                       a single "Net debt £X (£Y)" line with
+                                       nothing under it — and breakdown must be
+                                       null for those, not a single-item array
+                                       repeating `value`. This is what makes the
+                                       page trustworthy rather than another bare
+                                       assertion: showing where £147.2m of net
+                                       debt actually comes from.
+                                         Worked example, copied verbatim from an
+                                       announcement's own note:
+                                         Total loans and borrowings   (30.0)  (30.2)
+                                         Cash and short-term deposits  86.8    75.4
+                                         Net debt excl. IFRS 16 leases 56.8    45.4
+                                         IFRS 16 lease liabilities   (204.0) (200.1)
+                                         Net debt                    (147.2) (154.7)
+                                       becomes:
+                                         [{"label": "Total loans and borrowings",
+                                           "value": "(30.0)", "prior_value": "(30.2)"},
+                                          {"label": "Cash and short-term deposits",
+                                           "value": "86.8", "prior_value": "75.4"},
+                                          {"label": "Net debt excluding IFRS 16 leases",
+                                           "value": "56.8", "prior_value": "45.4"},
+                                          {"label": "IFRS 16 lease liabilities",
+                                           "value": "(204.0)", "prior_value": "(200.1)"}]
+                                       — every row EXCEPT the final "Net debt"
+                                       total, which is already `value` above and
+                                       would only duplicate it here.
+                                         COPY the row labels and figures exactly
+                                       as printed, including brackets — do not
+                                       add a currency symbol the row doesn't
+                                       have, do not rename a label, do not
+                                       reorder the rows, do not add up rows the
+                                       announcement doesn't itself total. At
+                                       most 6 rows; keep the ones nearest the
+                                       final net-debt line if there are more.
+                       breakdown_quote the verbatim reconciliation excerpt
+                                       breakdown was copied from — the whole
+                                       note or table, not just the final line.
+                                       This is a SEPARATE excerpt from `quote`
+                                       above (that one is the headline "Net
+                                       debt £X" sentence; this one is the note
+                                       underneath it, usually numbered, often
+                                       several lines). Required whenever
+                                       breakdown is non-null — every figure in
+                                       breakdown must appear somewhere in it.
+                                       Leave both breakdown and
+                                       breakdown_quote null together when there
+                                       is no such note.
 
 Return JSON only — no preamble, no code fence."""
 
@@ -1638,6 +1690,70 @@ def _nd_quote_supports_value(value: str, quote: str) -> bool:
     return False
 
 
+# Kept short deliberately — RNK.L's own note has 4 (excluding the total,
+# which is `value` above and would only duplicate it), and a longer array
+# starts looking like the whole balance sheet rather than a bridge.
+_ND_BREAKDOWN_MAX = 6
+
+
+def _clean_net_debt_breakdown(raw, breakdown_quote) -> tuple:
+    """The reconciliation rows behind `value`, if the announcement printed one.
+
+    Checked against `breakdown_quote` — a SEPARATE excerpt from the headline
+    `quote`, added after the first live run against RNK.L 9719084 got the
+    bridge exactly right (all 4 rows, both columns, matching note 11 to the
+    decimal) but got rejected anyway: the model left the headline `quote` as
+    just "Net debt £147.2m £154.7m (5)%" and never widened it the way the
+    original single-quote design asked, so every row failed the mantissa
+    check against text that never contained it. Reusing one field for two
+    different excerpts (the headline sentence AND the whole note) was asking
+    the model to serve two masters; giving breakdown its own field fixed it
+    on the next run with no other change.
+
+    No breakdown_quote at all means the breakdown cannot be checked against
+    anything, so it is dropped entirely — same contract as the headline
+    figure's "no quote is a failed guard, not a pass".
+
+    Item-level filtering otherwise, not all-or-nothing: a bridge with one bad
+    row is still worth showing minus that row, the same call
+    _clean_earnings_quality makes for its own array. Each row's value is
+    checked with the same mantissa match _nd_quote_supports_value uses for the
+    headline figure — a fabricated breakdown row would be exactly as
+    misleading here as a fabricated total.
+
+    Returns (breakdown, breakdown_quote) — None, None when nothing survives,
+    so the frontend can tell "no bridge in this announcement" from "bridge
+    present but every row was rejected" the same way: there's nothing to show
+    either way, and no orphaned quote with no rows to explain.
+    """
+    if not isinstance(raw, list) or not raw:
+        return None, None
+    bq = str(breakdown_quote or "").strip()[:800]
+    if not bq:
+        print("[rns-llm] net_debt_reported breakdown present but no breakdown_quote, dropping")
+        return None, None
+    out = []
+    for entry in raw[:_ND_BREAKDOWN_MAX]:
+        if not isinstance(entry, dict):
+            continue
+        label = str(entry.get("label") or "").strip()[:100]
+        value = str(entry.get("value") or "").strip()[:60]
+        if not label or not value:
+            continue
+        if not _nd_quote_supports_value(value, bq):
+            print(
+                f"[rns-llm] net_debt_reported breakdown row {label!r}={value!r} "
+                f"not in breakdown_quote, dropping row"
+            )
+            continue
+        out.append({
+            "label": label,
+            "value": value,
+            "prior_value": str(entry.get("prior_value") or "").strip()[:60] or None,
+        })
+    return (out, bq) if out else (None, None)
+
+
 def _clean_net_debt_reported(raw) -> Optional[dict]:
     """Normalise the model's net_debt_reported object before it is stored.
 
@@ -1732,6 +1848,9 @@ def _clean_net_debt_reported(raw) -> Optional[dict]:
         )
         return {"found": False}
 
+    breakdown, breakdown_quote = _clean_net_debt_breakdown(
+        raw.get("breakdown"), raw.get("breakdown_quote")
+    )
     return {
         "found": True,
         "value": value,
@@ -1741,6 +1860,8 @@ def _clean_net_debt_reported(raw) -> Optional[dict]:
         "leverage": _s("leverage", 30),
         "prior_leverage": _s("prior_leverage", 30),
         "quote": quote,
+        "breakdown": breakdown,
+        "breakdown_quote": breakdown_quote,
     }
 
 

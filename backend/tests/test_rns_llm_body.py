@@ -750,6 +750,118 @@ def test_clean_net_debt_reported_keeps_a_negative_answer():
         assert rns_llm._clean_net_debt_reported(raw) is None
 
 
+# ── net_debt_reported breakdown (the reconciliation bridge) ──────────────────
+# RNK.L 9719084's own note 11, verbatim — the worked example in the prompt.
+# TWO separate quotes on purpose: `quote` is the headline "Net debt £X" line,
+# `breakdown_quote` is the note underneath it. The first live run against this
+# exact row got the bridge exactly right but stored it under one shared quote
+# field, which the model never widened to cover the note — so every row failed
+# the mantissa check against text that never contained it. Splitting the field
+# fixed it on the very next run with no other change; see
+# rns_llm._clean_net_debt_breakdown's docstring.
+_RNK_HEADLINE_QUOTE = "Net debt £147.2m £154.7m (5)%"
+_RNK_BREAKDOWN_QUOTE = (
+    "Total loans and borrowings (30.0) (30.2) Adjusted for: Accrued interest "
+    "- 0.2 (30.0) (30.0) Cash and short-term deposits 86.8 75.4 Net debt "
+    "excluding IFRS 16 lease liabilities 56.8 45.4 IFRS 16 lease liabilities "
+    "(204.0) (200.1) Net debt (147.2) (154.7)"
+)
+_RNK_BRIDGE_ROWS = [
+    {"label": "Total loans and borrowings", "value": "(30.0)", "prior_value": "(30.2)"},
+    {"label": "Cash and short-term deposits", "value": "86.8", "prior_value": "75.4"},
+    {"label": "Net debt excluding IFRS 16 lease liabilities", "value": "56.8", "prior_value": "45.4"},
+    {"label": "IFRS 16 lease liabilities", "value": "(204.0)", "prior_value": "(200.1)"},
+]
+
+
+def test_clean_net_debt_reported_carries_a_genuine_bridge():
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£147.2m", "quote": _RNK_HEADLINE_QUOTE,
+        "breakdown": _RNK_BRIDGE_ROWS, "breakdown_quote": _RNK_BREAKDOWN_QUOTE,
+    })
+    assert out["found"] is True
+    labels = [r["label"] for r in out["breakdown"]]
+    assert labels == [r["label"] for r in _RNK_BRIDGE_ROWS]
+    assert out["breakdown"][3]["value"] == "(204.0)"
+    assert out["breakdown"][3]["prior_value"] == "(200.1)"
+    assert out["breakdown_quote"] == _RNK_BREAKDOWN_QUOTE
+
+
+def test_clean_net_debt_reported_breakdown_absent_by_default():
+    """The common case — a single "Net debt £X" line with no bridge under it —
+    must not synthesize a one-row breakdown that only repeats `value`."""
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£147.2m", "quote": _RNK_HEADLINE_QUOTE,
+    })
+    assert out["breakdown"] is None
+    assert out["breakdown_quote"] is None
+
+
+def test_clean_net_debt_reported_breakdown_requires_its_own_quote():
+    """A breakdown array with no breakdown_quote at all cannot be checked
+    against anything and is dropped whole, same contract as the headline
+    figure's own "no quote is a failed guard, not a pass"."""
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£147.2m", "quote": _RNK_HEADLINE_QUOTE,
+        "breakdown": _RNK_BRIDGE_ROWS,
+    })
+    assert out["breakdown"] is None
+    assert out["breakdown_quote"] is None
+
+
+def test_clean_net_debt_reported_breakdown_drops_a_fabricated_row():
+    """Same guard as the headline figure, applied per row: a number absent from
+    breakdown_quote is dropped rather than trusted, without discarding the
+    rows that do check out."""
+    rows = _RNK_BRIDGE_ROWS + [
+        {"label": "Off-balance-sheet financing", "value": "£999.0m", "prior_value": None},
+    ]
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£147.2m", "quote": _RNK_HEADLINE_QUOTE,
+        "breakdown": rows, "breakdown_quote": _RNK_BREAKDOWN_QUOTE,
+    })
+    labels = [r["label"] for r in out["breakdown"]]
+    assert "Off-balance-sheet financing" not in labels
+    assert len(labels) == 4
+
+
+def test_clean_net_debt_reported_breakdown_none_when_every_row_fails():
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£147.2m", "quote": _RNK_HEADLINE_QUOTE,
+        "breakdown": [{"label": "Invented line", "value": "£777.7m"}],
+        "breakdown_quote": _RNK_BREAKDOWN_QUOTE,
+    })
+    assert out["breakdown"] is None
+    assert out["breakdown_quote"] is None
+
+
+def test_clean_net_debt_reported_breakdown_caps_row_count():
+    rows = [
+        {"label": f"Row {i}", "value": f"{10 + i}.0", "prior_value": None}
+        for i in range(10)
+    ]
+    bq = "some rows: " + " ".join(f"{10 + i}.0" for i in range(10))
+    out = rns_llm._clean_net_debt_reported({
+        "found": True, "value": "£147.2m", "quote": _RNK_HEADLINE_QUOTE,
+        "breakdown": rows, "breakdown_quote": bq,
+    })
+    assert len(out["breakdown"]) == rns_llm._ND_BREAKDOWN_MAX
+
+
+def test_clean_net_debt_reported_breakdown_ignored_on_a_negative_answer():
+    # {"found": false} carries no other field, breakdown included.
+    out = rns_llm._clean_net_debt_reported({
+        "found": False, "breakdown": _RNK_BRIDGE_ROWS,
+        "breakdown_quote": _RNK_BREAKDOWN_QUOTE,
+    })
+    assert out == {"found": False}
+
+
+def test_prompt_asks_for_the_reconciliation_bridge():
+    assert "IFRS 16 lease liabilities" in rns_llm._JSON_SCHEMA_BLOCK
+    assert "breakdown" in rns_llm._JSON_SCHEMA_BLOCK
+
+
 def test_save_ranking_persists_net_debt_reported_as_json():
     with patch("rns_llm._get_pool") as mock_pool:
         conn = mock_pool.return_value.getconn.return_value

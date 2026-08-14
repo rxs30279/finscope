@@ -770,6 +770,34 @@ function ReportedNumbers({ r }) {
             below, this one is right — and the comparator is usually the previous
             balance-sheet date, not the same date a year earlier.
           </div>
+
+          {/* The bridge behind the headline figure, where the announcement
+              prints one — most don't (a bare "Net debt £X" line with nothing
+              under it), so this is absent more often than present. When it IS
+              there, showing it is the whole point: RNK.L's headline £147.2m
+              means nothing on its own, but "borrowings £30.0m, cash £86.8m,
+              PLUS £204.0m of lease liabilities" is the actual answer to "is
+              this company really that levered". Rows only, never the total —
+              ownDebt.value above already is the total. */}
+          {ownDebt.breakdown && ownDebt.breakdown.length > 0 && (
+            <div style={{ marginTop: 8, overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: "monospace", width: "100%" }}>
+                <tbody>
+                  {ownDebt.breakdown.map((row, i) => (
+                    <tr key={i} style={{ borderTop: i > 0 ? "1px solid #1e293b" : "none" }}>
+                      <td style={{ padding: "3px 8px 3px 0", color: "#94a3b8" }}>{row.label}</td>
+                      <td style={{ padding: "3px 8px 3px 0", color: "#e2e8f0", textAlign: "right", whiteSpace: "nowrap" }}>
+                        {row.value}
+                      </td>
+                      <td style={{ padding: "3px 0", color: "#64748b", textAlign: "right", whiteSpace: "nowrap" }}>
+                        {row.prior_value || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
