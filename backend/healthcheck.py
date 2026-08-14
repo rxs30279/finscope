@@ -479,25 +479,66 @@ def run_db_checks(query_one=None) -> None:
         # stable but aren't guaranteed), so a page-layout change could
         # silently zero out every future body capture while
         # summary_fetched_at — and the rest of the pipeline — keeps looking
-        # healthy. WARN below ~80% so that regression has a visible signal
-        # instead of quietly reverting to pre-body-capture behaviour (the
-        # ranker/vet back to reading only the third-party AI summary).
+        # healthy. This check is that regression's only visible signal.
+        #
+        # Measures extraction, NOT body length. An announcement that only
+        # points at an external PDF is a stub, and capturing it as one is the
+        # scraper working correctly — the earlier version of this check scored
+        # stubs as failures, which put its own ceiling at ~90% and left the
+        # 80% threshold flapping on the natural stub rate rather than on rot.
+        # Stubs are surfaced below but never judged.
         row = query_one("""
-            SELECT COUNT(*) FILTER (WHERE body_fetched_at IS NOT NULL) AS attempted,
-                   COUNT(*) FILTER (WHERE body_fetched_at IS NOT NULL
-                                       AND body_is_stub IS NOT TRUE
-                                       AND body_chars IS NOT NULL) AS ok
-              FROM rns_announcements
-             WHERE tier IN ('A', 'B')
-               AND published_at >= NOW() - INTERVAL '3 days'
+            WITH scoped AS (
+                SELECT COALESCE(NULLIF(split_part(url, '/', 5), ''), '?') AS wire,
+                       body_chars, body_is_stub
+                  FROM rns_announcements
+                 WHERE tier IN ('A', 'B')
+                   AND body_fetched_at IS NOT NULL
+                   AND published_at >= NOW() - INTERVAL '3 days'
+            )
+            SELECT COUNT(*) AS attempted,
+                   COUNT(*) FILTER (WHERE body_chars IS NOT NULL) AS extracted,
+                   COUNT(*) FILTER (WHERE body_is_stub) AS stub,
+                   COUNT(*) FILTER (WHERE body_chars IS NULL
+                                      AND wire IN ('rns', 'prn')) AS core_missed,
+                   (SELECT string_agg(n || ' ' || wire, ', ' ORDER BY n DESC, wire)
+                      FROM (SELECT wire, COUNT(*) AS n
+                              FROM scoped WHERE body_chars IS NULL
+                             GROUP BY wire) g) AS missed_by_wire
+              FROM scoped
         """)
         attempted = (row or {}).get("attempted") or 0
         if attempted == 0:
             return PASS, "no tier A/B rows in the last 3 days"
-        ok = row["ok"] or 0
-        share = ok / attempted
-        status = WARN if share < 0.80 else PASS
-        return status, f"{ok}/{attempted} recent A/B rows have a non-stub body ({share:.0%})"
+        extracted = row["extracted"] or 0
+        stub = row["stub"] or 0
+        missed = attempted - extracted
+        share = extracted / attempted
+
+        # Two signals, worst wins. The overall rate catches a wire we have no
+        # selector for at all (investegate carries at least seven — the four
+        # beyond rns/prn/ukn are covered only by the generic `news-window`
+        # fallback in rns._fetch_body, which is exactly the kind of coverage
+        # that can lapse when a new wire appears). Measured over the nine weeks
+        # to 2026-08-14 this sits at 97.8-100% per window, the residual being
+        # `ukn` pages whose container is present but genuinely empty, so 90%
+        # leaves room for that noise while real rot craters the rate.
+        overall = _tier(1 - share, warn_at=0.10, fail_at=0.50)
+        # The sharper signal, and the one this check was built for: rns and prn
+        # are the wires with dedicated precise selectors and ~96% of the volume,
+        # and they missed once in 1456 rows over those nine weeks. A handful of
+        # misses is invisible in the overall rate (5 of 90 still reads 94%) but
+        # against a 1-in-1456 baseline it is the leading edge of rot.
+        core = _tier(row["core_missed"] or 0, warn_at=3, fail_at=10)
+        status = max(overall, core, key=[PASS, WARN, FAIL].index)
+
+        detail = f"{extracted}/{attempted} recent A/B rows yielded a body ({share:.0%})"
+        if missed:
+            detail += f" — no container on {row['missed_by_wire']}"
+        # Always surfaced, never judged: a rising stub share means more
+        # PDF-only announcements, which is a property of the feed rather than
+        # of the scraper.
+        return status, detail + f", {stub} stubs (not judged)"
 
     @check("financials.rotation")
     def _financials():
