@@ -29,6 +29,24 @@ def _no_vet_network():
         yield
 
 
+def _vet_messages(cand, annual=None, **kw):
+    """Call showcase._vet_messages with the body_text production would pass.
+
+    showcase._vet_messages takes body_text as a required argument — the
+    candidate-to-text mapping belongs to _vet_full_text alone, so there is no
+    fallback in the prompt builder to lean on. Rather than reimplement that
+    mapping here, delegate to the real thing: under the autouse
+    _no_vet_network fixture the re-fetch returns None, so _vet_full_text falls
+    back to the stored body (or the stub message), which is what these prompt
+    tests mean when they say _cand(body=...).
+
+    Every _vet_messages call site in this file runs under that fixture; the
+    tests that re-patch the fetch boundary with real text all target
+    _vet_full_text directly and do not come through here."""
+    kw.setdefault("body_text", showcase._vet_full_text(cand))
+    return showcase._vet_messages(cand, annual, **kw)
+
+
 def _cand(**kw):
     base = dict(
         id=1, symbol="ABC.L", company_name="Abc plc", headline="FY results",
@@ -141,7 +159,7 @@ def test_vet_prompt_includes_annual_history():
          "revenue": 359_745_000, "operating_income": 82_944_000,
          "net_income": 46_886_000, "eps_diluted": 0.167},
     ]
-    msgs = showcase._vet_messages(_cand(), annual)
+    msgs = _vet_messages(_cand(), annual)
     user = msgs[1]["content"]
     assert "FY ended 2024-03-31" in user
     assert "revenue £359.7m" in user
@@ -150,24 +168,24 @@ def test_vet_prompt_includes_annual_history():
     system = msgs[0]["content"]
     assert "NEVER fill gaps from your memory" in system
     # no history → explicit no-data line, not a silent omission
-    empty = showcase._vet_messages(_cand(), [])[1]["content"]
+    empty = _vet_messages(_cand(), [])[1]["content"]
     assert "no stored annual financials" in empty
 
 
 def test_vet_prompt_includes_body_as_primary_source():
-    msgs = showcase._vet_messages(_cand(body="Full announcement text here."), [])
+    msgs = _vet_messages(_cand(body="Full announcement text here."), [])
     user = msgs[1]["content"]
     assert "Full announcement text here." in user
     assert "primary source" in user
 
 
 def test_vet_prompt_body_missing_shows_not_available():
-    user = showcase._vet_messages(_cand(body=None), [])[1]["content"]
+    user = _vet_messages(_cand(body=None), [])[1]["content"]
     assert "(not available)" in user
 
 
 def test_vet_prompt_stub_body_says_unavailable_external_document():
-    user = showcase._vet_messages(
+    user = _vet_messages(
         _cand(body="short stub", body_is_stub=True), []
     )[1]["content"]
     assert "links to an external document" in user
@@ -291,7 +309,7 @@ def test_sequential_base_context_empty_when_nothing_establishable():
 
 def test_vet_prompt_includes_sequential_block_when_present():
     with patch.object(showcase, "_annual_history", return_value=[{"revenue": 4_561.2e6}]):
-        msgs = showcase._vet_messages(
+        msgs = _vet_messages(
             _cand(symbol="FRES.L", earnings_quality=_FRES_EQ_WITH_REVENUE), []
         )
     user = msgs[1]["content"]
@@ -301,7 +319,7 @@ def test_vet_prompt_includes_sequential_block_when_present():
 
 
 def test_vet_prompt_omits_sequential_block_when_absent():
-    msgs = showcase._vet_messages(_cand(earnings_quality=None), [])
+    msgs = _vet_messages(_cand(earnings_quality=None), [])
     assert "Sequential comparison" not in msgs[1]["content"]
 
 
@@ -363,7 +381,7 @@ def test_one_off_materiality_context_silent_when_nothing_quantifiable():
 
 
 def test_vet_prompt_includes_one_off_block_and_its_absence_guard():
-    msgs = showcase._vet_messages(
+    msgs = _vet_messages(
         _cand(symbol="HSX.L", earnings_quality=_HSX_EQ_FIXED), []
     )
     assert "Named one-off materiality" in msgs[1]["content"]
@@ -374,7 +392,7 @@ def test_vet_prompt_includes_one_off_block_and_its_absence_guard():
 
 
 def test_vet_prompt_omits_one_off_block_when_absent():
-    msgs = showcase._vet_messages(_cand(earnings_quality=None), [])
+    msgs = _vet_messages(_cand(earnings_quality=None), [])
     assert "Named one-off materiality" not in msgs[1]["content"]
 
 
@@ -2084,12 +2102,12 @@ def test_price_context_degrades_without_history():
 
 
 def test_vet_prompt_carries_price_context_and_neutral_framing():
-    user = showcase._vet_messages(_cand(), [], price_context="  1 month +22.1%, 6 months +14.1%")[1]["content"]
+    user = _vet_messages(_cand(), [], price_context="  1 month +22.1%, 6 months +14.1%")[1]["content"]
     assert "1 month +22.1%" in user
     assert "before this announcement" in user.lower()
     # The rubric must not tell the model that a strong prior run is bad — that
     # would be calibrating a direction on zero evidence.
-    system = showcase._vet_messages(_cand(), [])[0]["content"]
+    system = _vet_messages(_cand(), [])[0]["content"]
     assert "context, not as a verdict in either direction" in system
 
 
@@ -2111,7 +2129,7 @@ def test_vet_prompt_renders_annuals_in_the_reporting_currency():
     in front of the model that appears nowhere in the announcement it is being
     told to check the series against.
     """
-    user = showcase._vet_messages(
+    user = _vet_messages(
         _cand(financial_currency="USD"), _USD_ANNUAL
     )[1]["content"]
     assert "revenue $284,000.0m" in user
@@ -2126,7 +2144,7 @@ def test_vet_prompt_renders_annuals_in_the_reporting_currency():
 
 
 def test_vet_prompt_gbp_still_renders_pounds_and_pence():
-    user = showcase._vet_messages(
+    user = _vet_messages(
         _cand(financial_currency="GBP"),
         [{"fiscal_year": 2024, "period_end_date": "2024-03-31",
           "revenue": 359_745_000, "eps_diluted": 0.167}],
@@ -2138,7 +2156,7 @@ def test_vet_prompt_gbp_still_renders_pounds_and_pence():
 def test_vet_prompt_unmapped_currency_uses_the_bare_code():
     # "$" alone cannot separate USD from CAD/AUD, so anything outside the
     # symbol map must name itself.
-    user = showcase._vet_messages(
+    user = _vet_messages(
         _cand(financial_currency="CAD"), _USD_ANNUAL
     )[1]["content"]
     assert "revenue CAD 284,000.0m" in user
@@ -2148,7 +2166,7 @@ def test_vet_prompt_unmapped_currency_uses_the_bare_code():
 def test_vet_prompt_missing_currency_is_labelled_an_assumption():
     # GBP is the right default for a UK-listed universe, but it is a guess and
     # the prompt says so rather than passing it off as fact.
-    user = showcase._vet_messages(_cand(), _USD_ANNUAL)[1]["content"]
+    user = _vet_messages(_cand(), _USD_ANNUAL)[1]["content"]
     assert "revenue £284,000.0m" in user
     assert "reporting currency not on file, assumed" in user
 
@@ -2167,7 +2185,7 @@ _GUIDANCE = [
 def test_vet_prompt_carries_the_rankers_guidance_extraction():
     """The vet's first named job is catching a quiet guidance cut, and the
     ranker had already extracted the comparison it was re-deriving from text."""
-    user = showcase._vet_messages(
+    user = _vet_messages(
         _cand(guidance_checks=_GUIDANCE), []
     )[1]["content"]
     assert "Adjusted Operating Profit (FY2026): guided > £40m" in user
@@ -2185,14 +2203,14 @@ def test_vet_prompt_separates_no_guidance_from_no_extraction():
     # NULL means the ranker emitted nothing; [] means it read the announcement
     # and found no forward statement. Collapsing them would tell the model a
     # company guided nothing when in fact nobody looked.
-    absent = showcase._vet_messages(_cand(guidance_checks=None), [])[1]["content"]
+    absent = _vet_messages(_cand(guidance_checks=None), [])[1]["content"]
     assert "not extracted for this announcement" in absent
-    empty = showcase._vet_messages(_cand(guidance_checks=[]), [])[1]["content"]
+    empty = _vet_messages(_cand(guidance_checks=[]), [])[1]["content"]
     assert "found no forward-looking statement" in empty
 
 
 def test_vet_system_prompt_teaches_the_reiterated_below_combination():
-    system = showcase._vet_messages(_cand(), [])[0]["content"]
+    system = _vet_messages(_cand(), [])[0]["content"]
     # The one combination the guidance gate exists for.
     assert "reiterated AND below a consensus" in system
     # And the trap in the other direction — most announcements print no
@@ -2202,11 +2220,11 @@ def test_vet_system_prompt_teaches_the_reiterated_below_combination():
 
 # ── Company size ──────────────────────────────────────────────────────────────
 def test_vet_prompt_carries_market_cap():
-    big = showcase._vet_messages(_cand(market_cap=1.61e9), [])[1]["content"]
+    big = _vet_messages(_cand(market_cap=1.61e9), [])[1]["content"]
     assert "Market cap £1.61bn" in big
-    small = showcase._vet_messages(_cand(market_cap=62_500_000), [])[1]["content"]
+    small = _vet_messages(_cand(market_cap=62_500_000), [])[1]["content"]
     assert "Market cap £62.5m" in small
-    none = showcase._vet_messages(_cand(market_cap=None), [])[1]["content"]
+    none = _vet_messages(_cand(market_cap=None), [])[1]["content"]
     assert "market cap not on file" in none
 
 
@@ -2214,7 +2232,7 @@ def test_market_cap_warns_when_it_and_the_accounts_differ_in_currency():
     """market_cap is in the QUOTE currency, annual_financials in the REPORTING
     currency. For HSBA that is GBP against USD — a ratio across the two is
     wrong by the FX rate with nothing in the output to reveal it."""
-    usd = showcase._vet_messages(
+    usd = _vet_messages(
         _cand(market_cap=270.26e9, currency="GBp", financial_currency="USD"), []
     )[1]["content"]
     assert "Market cap £270.26bn" in usd
@@ -2226,13 +2244,13 @@ def test_market_cap_stays_quiet_when_gbp_quote_meets_gbp_accounts():
     # "GBp" and "GBP" are the same currency — the stored cap is in pounds, not
     # pence (verified against GRG's own share count). A warning here would be
     # noise on ~99% of the universe.
-    gbp = showcase._vet_messages(
+    gbp = _vet_messages(
         _cand(market_cap=1.61e9, currency="GBp", financial_currency="GBP"), []
     )[1]["content"]
     assert "Market cap £1.61bn" in gbp
     assert "DIFFERENT currency" not in gbp
     # Unknown reporting currency must not warn either — nothing is known to differ.
-    unknown = showcase._vet_messages(
+    unknown = _vet_messages(
         _cand(market_cap=1.61e9, currency="GBp", financial_currency=None), []
     )[1]["content"]
     assert "DIFFERENT currency" not in unknown
@@ -2248,7 +2266,7 @@ def test_vet_prompt_score_bands_agree_with_the_publish_floor():
     publish floor, so the one boundary that decides publication was described
     two incompatible ways.
     """
-    msgs = showcase._vet_messages(_cand(), [])
+    msgs = _vet_messages(_cand(), [])
     system, user = msgs[0]["content"], msgs[1]["content"]
     pub = showcase.HIGH_IMPACT_MIN_VET_SCORE
     ex_cap = showcase._VET_VERDICT_SCORE_CAP["exclude"]

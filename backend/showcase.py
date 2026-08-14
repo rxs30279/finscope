@@ -550,12 +550,6 @@ def _vet_full_text(cand: dict) -> str:
     return _head_tail(full, _VET_BODY_HEAD, _VET_BODY_TAIL)
 
 
-def _vet_body_text(cand: dict) -> str:
-    if cand.get("body_is_stub"):
-        return "(body unavailable — announcement links to an external document)"
-    return cand.get("body") or "(not available)"
-
-
 def _price_context(symbol: Optional[str], before=None) -> str:
     """1m/6m price change for the vet, or an explicit no-data line.
 
@@ -847,10 +841,14 @@ def _one_off_materiality_context(cand: dict) -> str:
 _VET_VERDICT_SCORE_CAP = {"exclude": 40, "caution": 74}
 
 
+# body_text is required, with no cand-derived fallback: the mapping from a
+# candidate to its announcement text is _vet_full_text's job alone (it
+# re-fetches the page — see the note there), and a default here would silently
+# render the stored 24k-capped body instead on any call that forgot to pass it.
 def _vet_messages(
     cand: dict,
-    annual: Optional[list[dict]] = None,
-    body_text: Optional[str] = None,
+    annual: Optional[list[dict]],
+    body_text: str,
     price_context: Optional[str] = None,
 ) -> list[dict]:
     # Score bands, derived from the thresholds they have to agree with rather
@@ -993,7 +991,7 @@ Investegate AI summary
 
 Announcement text (verbatim, may be truncated) — this is the primary source;
 the summary above is a useful lead but can omit or misread material detail
-  {body_text if body_text is not None else _vet_body_text(cand)}
+  {body_text}
 
 Forward guidance, as extracted from THIS announcement by an earlier automated
 read of it. Not an independent source — same document, same model, one pass
@@ -1067,11 +1065,37 @@ Return JSON only — no preamble, no code fence."""
 #
 # Sized off the ranker's measurements rather than guessed: a typical reasoning
 # chain on this feed ran ~2,500 tokens and complex large-cap results reached
-# 17,000 (see rns_llm._MAX_COMPLETION_TOKENS). The vet sees a truncated body and
-# asks a narrower question than the ranker, so 8,000 with the retry at 16,000
-# should clear it — but the vet's whole job is the announcements where the
-# arithmetic is hard, which are the long ones. Watch the [showcase_vet] line in
-# the cron log: a cap is not a target, it bills what is generated.
+# 17,000 (see rns_llm._MAX_COMPLETION_TOKENS). Do NOT read that as headroom the
+# vet also needs. The ranker's blowups track answer complexity, not body length
+# — its own note records 14k-char rows costing 17,000 while 167k-char rows
+# scored fine — and the ranker emits a far bigger answer: earnings_quality,
+# guidance_checks, the one-off array, the forward-profit extraction, thesis and
+# risks, 700-1,900 tokens of JSON with reasoning to fill every field. The vet
+# emits a verdict, a confidence, a sentence or two and low_base. It also no
+# longer derives the two expensive figures — the sequential base and the
+# one-off ratio are handed over as facts (_annual_lines,
+# _one_off_materiality_context), which cut the reasoning as a side effect of
+# fixing the arithmetic.
+#
+# So: longer input than the ranker (_vet_full_text re-fetches, 60k+20k chars vs
+# the stored 24k cap), much narrower job. Measured 2026-08-14 on RNK.L —
+# prompt 21,545 tokens, completion 4,759 of which 4,540 reasoning and only 219
+# answer. 57% of this budget on a mid-complexity row.
+#
+# Verified 2026-08-14: 17 vetted rows since the full re-fetch shipped (08-04),
+# ZERO with a NULL vet_score, and 13 of them were stored at the 24k body cap —
+# HSBA, ANTO, FRES, PSN, BBY among them, i.e. the same large-cap interims that
+# broke the RANKER at this identical 8,000 cap on 07-31. The tail is tested; a
+# give-up has never happened here.
+#
+# The first-attempt retry rate is a different number and is effectively
+# UNMEASURABLE after the fact: it exists only as the print in
+# rns_llm._call_deepseek, and the per-run cron logs keep 11 runs (~2h45m at
+# */15). A retry that then succeeded stores a perfectly normal row. If you need
+# that rate, persist it — don't go looking in the logs for it.
+#
+# Watch the [showcase_vet] line in the cron log: a cap is not a target, it
+# bills what is generated.
 _VET_MAX_COMPLETION_TOKENS = int(os.environ.get("SHOWCASE_VET_MAX_TOKENS", "8000"))
 
 # DO NOT reach for temperature to make vet_score reproducible — it does nothing
