@@ -680,6 +680,29 @@ def process_stock(symbol: str):
             ]:
                 latest[field] = calc_medians(annual_rows, col)
 
+        # Currency, stamped only on a fiscal year's true first insert — never
+        # on an update of a row that already exists. yfinance's
+        # financialCurrency is a live snapshot, not a per-period fact: HILS.L
+        # switched GBP -> USD mid-cycle (its FY2025 annual report is GBP, its
+        # H1 2026 interim is USD), and stamping every run's snapshot onto
+        # every fiscal year would silently relabel FY2025's real £868.8m as
+        # $868.8m the next time this symbol is refreshed. Restricting the
+        # stamp to genuinely new rows means each fiscal year is tagged once,
+        # with whatever currency was actually in force when it first closed —
+        # see migration 034 and gates._low_base_fy_series, the consumer this
+        # protects.
+        existing_fys = {
+            r["fiscal_year"]
+            for r in db_query(
+                "SELECT fiscal_year FROM annual_financials WHERE company_symbol = %s",
+                (symbol,),
+            )
+        }
+        reporting_currency = info.get("financialCurrency")
+        for row in annual_rows:
+            if reporting_currency and row["fiscal_year"] not in existing_fys:
+                row["currency"] = reporting_currency
+
         conn = get_conn()
         cur = conn.cursor()
         inserted = 0

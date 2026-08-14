@@ -289,7 +289,9 @@ def _normalize_period(raw) -> Optional[str]:
 _SEASONAL_WORSENING_PP = 5.0
 
 
-def _low_base_fy_series(symbol: Optional[str], metric: str, n: int = 2) -> list:
+def _low_base_fy_series(
+    symbol: Optional[str], metric: str, n: int = 2, currency: Optional[str] = None
+) -> list:
     """The last `n` COMPLETE fiscal years' values for `metric`, newest first.
 
     An interim announcement's prior-year comparator period (e.g. "H1 2025")
@@ -298,6 +300,16 @@ def _low_base_fy_series(symbol: Optional[str], metric: str, n: int = 2) -> list:
     year containing the current period hasn't closed yet, so it can't be
     there instead. The second element is the year before that, needed to
     derive the company's own seasonal step a year earlier (test A).
+
+    `currency`, when given, is the announcement's own reporting currency
+    (cand["financial_currency"]). A row is nulled out — not returned — when
+    its stored currency is POSITIVELY known and disagrees with it: HILS.L
+    reported its FY2025 annual results in GBP and its H1 2026 interim in USD
+    after switching mid-cycle, and subtracting one from the other produced a
+    fabricated "preceding half" (migration 034). A row whose currency is
+    unknown (NULL — true of every row written before that migration) is left
+    alone rather than guessed at, so this only ever removes a row the
+    database can actually name a conflicting currency for.
     """
     from showcase import _annual_history
 
@@ -305,6 +317,9 @@ def _low_base_fy_series(symbol: Optional[str], metric: str, n: int = 2) -> list:
     out = []
     for h in reversed(hist):
         v = h.get(metric)
+        row_ccy = h.get("currency")
+        if v is not None and currency and row_ccy and row_ccy != currency:
+            v = None
         out.append(float(v) if v is not None else None)
         if len(out) >= n:
             break
@@ -392,7 +407,9 @@ def compute_sequential_base(cand: dict) -> dict:
         if metric not in _LOW_BASE_METRICS:
             return {"ok": False, "reason": "metric_unmapped"}
 
-        fy = _low_base_fy_series(cand.get("symbol"), metric, 2)
+        fy = _low_base_fy_series(
+            cand.get("symbol"), metric, 2, currency=cand.get("financial_currency")
+        )
         if not fy or fy[0] is None:
             return {"ok": False, "reason": "no_annual_history"}
 

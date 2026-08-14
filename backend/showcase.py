@@ -340,7 +340,12 @@ def _annual_history(symbol: Optional[str], before=None, years: int = 5) -> list[
                -- this call exists to find — and none of it was reachable from
                -- revenue/operating income/net income alone.
                fcf, net_debt, total_equity,
-               operating_margin, net_income_margin, roce
+               operating_margin, net_income_margin, roce,
+               -- NULL for any row written before migration 034 — see that
+               -- migration for why gates._low_base_fy_series treats NULL as
+               -- "unknown", not "matches", when it cross-checks this against
+               -- the announcement's own currency.
+               currency
         FROM annual_financials
         WHERE company_symbol = %s
           AND (%s::date IS NULL OR period_end_date < %s::date)
