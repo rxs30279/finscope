@@ -1961,7 +1961,7 @@ def test_sequential_summary_reproduces_the_figure_the_vet_quotes():
     with patch.object(showcase, "_annual_history",
                       return_value=[{"revenue": 8_620_300_000.0}]):
         out = showcase._sequential_summary(
-            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}
+            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}, {}
         )
     assert out[7]["preceding_value"] == 4_820_900_000.0
     assert out[7]["delta_pct"] == -7.1
@@ -1976,7 +1976,7 @@ def test_sequential_summary_names_the_half_the_ui_must_label():
     with patch.object(showcase, "_annual_history",
                       return_value=[{"revenue": 8_620_300_000.0}]):
         out = showcase._sequential_summary(
-            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}
+            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}, {}
         )
     assert out[7]["period"] == "H1"
     assert out[7]["preceding_period"] == "H2"
@@ -1990,14 +1990,37 @@ def test_sequential_summary_is_silent_rather_than_guessing():
         [{"id": 7, "symbol": "A.L"}],
         {7: [{"item": "EBITDA", "period": "H1 2026", "value": "$1m",
               "prior_value": "$1m"}]},
+        {},
     ) == {}
     # Nothing extracted for this entry.
-    assert showcase._sequential_summary([{"id": 7, "symbol": "A.L"}], {}) == {}
+    assert showcase._sequential_summary([{"id": 7, "symbol": "A.L"}], {}, {}) == {}
     # Revenue there, but no annual history to derive the preceding half from.
     with patch.object(showcase, "_annual_history", return_value=[]):
         assert showcase._sequential_summary(
-            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}
+            [{"id": 7, "symbol": "ANTO.L"}], {7: _ANTO_EQ}, {}
         ) == {}
+
+
+def test_sequential_summary_silent_on_currency_mismatch():
+    """HILS.L 9716717 (2026-08-14): FY2025 annual revenue was reported in GBP
+    (£868.8m), then the company switched to USD for its H1 2026 interim
+    ($606.7m / $561.1m). _sequential_summary builds its own stripped-down
+    candidate dict — this locks in that it now threads financial_currency
+    through from currency_by_symbol rather than omitting it, which is what
+    let the archive page keep showing a GBP-minus-USD figure even after
+    gates.compute_sequential_base itself was guarded."""
+    hils_eq = [
+        {"item": "Revenue", "kind": "income", "period": "H1 2026",
+         "value": "$606.7m", "prior_value": "$561.1m", "one_off_named": None},
+    ]
+    with patch.object(showcase, "_annual_history",
+                       return_value=[{"revenue": 868_800_000.0, "currency": "GBP"}]):
+        out = showcase._sequential_summary(
+            [{"id": 7, "symbol": "HILS.L"}],
+            {7: hils_eq},
+            {"HILS.L": "USD"},
+        )
+    assert out == {}
 
 
 def test_archive_endpoint_asks_for_the_detail(client):

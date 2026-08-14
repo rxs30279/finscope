@@ -2353,7 +2353,9 @@ def _net_debt_series(symbols: list[str], years: int = 5) -> dict[str, list]:
     return out
 
 
-def _sequential_summary(entries: list[dict], reported: dict[int, list]) -> dict[int, dict]:
+def _sequential_summary(
+    entries: list[dict], reported: dict[int, list], currency_by_symbol: dict
+) -> dict[int, dict]:
     """The sequential comparison the vet rationale quotes, per showcase entry.
 
     Exists because the two revenue comparisons on the archive page read as a
@@ -2383,9 +2385,11 @@ def _sequential_summary(entries: list[dict], reported: dict[int, list]) -> dict[
         # One _annual_history query per entry with a usable revenue line.
         # Fine on the admin archive (detail=True never runs on the cached
         # public list); revisit if this ever moves onto a hot path.
-        base = _sequential_base_from_earnings_quality(
-            {"symbol": e["symbol"], "earnings_quality": eq}
-        )
+        base = _sequential_base_from_earnings_quality({
+            "symbol": e["symbol"],
+            "earnings_quality": eq,
+            "financial_currency": currency_by_symbol.get(e["symbol"]),
+        })
         if not base:
             continue
         out[e["id"]] = {
@@ -2436,7 +2440,12 @@ def _enrich(entries: list[dict], detail: bool = False) -> list[dict]:
     reported = _reported_lines(entries) if detail else {}
     debt = _net_debt_series(symbols) if detail else {}
     reported_debt = _reported_net_debt(entries) if detail else {}
-    sequential = _sequential_summary(entries, reported) if detail else {}
+    # mqvr, not company_metadata directly — already fetched above, and same
+    # column (m.financial_currency) either way.
+    currency_by_symbol = {s: v.get("financial_currency") for s, v in mqvr.items()}
+    sequential = (
+        _sequential_summary(entries, reported, currency_by_symbol) if detail else {}
+    )
 
     ids = [e["id"] for e in entries]
     furows = _q(
