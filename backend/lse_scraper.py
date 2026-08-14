@@ -339,6 +339,13 @@ def _recompute_basic_derived(row: dict):
         row["current_ratio"] = _sf(ca / cl)
     if row.get("interest_coverage") is None and op is not None and iexp and iexp != 0:
         row["interest_coverage"] = _sf(op / abs(iexp))
+    # KNOWN GAP, not fixed here: unlike updater.py's yfinance path (which now
+    # adds "Capital Lease Obligations"), this has no lease-liability field to
+    # add — LSE.co.uk's ShareFundamentals table hasn't been inspected for one.
+    # Only reached for a row yfinance supplied nothing for at all (guarded by
+    # net_debt is None), so it affects synthesized/gap-filled fiscal years
+    # only — see updater.py's lease_liab comment for the RNK.L case this
+    # under-counts the same way.
     if row.get("net_debt") is None and (std or ltd or cash is not None):
         row["net_debt"] = _sf(std + ltd - (cash or 0))
     if row.get("working_capital") is None and ca is not None and cl is not None:

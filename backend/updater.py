@@ -291,6 +291,7 @@ def process_stock(symbol: str):
                 total_equity = None
                 st_debt = None
                 lt_debt = None
+                lease_liab = None
                 shares_out = None
 
                 if bal_a is not None and col in bal_a.columns:
@@ -301,6 +302,21 @@ def process_stock(symbol: str):
                     total_equity = si(sg(bal_a[col], "Stockholders Equity"))
                     st_debt = si(sg(bal_a[col], "Current Debt"))
                     lt_debt = si(sg(bal_a[col], "Long Term Debt"))
+                    # IFRS 16 lease liabilities. Kept OUT of st_debt/lt_debt (which
+                    # stay pure loans-and-borrowings for debt_to_equity/
+                    # debt_to_assets below) and folded into net_debt only, because
+                    # that is where the gap actually showed up: RNK.L's own HY26
+                    # note 11 reconciles "Net debt excluding IFRS 16" of £56.8m up
+                    # to a reported net debt of £147.2m via £204.0m of lease
+                    # liabilities — without this line our net_debt read -£34.5m
+                    # (net CASH) for the same balance sheet the company itself
+                    # calls £154.7m of net DEBT, the sign inverted as well as the
+                    # size. yfinance's "Total Debt" is exactly
+                    # Current Debt + Long Term Debt + Capital Lease Obligations
+                    # (checked against GRG/WTB/ANTO/TSCO, which reconcile exactly;
+                    # LLOY — a bank — carries no lease row at all, so this is None
+                    # there and net_debt below is unaffected).
+                    lease_liab = si(sg(bal_a[col], "Capital Lease Obligations"))
                     shares_out = si(sg(bal_a[col], "Ordinary Shares Number"))
 
                 cfo = None
@@ -312,8 +328,8 @@ def process_stock(symbol: str):
                 capex = abs(capex_raw) if capex_raw is not None else None
                 fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
                 net_debt = (
-                    ((st_debt or 0) + (lt_debt or 0) - (cash or 0))
-                    if (st_debt or lt_debt or cash)
+                    ((st_debt or 0) + (lt_debt or 0) + (lease_liab or 0) - (cash or 0))
+                    if (st_debt or lt_debt or lease_liab or cash)
                     else None
                 )
                 working_capital = (
