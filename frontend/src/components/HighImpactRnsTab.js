@@ -500,17 +500,17 @@ function PendingCard({ entry, onApprove, onReject }) {
 }
 
 // A story the vet scored but withheld (status='shadow'). Shows on this page
-// too now (within the rolling window — see SHOWCASE_ROLLING_WINDOW_DAYS in
-// showcase.py), not just on /high-impact-rns/archive, but with no inline
-// badge — the darker card background/border below and the "Why withheld"
-// analysis label are the only visual cues; there used to also be a small
-// "WITHHELD" pill next to the symbol, removed 2026-08-14 at the user's
-// request.
+// too (within the rolling window — see SHOWCASE_ROLLING_WINDOW_DAYS in
+// showcase.py), not just on /high-impact-rns/archive. The only visual cue
+// left is the darker card background/border below — the "WITHHELD" pill,
+// the "Clear withheld"/"Archive" admin buttons and the "Why withheld" vet
+// label all removed 2026-08-14 at the user's request, so a shadow row now
+// reads almost the same as an approved one.
 //
 // isWithheld is keyed on status, NOT on `vet_score < 75`. A row can be shadow
-// with a NULL score (the vet CALL failed), and an admin can publish a shadow row
-// manually — after which its status is 'approved' and it must stop being marked
-// withheld even though the score never changed.
+// with a NULL score (the vet CALL failed), and status can still change to
+// 'approved' via the backend API directly — at which point it must stop
+// being marked withheld even though the score never changed.
 const isWithheld = (r) => (r.story || {}).status === "shadow";
 
 // NULL vet_score on a withheld row means the vet call FAILED, not that the story
@@ -857,8 +857,8 @@ function LabelledPill({ label, value, invert }) {
 // tapping it opens the company, tapping the caret expands the same AI-analysis
 // block as desktop but full-width, no horizontal scroll involved.
 function MobileCard({
-  r, isOpen, onToggle, onSelect, isAdmin, live, price, gapPct, sinceOpenPct,
-  totalPct, rangePosValue, isNewsSelected, onNewsSelect, vet, st, setStatus,
+  r, isOpen, onToggle, onSelect, live, price, gapPct, sinceOpenPct,
+  totalPct, rangePosValue, isNewsSelected, onNewsSelect, vet, st,
 }) {
   const [showMqvrInfo, setShowMqvrInfo] = useState(false);
   const caretColor = isOpen ? "#f97316" : "#93c5fd";
@@ -1061,9 +1061,9 @@ function MobileCard({
 ) : (
   vet && (
     <AnalysisRow
-      label={isWithheld(r) ? `Why withheld · vet ${st.vet_score}` : `AI vet · ${st.vet_verdict}`}
+      label={`AI vet · ${st.vet_verdict}`}
       text={st.vet_rationale}
-      color={isWithheld(r) ? "#f59e0b" : vet.color}
+      color={vet.color}
     />
   )
 )}
@@ -1113,12 +1113,6 @@ function MobileCard({
                   <div key={fi} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>{inner}</div>
                 );
               })}
-            </div>
-          )}
-
-          {isAdmin && (
-            <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
-              <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
             </div>
           )}
         </div>
@@ -1344,7 +1338,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
         }
         subtitle={
           archiveOnly ? (
-            "Stories the vet scored below the publish floor — cleared the ranker at 60+, scored under 75 on the vet's second read. Still shown on the public page within the rolling window, badged \"withheld\"; this is the full history, with no window cutoff. Newest vet score first."
+            "Stories the vet scored below the publish floor — cleared the ranker at 60+, scored under 75 on the vet's second read. Still shown on the public page within the rolling window; this is the full history, with no window cutoff. Newest vet score first."
           ) : (
             <>
               Companies flagged by AI for high-scoring, positive RNS updates — each tracked to see how the share price responded after publication.
@@ -1454,7 +1448,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                     isOpen={openStory.has(r.showcase_id)}
                     onToggle={() => toggleStory(r.showcase_id)}
                     onSelect={() => onSelect && onSelect(r.symbol)}
-                    isAdmin={isAdmin}
                     live={isLive(r)}
                     price={priceOf(r)}
                     gapPct={gapPct(r)}
@@ -1463,7 +1456,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                     rangePosValue={rangePos(r)}
                     isNewsSelected={r.symbol === selectedNewsSymbol}
                     onNewsSelect={() => setSelectedNewsSymbol(r.symbol)}
-                    setStatus={setStatus}
                   />
                 );
               })}
@@ -1676,31 +1668,6 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                                 >
                                   {st.headline}
                                 </a>
-                                {isAdmin && (
-                                  <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }} onClick={(e) => e.stopPropagation()}>
-                                    {/* Override the vet. The story is already
-                                        public (shadow rows show on
-                                        /high-impact-rns within the rolling
-                                        window, badged "withheld") — this just
-                                        clears that badge, so it is confirmed
-                                        like the other outward-facing action
-                                        here. */}
-                                    {isWithheld(r) && (
-                                      <button
-                                        onClick={() => {
-                                          if (window.confirm(`Clear the "withheld" badge on ${r.symbol.replace(".L", "")}, overriding the vet's score of ${st.vet_score ?? "none"}?`)) {
-                                            setStatus(r.showcase_id, "approved");
-                                          }
-                                        }}
-                                        title="Override the vet and clear the withheld badge on the public page"
-                                        style={btn("#10b981")}
-                                      >
-                                        Clear withheld
-                                      </button>
-                                    )}
-                                    <button onClick={() => setStatus(r.showcase_id, "archived")} style={btn("#94a3b8")}>Archive</button>
-                                  </span>
-                                )}
                               </div>
 
                               {/* Full AI analysis */}
@@ -1718,9 +1685,9 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
 ) : (
   vet && (
     <AnalysisRow
-      label={isWithheld(r) ? `Why withheld · vet ${st.vet_score}` : `AI vet · ${st.vet_verdict}`}
+      label={`AI vet · ${st.vet_verdict}`}
       text={st.vet_rationale}
-      color={isWithheld(r) ? "#f59e0b" : vet.color}
+      color={vet.color}
     />
   )
 )}
