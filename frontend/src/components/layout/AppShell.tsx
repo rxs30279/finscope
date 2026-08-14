@@ -15,11 +15,11 @@ type NavGroup = NavLink & { children?: never } | { label: string; children: NavL
 
 const NAV_GROUPS: NavGroup[] = [
   { href: "/screener", label: "Screener" },
-  { href: "/high-impact-rns", label: "High Impact RNS" },
   {
-    label: "RNS",
+    label: "Company RNS",
     children: [
       { href: "/rns", label: "RNS Daily News" },
+      { href: "/high-impact-rns", label: "High Impact RNS" },
       { href: "/results-calendar", label: "Results Calendar" },
       { href: "/subscribe", label: "RNS Daily Email" },
     ],
