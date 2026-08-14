@@ -777,8 +777,12 @@ function ReportedNumbers({ r }) {
               there, showing it is the whole point: RNK.L's headline £147.2m
               means nothing on its own, but "borrowings £30.0m, cash £86.8m,
               PLUS £204.0m of lease liabilities" is the actual answer to "is
-              this company really that levered". Rows only, never the total —
-              ownDebt.value above already is the total. */}
+              this company really that levered". The rows come from
+              ownDebt.breakdown; the closing "Net debt" row below is
+              ownDebt.value/prior_value repeated — the SAME figures already
+              shown above the table, just closing out the bridge the way the
+              announcement's own note does, rather than leaving the reader to
+              re-add the rows themselves. */}
           {ownDebt.breakdown && ownDebt.breakdown.length > 0 && (
             <div style={{ marginTop: 8, overflowX: "auto" }}>
               <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: "monospace", width: "100%" }}>
@@ -794,6 +798,20 @@ function ReportedNumbers({ r }) {
                       </td>
                     </tr>
                   ))}
+                  <tr style={{ borderTop: "1px solid #475569" }}>
+                    <td style={{ padding: "4px 8px 3px 0", color: "#cbd5e1", fontWeight: 700 }}>
+                      {/* Matches whichever side of zero ownDebt.value is on —
+                          a row labelled "Net debt" over a net-cash figure
+                          would contradict its own number. */}
+                      {/cash/i.test(ownDebt.value || "") ? "Net cash" : "Net debt"}
+                    </td>
+                    <td style={{ padding: "4px 8px 3px 0", color: "#e2e8f0", fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {ownDebt.value}
+                    </td>
+                    <td style={{ padding: "4px 0 3px", color: "#94a3b8", textAlign: "right", whiteSpace: "nowrap" }}>
+                      {ownDebt.prior_value || "—"}
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>
