@@ -1781,6 +1781,10 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                r.body, r.body_is_stub,
                r.llm_score, r.llm_confidence, r.llm_thesis, r.llm_risks, r.llm_action,
                r.llm_sentiment, r.guidance_checks, r.earnings_quality,
+               -- The ranker's own forward-profit extraction (migration 032) and
+               -- the model that produced it; showcase_fwd.fwd_from_ranker turns
+               -- the pair into the multiple without spending a call.
+               r.fwd_profit, r.llm_model,
                m.sector, m.industry, m.country, m.ftse_index,
                -- Two DIFFERENT currencies, both needed by the vet prompt and
                -- easy to confuse (see _size_context): financial_currency is the
@@ -1991,18 +1995,25 @@ def flag_high_impact_candidates(hours: int = 48) -> dict:
                 f"verdict={(vet or {}).get('verdict')})"
             )
 
-        # Forward multiple: LLM extracts any stated FY profit figure from the
-        # full announcement text, Python computes EV/multiple. Internally
-        # non-fatal — a blank column must never block a flag. Skipped for
-        # shadow rows: it is a second LLM call per row and nothing renders it
-        # off the public page, so paying for it on the ~80% that never publish
-        # is the one avoidable cost the wider entry floor would have added.
-        if publish:
-            from showcase_fwd import extract_fwd_fields
-            fwd = extract_fwd_fields(c)
-        else:
-            # processed=False leaves fwd_processed_at NULL, which keeps the row
-            # eligible for the /extract-fwd backfill if it is ever promoted.
+        # Forward multiple: the RANKER extracted the stated FY profit figure in
+        # its own scoring call (migration 032), Python computes EV/multiple off
+        # it here. Internally non-fatal — a blank column must never block a
+        # flag.
+        #
+        # This used to run only `if publish:`, because it was a second DeepSeek
+        # call plus its own Investegate fetch and paying that on the ~80% of
+        # candidates that never publish was pure waste. That gate is what left
+        # every row of /high-impact-rns/archive — which is nothing BUT shadow
+        # rows — with a blank multiple. Reading the ranker's extraction costs
+        # nothing per row, so the gate is gone and shadow rows get the column
+        # too.
+        from showcase_fwd import fwd_from_ranker
+        fwd = fwd_from_ranker(c)
+        if fwd is None:
+            # No ranker extraction: this row was scored before 032 shipped, or
+            # its ranking call failed. processed=False leaves fwd_processed_at
+            # NULL, which keeps the row eligible for the /extract-fwd backfill
+            # — the one remaining caller of the old two-call extractor.
             from showcase_fwd import _empty as _empty_fwd
             fwd = _empty_fwd(processed=False)
 
@@ -2141,6 +2152,10 @@ def record_followups() -> dict:
 # while the screener scored the same rows as trusts.
 _MQVR_SQL = """
     SELECT m.symbol, m.name, m.sector, m.industry, m.ftse_index,
+           -- Reporting currency of everything out of annual_financials, which
+           -- the archive's net-debt series and reported lines are both in. NOT
+           -- the quote currency market_cap uses (see _size_context).
+           m.financial_currency,
            t.market_cap, t.revenue, t.net_debt, t.ebitda,
            CASE WHEN t.price_to_earnings > 999 THEN NULL ELSE t.price_to_earnings END as price_to_earnings,
            t.price_to_book, t.price_to_sales, t.roe, t.roic,
@@ -2188,9 +2203,106 @@ def _ttm_ev_ebitda(r) -> Optional[float]:
     return round(m, 2) if _MIN_MULTIPLE <= m <= _MAX_MULTIPLE else None
 
 
-def _enrich(entries: list[dict]) -> list[dict]:
+def _reported_lines(entries: list[dict]) -> dict[int, list]:
+    """The announcement's own quantified lines, per showcase entry.
+
+    Straight passthrough of rns_announcements.earnings_quality — already
+    extracted by the ranker for the earnings-quality gate, and until now shown
+    nowhere. Each line carries the period, the item as printed, its value as
+    printed and the prior-period comparator, which is what makes an H1'26 vs
+    H1'25 read possible without any new extraction or LLM cost.
+
+    Values stay VERBATIM strings, deliberately. They span money, percentages,
+    per-share pence, ratios and prose ("down >90%", "net favourable $2.2bn"),
+    and a parser over that would fail on a large minority — showing what the
+    company printed is both cheaper and more honest. Any consumer that needs a
+    number should use _parse_money and handle None.
+
+    Safe to read live rather than snapshot onto high_impact_rns: rns._prune_old
+    hard-deletes only Tier C rows and NULLs only `body`, so this column
+    survives indefinitely on the Tier A/B rows the showcase is built from.
+    """
+    ids = [e["id"] for e in entries]
+    rows = _q(
+        """
+        SELECT h.id AS showcase_id, r.earnings_quality
+        FROM high_impact_rns h
+        JOIN rns_announcements r ON r.id = h.rns_id
+        WHERE h.id = ANY(%s) AND r.earnings_quality IS NOT NULL
+        """,
+        (ids,),
+    )
+    out: dict[int, list] = {}
+    for r in rows:
+        eq = r["earnings_quality"]
+        if isinstance(eq, str):
+            try:
+                eq = json.loads(eq)
+            except ValueError:
+                continue
+        if isinstance(eq, list) and eq:
+            out[r["showcase_id"]] = eq
+    return out
+
+
+def _net_debt_series(symbols: list[str], years: int = 5) -> dict[str, list]:
+    """Reported net debt by fiscal year, oldest first, per symbol.
+
+    From annual_financials, which carried net_debt on every one of the 19
+    showcase symbols checked on 2026-08-14 — the one balance-sheet series with
+    no coverage problem. Paired with the announcement's own lines it answers
+    "is the growth funded by debt", which _annual_history already feeds the vet
+    privately and the page never showed.
+
+    In the REPORTING currency (financial_currency), like everything else out of
+    annual_financials, and NOT comparable with market_cap. See _size_context
+    for the same trap.
+    """
+    if not symbols:
+        return {}
+    rows = _q(
+        """
+        SELECT company_symbol, fiscal_year, period_end_date, net_debt, ebitda
+        FROM (
+            SELECT company_symbol, fiscal_year, period_end_date, net_debt, ebitda,
+                   ROW_NUMBER() OVER (PARTITION BY company_symbol
+                                      ORDER BY period_end_date DESC) AS rn
+            FROM annual_financials
+            WHERE company_symbol = ANY(%s)
+        ) t
+        WHERE rn <= %s
+        ORDER BY company_symbol, period_end_date
+        """,
+        (symbols, years),
+    )
+    out: dict[str, list] = {}
+    for r in rows:
+        nd = r["net_debt"]
+        eb = r["ebitda"]
+        nd_f = float(nd) if nd is not None else None
+        eb_f = float(eb) if eb is not None else None
+        out.setdefault(r["company_symbol"], []).append({
+            "fiscal_year": r["fiscal_year"],
+            "net_debt": nd_f,
+            # Leverage where it means anything: a negative or zero EBITDA makes
+            # the ratio meaningless rather than large, so it stays None (the
+            # same call rns_llm._build_messages makes for its own leverage line).
+            "net_debt_to_ebitda": (
+                round(nd_f / eb_f, 2)
+                if nd_f is not None and eb_f is not None and eb_f > 0 else None
+            ),
+        })
+    return out
+
+
+def _enrich(entries: list[dict], detail: bool = False) -> list[dict]:
     """Turn raw high_impact_rns rows into full showcase rows: watchlist parity +
-    MQVR scores + days/%-since-news + follow-up tally + the story block."""
+    MQVR scores + days/%-since-news + follow-up tally + the story block.
+
+    `detail=True` adds the announcement's own reported lines and the net-debt
+    series. Off by default because it costs two extra queries per call and only
+    the admin archive renders them — the public list is the hot, cached path.
+    """
     if not entries:
         return []
     from main import (
@@ -2210,9 +2322,13 @@ def _enrich(entries: list[dict]) -> list[dict]:
             "quality_score": _quality_score(r),
             "value_score": _value_score(r),
             "ttm_ev_ebitda": _ttm_ev_ebitda(r),
+            "financial_currency": r.get("financial_currency"),
         }
         for r in mrows
     }
+
+    reported = _reported_lines(entries) if detail else {}
+    debt = _net_debt_series(symbols) if detail else {}
 
     ids = [e["id"] for e in entries]
     furows = _q(
@@ -2312,6 +2428,13 @@ def _enrich(entries: list[dict]) -> list[dict]:
                 if e.get("fwd_multiple") is not None and e.get("fwd_metric") == "ebitda"
                 else None
             ),
+            # Admin archive only (detail=True). Both are in the REPORTING
+            # currency, which is why financial_currency travels with them —
+            # CTEC reports USD and CGEO GEL, and rendering either behind a £
+            # would be the same mislabel _size_context exists to prevent.
+            "reported_lines": reported.get(e["id"]) or None,
+            "net_debt_series": debt.get(e["symbol"]) or None,
+            "financial_currency": m.get("financial_currency") if detail else None,
             "followup_pos": sum(1 for f in fus if f["sentiment"] == "positive"),
             "followup_neg": sum(1 for f in fus if f["sentiment"] == "negative"),
             "followup_neutral": sum(1 for f in fus if f["sentiment"] == "neutral"),
@@ -2419,7 +2542,11 @@ def list_shadow():
         "ORDER BY vet_score DESC NULLS LAST, flagged_at DESC",
         (SHOWCASE_MIN_STORY_DATE,),
     )
-    return _enrich(entries)
+    # detail=True: the archive is where the withheld rows are read closely, so
+    # it gets the announcement's own reported lines and the net-debt series.
+    # Admin-only and uncached, so the two extra queries cost the public page
+    # nothing.
+    return _enrich(entries, detail=True)
 
 
 class StatusBody(BaseModel):

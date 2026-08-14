@@ -563,6 +563,140 @@ function AnalysisRow({ label, text, color = "#94a3b8" }) {
   );
 }
 
+// ── Reported numbers (archive only) ──────────────────────────────────────────
+// Two things the ranker and the financials already hold and the page never
+// showed: the lines the announcement itself quantified, and the reported net
+// debt behind them.
+//
+// Symbol only where it is unambiguous — "$" alone cannot separate USD from
+// CAD/AUD — so anything else renders as a bare code. Mirrors _CCY_SYMBOL in
+// showcase.py, and it matters: CTEC reports USD and CGEO GEL, so a hardcoded
+// "£" here would mislabel real figures.
+const CCY_SYMBOL = { GBP: "£", USD: "$", EUR: "€" };
+
+function fmtReportingMoney(v, ccy) {
+  if (v == null) return "—";
+  const sym = CCY_SYMBOL[ccy] || "";
+  const prefix = sym || (ccy ? `${ccy} ` : "");
+  const a = Math.abs(v);
+  const [div, unit] = a >= 1e9 ? [1e9, "bn"] : a >= 1e6 ? [1e6, "m"] : [1e3, "k"];
+  const n = a / div;
+  return `${prefix}${n.toFixed(n >= 100 ? 0 : 1)}${unit}`;
+}
+
+// Net cash reads as net cash, never as negative net debt — the same double
+// negative showcase._fmt_net_debt_m exists to avoid, for the same reason: read
+// backwards it inverts a leverage judgement.
+function NetDebtFigure({ v, ccy }) {
+  if (v == null) return <span style={{ color: "#475569" }}>n/a</span>;
+  const isCash = v < 0;
+  return (
+    <span style={{ color: isCash ? "#10b981" : "#cbd5e1" }}>
+      {fmtReportingMoney(Math.abs(v), ccy)}
+      {isCash && <span style={{ color: "#10b981", fontSize: 8.5, marginLeft: 3 }}>cash</span>}
+    </span>
+  );
+}
+
+function ReportedNumbers({ r }) {
+  const lines = r.reported_lines || [];
+  const debt = r.net_debt_series || [];
+  if (!lines.length && !debt.length) return null;
+  const ccy = r.financial_currency;
+
+  return (
+    <div style={{ marginTop: 12, paddingLeft: 4, maxWidth: 760 }}>
+      <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>
+        Reported numbers
+        {ccy && ccy !== "GBP" && (
+          // Loud, because the row above it is a GBP market cap and these are
+          // not comparable with it.
+          <span style={{ color: "#f59e0b", marginLeft: 6 }}>· reported in {ccy}</span>
+        )}
+      </div>
+
+      {lines.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace", width: "100%" }}>
+            <thead>
+              <tr>
+                {["Period", "Line", "This period", "Prior"].map((h, i) => (
+                  <th
+                    key={h}
+                    style={{
+                      textAlign: i >= 2 ? "right" : "left",
+                      color: "#475569", fontSize: 8.5, fontWeight: 700,
+                      textTransform: "uppercase", letterSpacing: 0.4,
+                      padding: "0 8px 4px 0", whiteSpace: "nowrap",
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l, i) => (
+                <tr key={i} style={{ borderTop: "1px solid #1e293b" }}>
+                  <td style={{ padding: "4px 8px 4px 0", color: "#64748b", whiteSpace: "nowrap" }}>
+                    {l.period || "—"}
+                  </td>
+                  <td style={{ padding: "4px 8px 4px 0", color: "#94a3b8" }}>
+                    {l.item}
+                    {/* The one-off the company itself named on this line. It is
+                        the whole point of the extraction — a headline figure
+                        with a named one-off inside it should never be read at
+                        face value. */}
+                    {l.one_off_named && (
+                      <div style={{ color: "#f59e0b", fontSize: 9.5, lineHeight: 1.4, marginTop: 2 }}>
+                        includes {l.one_off_named}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ padding: "4px 8px 4px 0", color: "#e2e8f0", textAlign: "right", whiteSpace: "nowrap" }}>
+                    {l.value || "—"}
+                  </td>
+                  <td style={{ padding: "4px 0", color: "#64748b", textAlign: "right", whiteSpace: "nowrap" }}>
+                    {l.prior_value || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {/* Verbatim on purpose: these values span money, percentages, pence
+              per share and prose ("down >90%"), so no delta is computed here —
+              a parser over that would be wrong often enough to mislead. */}
+          <div style={{ fontSize: 9.5, color: "#475569", marginTop: 4, lineHeight: 1.5 }}>
+            As printed in the announcement — figures are not normalised, and “prior” is
+            whichever comparator the company itself quoted.
+          </div>
+        </div>
+      )}
+
+      {debt.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 8.5, color: "#475569", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>
+            Net debt · reported full years
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            {debt.map((d) => (
+              <div key={d.fiscal_year} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                <span style={{ color: "#475569", fontSize: 9 }}>FY{d.fiscal_year}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 11.5, fontWeight: 700 }}>
+                  <NetDebtFigure v={d.net_debt} ccy={ccy} />
+                </span>
+                <span style={{ color: "#475569", fontSize: 8.5 }}>
+                  {d.net_debt_to_ebitda != null ? `${d.net_debt_to_ebitda.toFixed(2)}× EBITDA` : " "}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // A single MQVR pill with its letter label above, for the mobile card's compact row.
 function LabelledPill({ label, value, invert }) {
   return (
@@ -582,6 +716,7 @@ function LabelledPill({ label, value, invert }) {
 function MobileCard({
   r, isOpen, onToggle, onSelect, isAdmin, live, price, gapPct, sinceOpenPct,
   totalPct, rangePosValue, isNewsSelected, onNewsSelect, vet, st, setStatus,
+  archiveOnly = false,
 }) {
   const [showMqvrInfo, setShowMqvrInfo] = useState(false);
   const caretColor = isOpen ? "#f97316" : "#93c5fd";
@@ -810,6 +945,10 @@ function MobileCard({
               <div style={{ fontSize: 10, color: "#64748b" }}>confidence: {st.llm_confidence}</div>
             )}
           </div>
+
+          {/* Archive only, same as desktop — the table inside scrolls on its
+              own so the card itself never scrolls sideways. */}
+          {archiveOnly && <ReportedNumbers r={r} />}
 
           {(r.followups || []).length > 0 && (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
@@ -1173,6 +1312,7 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                     onToggle={() => toggleStory(r.showcase_id)}
                     onSelect={() => onSelect && onSelect(r.symbol)}
                     isAdmin={isAdmin}
+                    archiveOnly={archiveOnly}
                     live={isLive(r)}
                     price={priceOf(r)}
                     gapPct={gapPct(r)}
@@ -1459,6 +1599,12 @@ export default function HighImpactRnsTab({ onSelect, initialRows = null, archive
                                   <div style={{ fontSize: 10, color: "#64748b" }}>confidence: {st.llm_confidence}</div>
                                 )}
                               </div>
+
+                              {/* Archive only — the withheld rows are the ones
+                                  read closely enough to want the underlying
+                                  figures, and /showcase/shadow is the only
+                                  endpoint that ships them (detail=True). */}
+                              {archiveOnly && <ReportedNumbers r={r} />}
 
                               {/* Prior announcements before this story — builds up over time now
                                   that tier A/B rows outlive the 14-day source prune (most stories

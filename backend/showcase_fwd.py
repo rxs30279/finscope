@@ -17,11 +17,28 @@ observed in the wild:
     flagged as an upper bound (fwd_is_bound);
   - degenerate results — the multiple must land in a sane 1-60x band.
 
-Extraction reads the FULL announcement text fetched live from Investegate, not
-the stored AI summary: the study found consensus footnotes ("market
-expectations were... EBITDA £15.0m") survive only in the full text. The page is
-fetched at flag time while the announcement is fresh; the summary is the
-fallback when the fetch fails.
+TWO WAYS IN, and fwd_from_ranker is the live one:
+
+  fwd_from_ranker    reads the extraction the RANKER already made in its own
+                     scoring call (rns_announcements.fwd_profit, migration
+                     032). No DeepSeek call, no fetch. This is what
+                     showcase.flag_high_impact_candidates uses, and being free
+                     is why the multiple now runs on shadow rows as well as
+                     published ones.
+  extract_fwd_fields the original: its own Investegate fetch plus its own
+                     DeepSeek call. Now only the POST /showcase/extract-fwd
+                     backfill route, for rows ranked before 032 existed.
+
+Both feed the same compute_fwd_multiple, so the gates below are the single
+place the arithmetic is decided either way.
+
+extract_fwd_fields reads the FULL announcement text fetched live from
+Investegate, not the stored AI summary: the study found consensus footnotes
+("market expectations were... EBITDA £15.0m") survive only in the full text.
+The page is fetched at flag time while the announcement is fresh; the summary
+is the fallback when the fetch fails. Note that its cut is head-only 15k while
+the ranker's stored body is head 16k + TAIL 8k, so on a long announcement the
+ranker path sees the footnotes and this one may not.
 
 Everything returns None-shaped results rather than raising — a missing multiple
 must never block a showcase flag (same contract as the advisory vet).
@@ -196,6 +213,70 @@ def _as_float(v) -> Optional[float]:
     return f if f == f else None  # NaN guard
 
 
+# Every number in the quote, with its scale suffix if it has one.
+_QUOTE_NUMBER = re.compile(r"(\d[\d,]*\.?\d*)\s*(bn|billion|m|million|k)?", re.I)
+# Relative tolerance on the match. Not zero: the model may write 4.7 for a
+# quote's "4.70", and the stored value is a float.
+_QUOTE_MATCH_TOL = 0.005
+
+
+def _quote_contains_value(quote: str, value_m: float) -> bool:
+    """Is `value_m` (in millions) a number the quote literally prints?
+
+    The module's one hard rule is that the LLM copies figures and never
+    computes them, and this is the only enforcement of it that does not depend
+    on the model complying. It is not a theoretical guard. Measured 2026-08-14
+    over the eight live announcements that had a stored multiple, scored three
+    times each: 20 of 24 runs reproduced the stored figure, one refused, and
+    THREE returned a derived number, every one of them a stated growth rate
+    applied to a stated base —
+
+        BA.L    3654 from "up 10% to 12%" on a reported £3,322m  (x1.10)
+        DPLM.L   645 from "growth of c.42%"  on consensus £454m  (x1.42)
+        DPLM.L   486 from "c.7% upgrade"     on consensus £454m  (x1.07)
+
+    So it is systematic on announcements that headline percentages, not a rare
+    slip, and prompt wording alone did not stop it: those three came from the
+    prompt version that already forbids the derivation in as many words. All
+    three were blanked here. DPLM's 645 would otherwise have published a
+    multiple ~42% too low on the public page.
+
+    The tradeoff is that the multiple is nondeterministic run to run — the same
+    announcement can yield a number one morning and a dash the next. That is
+    the right direction: this pipeline drops tradeable rows rather than publish
+    wrong ones (see docs/rns-gate-block-plan.md on asymmetric cost).
+
+    Each number in the quote is compared at every plausible scale, because the
+    quote's units and the extraction's are routinely different: "£4.7bn" is the
+    same figure as value_low_m 4700, and "£3,322m" is 3322. Anything matching
+    at any scale passes, which makes this a tripwire for fabrication rather
+    than a units audit — the failure direction is a blank multiple, never a
+    wrong one.
+    """
+    if not quote or value_m is None or value_m <= 0:
+        return False
+    for raw, suffix in _QUOTE_NUMBER.findall(quote):
+        n = _as_float(raw.replace(",", ""))
+        if n is None or n <= 0:
+            continue
+        s = (suffix or "").lower()
+        if s in ("bn", "billion"):
+            candidates = (n * 1000,)
+        elif s in ("m", "million"):
+            candidates = (n,)
+        elif s == "k":
+            candidates = (n / 1000,)
+        else:
+            # Bare number: the announcement's own unit is unknown here, and a
+            # range ("£4.7-4.9bn") carries its suffix only on the last member,
+            # so every scale the figure could plausibly be written at counts.
+            candidates = (n, n * 1000, n / 1000)
+        for c in candidates:
+            if abs(c - value_m) <= _QUOTE_MATCH_TOL * value_m:
+                return True
+    return False
+
+
 def compute_fwd_multiple(extract: dict, cand: dict, model: str) -> dict:
     """Validate an extraction and compute the multiple. Returns the full
     fwd_* field dict; fwd_multiple is None whenever any gate fails, but the
@@ -234,6 +315,14 @@ def compute_fwd_multiple(extract: dict, cand: dict, model: str) -> dict:
         return out
     if not (_PERIOD_MONTHS_RANGE[0] <= months <= _PERIOD_MONTHS_RANGE[1]):
         return out
+    # The copied-not-computed check. Deliberately placed with the other gates
+    # rather than in either caller, so both the ranker path and the legacy
+    # extractor are held to it — a derived figure is the same lie whichever
+    # call produced it.
+    if not _quote_contains_value(quote, value_m):
+        print(f"[showcase-fwd] {cand.get('symbol')} — extracted {value_m}m does "
+              f"not appear in its own quote, dropping the multiple: {quote[:160]}")
+        return out
 
     sm = _sector_model(cand)
     if sm in ("bank", "insurer", "trust"):
@@ -263,6 +352,55 @@ def compute_fwd_multiple(extract: dict, cand: dict, model: str) -> dict:
     # than X's, so what we show is an upper bound. "at least X" guidance too.
     out["fwd_is_bound"] = relation in ("above", "min")
     return out
+
+
+def fwd_from_ranker(cand: dict) -> Optional[dict]:
+    """Compute the multiple from the extraction the RANKER already made.
+
+    The preferred path since migration 032. rns_llm's single scoring call now
+    also emits `fwd_profit` in the same JSON response, in exactly the shape
+    compute_fwd_multiple consumes, so the multiple costs no DeepSeek call and
+    no HTTP fetch of its own — which is what makes it affordable on shadow
+    rows, and why /high-impact-rns/archive can show one at all.
+
+    The ranker's text is also the better text: it reads
+    rns_announcements.body, capped head 16k + TAIL 8k, where
+    fetch_announcement_text below takes a head-only 15k cut. Consensus
+    footnotes sit near the end of an announcement, so the head-only cut was
+    losing exactly what extract_fwd_fields went to fetch.
+
+    Returns None when the row carries no ranker extraction at all (ranked
+    before 032 shipped, or the ranking call failed) — the caller must then
+    decide between the LLM fallback and leaving the row unprocessed. A stored
+    {"found": false} is NOT that case: it is a completed extraction that found
+    nothing, and comes back as a normal all-None result dict.
+
+    `cand` needs: fwd_profit, plus the same sector/industry/market_cap/net_debt
+    compute_fwd_multiple always needed.
+    """
+    extract = cand.get("fwd_profit")
+    if isinstance(extract, str):  # JSONB can arrive as text through some drivers
+        try:
+            extract = json.loads(extract)
+        except ValueError:
+            return None
+    if not isinstance(extract, dict):
+        return None
+    # Same never-raises contract as extract_fwd_fields below, and for the same
+    # reason: this runs inside the flag loop, so an exception here would cost
+    # the row its showcase entry over a decorative column. Returning None on a
+    # failure also leaves fwd_processed_at NULL, so the row stays eligible for
+    # the backfill rather than being stamped as finished.
+    try:
+        # Attributed to the ranker's model, not _DEEPSEEK_MODEL as it stands
+        # today: fwd_model is the audit trail for which model produced the
+        # figure, and the ranker's model is a separately-set constant that can
+        # move independently.
+        return compute_fwd_multiple(extract, cand, cand.get("llm_model") or "ranker")
+    except Exception as e:
+        print(f"[showcase-fwd] ranker extraction unusable for "
+              f"{cand.get('symbol')} (non-fatal) — {e}")
+        return None
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────

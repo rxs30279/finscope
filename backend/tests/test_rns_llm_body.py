@@ -484,3 +484,106 @@ def test_save_ranking_no_guidance_stores_nulls():
     params = cur.execute.call_args[0][1]
     # positions 7-9 are guidance_metric/guidance_value/guidance_period
     assert params[7:10] == (None, None, None)
+
+
+# ── _clean_fwd_profit (migration 032) ────────────────────────────────────────
+
+def test_clean_fwd_profit_normalises_a_full_extraction():
+    out = rns_llm._clean_fwd_profit({
+        "found": True, "metric": "EBITDA", "value_low_m": 45, "value_high_m": 48,
+        "currency": " gbp ", "period_label": "FY2026", "period_months": 12,
+        "source": "Guidance", "relation": "MIN", "quote": " at least £45m ",
+    })
+    assert out == {
+        "found": True, "metric": "ebitda", "value_low_m": 45.0,
+        "value_high_m": 48.0, "currency": "GBP", "period_label": "FY2026",
+        "period_months": 12, "source": "guidance", "relation": "min",
+        "quote": "at least £45m",
+    }
+
+
+def test_clean_fwd_profit_keeps_a_negative_answer():
+    # {"found": false} is a real, useful answer — the ranker read the text and
+    # nothing qualified. It must NOT collapse to NULL, which showcase reads as
+    # "never extracted" and re-queues for the paid backfill.
+    assert rns_llm._clean_fwd_profit({"found": False}) == {"found": False}
+
+
+def test_clean_fwd_profit_discards_fields_contradicting_found_false():
+    out = rns_llm._clean_fwd_profit(
+        {"found": False, "metric": "ebitda", "value_low_m": 45}
+    )
+    assert out == {"found": False}
+
+
+def test_clean_fwd_profit_blanks_unrecognised_metric_and_source():
+    # Unlike vs_prior/vs_consensus these do NOT fail open: compute_fwd_multiple
+    # refuses a metric or basis it doesn't know, and a blank multiple beats a
+    # wrong one on a public page.
+    out = rns_llm._clean_fwd_profit({
+        "found": True, "metric": "operating profit", "source": "broker note",
+        "value_low_m": 10, "currency": "GBP", "period_months": 12,
+    })
+    assert out["metric"] is None
+    assert out["source"] is None
+
+
+def test_clean_fwd_profit_defaults_relation_to_eq():
+    # relation only controls the "<" upper-bound prefix, never whether the
+    # number is computed, so an absent one must not blank the multiple.
+    out = rns_llm._clean_fwd_profit({"found": True, "metric": "pbt"})
+    assert out["relation"] == "eq"
+
+
+def test_clean_fwd_profit_coerces_junk_numbers_to_none():
+    out = rns_llm._clean_fwd_profit({
+        "found": True, "value_low_m": "not a number",
+        "value_high_m": float("nan"), "period_months": "twelve",
+    })
+    assert out["value_low_m"] is None
+    assert out["value_high_m"] is None
+    assert out["period_months"] is None
+
+
+def test_clean_fwd_profit_returns_none_when_unusable():
+    # None, not {"found": False} — "nothing was stated" and "this row predates
+    # the field" drive different behaviour in showcase.
+    for raw in (None, [], "not a dict", 42):
+        assert rns_llm._clean_fwd_profit(raw) is None
+
+
+def test_save_ranking_persists_fwd_profit_as_json():
+    with patch("rns_llm._get_pool") as mock_pool:
+        conn = mock_pool.return_value.getconn.return_value
+        cur = conn.cursor.return_value
+        rns_llm._save_ranking(
+            1,
+            {
+                "score": 60, "sentiment": "neutral",
+                "fwd_profit": {
+                    "found": True, "metric": "ebitda", "value_low_m": 45,
+                    "currency": "GBP", "period_label": "FY2026",
+                    "period_months": 12, "source": "guidance", "relation": "eq",
+                    "quote": "EBITDA of £45m",
+                },
+            },
+            "deepseek-v4-flash:thinking",
+        )
+    fwd = cur.execute.call_args[0][1][12]
+    assert fwd.adapted["metric"] == "ebitda"
+    assert fwd.adapted["value_low_m"] == 45.0
+
+
+def test_save_ranking_stores_null_when_no_fwd_profit():
+    with patch("rns_llm._get_pool") as mock_pool:
+        conn = mock_pool.return_value.getconn.return_value
+        cur = conn.cursor.return_value
+        rns_llm._save_ranking(1, {"score": 60, "sentiment": "neutral"}, "m")
+    assert cur.execute.call_args[0][1][12] is None
+
+
+def test_prompt_forbids_deriving_the_fwd_figure():
+    # The one safety property of this field: it copies, it never computes. A
+    # derived profit would put an invented number on the public page.
+    assert "fwd_profit" in rns_llm._JSON_SCHEMA_BLOCK
+    assert "COPY ONLY" in rns_llm._JSON_SCHEMA_BLOCK

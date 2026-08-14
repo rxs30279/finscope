@@ -774,6 +774,70 @@ do not pick a score and then justify it:
   guidance_value   that entry's figure/range/threshold as text (e.g.
                    "> £40m"), or null
   guidance_period  that entry's period (e.g. "FY2026"), or null
+  fwd_profit       object — the single best FULL-YEAR profit-level figure the
+                   announcement STATES, in the structured form a valuation
+                   multiple can be computed from downstream. Unlike the two
+                   arrays above this one does NOT feed the score; it is a
+                   copying task, so do it last and let it change nothing.
+                     COPY ONLY. Never calculate, derive, combine, annualise or
+                   recall a figure. Deriving a profit from revenue and a
+                   margin, doubling a half-year figure, and filling a gap from
+                   memory of the company are all forbidden. If no qualifying
+                   figure is stated, return {"found": false} with every other
+                   field null — that is a perfectly good answer and far better
+                   than a produced number.
+                     GROWTH RATE + BASE IS NOT A FIGURE. The most tempting
+                   version of the above: an announcement guiding "underlying
+                   EBIT up 10% to 12%" while separately reporting last year's
+                   EBIT of £3,322m has NOT stated a forward EBIT, and
+                   multiplying the two to reach £3,654m is a calculation
+                   however obvious the arithmetic looks.
+                     This is a rule about WHICH figure to copy, not a reason
+                   to give up. The reported £3,322m qualifies on its own —
+                   take it, with source "actual" and its own period. An
+                   absolute consensus figure printed in a footnote qualifies
+                   too, even where the headline of the same announcement talks
+                   only in percentages. Return found: false only when the
+                   announcement prints no absolute profit figure anywhere.
+                     Whichever figure you take, value_low_m must be a number
+                   your own quote literally prints.
+                     Choosing between candidates:
+                       metric  prefer EBITDA, then EBIT/operating profit, then
+                               profit before tax. Adjusted/underlying versions
+                               count. Revenue, NAV, net fee income, EPS,
+                               dividends, cash and free cash flow do NOT
+                               count, and neither does a growth RATE quoted
+                               without an absolute figure ("EBIT growth of 10%
+                               to 12%") — where the announcement gives only
+                               rates for the forward year but prints an
+                               absolute profit for the year just reported,
+                               take the reported one with source "actual".
+                       period  prefer the current or next full financial year
+                               over a completed one.
+                       source  the company's own guidance, or market
+                               expectations/consensus quoted in the text
+                               (often a footnote well below the headlines), or
+                               a reported actual result.
+                     Fields:
+                       found          boolean
+                       metric         "ebitda" | "ebit" | "pbt"
+                       value_low_m    number — the figure in MILLIONS of its
+                                      stated currency; for a range ("£38-42m")
+                                      the LOW end; for "at least X" / "not
+                                      less than X", X itself
+                       value_high_m   number or null — the range's high end
+                       currency       "GBP" | "USD" | "EUR" | the ISO code
+                                      stated
+                       period_label   short label, e.g. "FY2026"
+                       period_months  integer — how many months the figure
+                                      covers (12 = full year)
+                       source         "guidance" | "consensus" | "actual"
+                       relation       "eq" (stated as-is / approximately) |
+                                      "min" ("at least X") | "above" (results
+                                      expected to be AHEAD of this consensus
+                                      figure)
+                       quote          the verbatim sentence(s) the figure
+                                      appears in, copied exactly
 
 Return JSON only — no preamble, no code fence."""
 
@@ -1355,6 +1419,70 @@ def _clean_earnings_quality(raw) -> Optional[list]:
     return out or None
 
 
+# The three fwd_profit enums. Unlike _VS_PRIOR above these do NOT fail open to
+# a safe default: showcase_fwd.compute_fwd_multiple refuses to divide by a
+# figure whose metric or basis it doesn't recognise, and that is the behaviour
+# we want. An unrecognised label lands as None and the multiple comes back
+# blank, which on this field is the safe direction — a wrong number on a public
+# page is worse than no number.
+_FWD_METRIC = ("ebitda", "ebit", "pbt")
+_FWD_SOURCE = ("guidance", "consensus", "actual")
+_FWD_RELATION = ("eq", "min", "above")
+
+
+def _clean_fwd_profit(raw) -> Optional[dict]:
+    """Normalise the model's fwd_profit object before it is stored.
+
+    Returns None (SQL NULL) only when the model emitted nothing shaped like an
+    answer. That distinction is load-bearing downstream: a stored
+    {"found": false} means the ranker read the announcement and no qualifying
+    profit figure was stated, while NULL means this row was ranked before the
+    field existed — and showcase leaves the latter eligible for the
+    /extract-fwd backfill while treating the former as finished work.
+
+    The numbers are only coerced here, never gated. Whether the figure can
+    actually become a multiple is showcase_fwd.compute_fwd_multiple's call and
+    stays there, so that every rejection is visible against the stored quote
+    rather than silently dropped by this function — same contract as
+    _clean_earnings_quality.
+    """
+    if not isinstance(raw, dict):
+        return None
+    if not raw.get("found"):
+        # Preserve the negative answer, discard whatever else came with it —
+        # the schema says every other field is null when found is false, and a
+        # model that fills them in anyway is contradicting itself.
+        return {"found": False}
+
+    def _num(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f == f else None  # NaN guard
+
+    metric = str(raw.get("metric") or "").lower().strip()
+    source = str(raw.get("source") or "").lower().strip()
+    relation = str(raw.get("relation") or "").lower().strip()
+    months = raw.get("period_months")
+    return {
+        "found": True,
+        "metric": metric if metric in _FWD_METRIC else None,
+        "value_low_m": _num(raw.get("value_low_m")),
+        "value_high_m": _num(raw.get("value_high_m")),
+        "currency": (str(raw.get("currency") or "").upper().strip()[:8] or None),
+        "period_label": (str(raw.get("period_label") or "").strip()[:40] or None),
+        "period_months": int(months) if isinstance(months, (int, float)) else None,
+        "source": source if source in _FWD_SOURCE else None,
+        # "eq" is the ordinary case and the one the schema asks for when the
+        # figure is stated plainly, so an absent or unrecognised relation is
+        # read as "eq" rather than blanking the multiple. It only controls the
+        # fwd_is_bound "<" prefix, never whether the number is computed.
+        "relation": relation if relation in _FWD_RELATION else "eq",
+        "quote": (str(raw.get("quote") or "").strip()[:600] or None),
+    }
+
+
 def _save_ranking(ann_id: int, result: dict, model: str) -> None:
     # Sentiment is constrained to the three known values — anything else the
     # model invents is stored as NULL so _sentiment falls back to its scan.
@@ -1363,6 +1491,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
         sentiment = None
     guidance_checks = _clean_guidance_checks(result.get("guidance_checks"))
     earnings_quality = _clean_earnings_quality(result.get("earnings_quality"))
+    fwd_profit = _clean_fwd_profit(result.get("fwd_profit"))
     # Optional — most announcements state no explicit forward guidance figure.
     guidance_metric = (result.get("guidance_metric") or "").strip()[:200] or None
     guidance_value = (result.get("guidance_value") or "").strip()[:200] or None
@@ -1391,7 +1520,8 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 guidance_value   = %s,
                 guidance_period  = %s,
                 guidance_checks  = %s,
-                earnings_quality = %s
+                earnings_quality = %s,
+                fwd_profit       = %s
             WHERE id = %s
         """,
             (
@@ -1407,6 +1537,7 @@ def _save_ranking(ann_id: int, result: dict, model: str) -> None:
                 guidance_period,
                 Json(guidance_checks) if guidance_checks is not None else None,
                 Json(earnings_quality) if earnings_quality is not None else None,
+                Json(fwd_profit) if fwd_profit is not None else None,
                 ann_id,
             ),
         )

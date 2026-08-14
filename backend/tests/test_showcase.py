@@ -10,6 +10,7 @@ import pytest
 
 import gates
 import showcase
+import showcase_fwd
 
 
 @pytest.fixture(autouse=True)
@@ -1645,6 +1646,291 @@ def test_vet_full_text_head_tail_keeps_both_ends():
     assert out.startswith("H")
     assert out.endswith("T")
     assert "5000 chars omitted" in out
+
+
+# ── forward multiple off the ranker's extraction (migration 032) ─────────────
+def _fwd_profit(**kw):
+    base = dict(found=True, metric="ebitda", value_low_m=20.0, value_high_m=None,
+                currency="GBP", period_label="FY2026", period_months=12,
+                source="guidance", relation="eq", quote="Adjusted EBITDA of £20m")
+    base.update(kw)
+    return base
+
+
+def test_fwd_from_ranker_computes_the_multiple_with_no_call():
+    """The whole point: the figure came out of the ranker's scoring response, so
+    the multiple costs neither a DeepSeek call nor an Investegate fetch."""
+    with patch("showcase_fwd._run_extraction") as run, \
+         patch("showcase_fwd.fetch_announcement_text") as fetch:
+        out = showcase_fwd.fwd_from_ranker(
+            _cand(fwd_profit=_fwd_profit(), llm_model="deepseek-v4-flash:thinking")
+        )
+    run.assert_not_called()
+    fetch.assert_not_called()
+    # market_cap 200m, no net debt -> EV 200m / EBITDA 20m
+    assert out["fwd_multiple"] == 10.0
+    assert out["fwd_metric"] == "ebitda"
+    assert out["fwd_basis"] == "guidance"
+    assert out["fwd_value"] == 20_000_000
+    # fwd_model records WHICH model produced the figure, and it is now the
+    # ranker's rather than showcase_fwd's own constant.
+    assert out["fwd_model"] == "deepseek-v4-flash:thinking"
+
+
+def test_fwd_from_ranker_returns_none_without_an_extraction():
+    """A row ranked before 032 shipped. None (not an all-None dict) is what
+    tells the caller to leave fwd_processed_at NULL so the paid backfill can
+    still pick it up."""
+    assert showcase_fwd.fwd_from_ranker(_cand()) is None
+    assert showcase_fwd.fwd_from_ranker(_cand(fwd_profit=None)) is None
+
+
+def test_fwd_from_ranker_reads_a_json_string():
+    out = showcase_fwd.fwd_from_ranker(
+        _cand(fwd_profit=json.dumps(_fwd_profit()))
+    )
+    assert out["fwd_multiple"] == 10.0
+
+
+def test_fwd_from_ranker_found_false_counts_as_processed():
+    """"The ranker read it and nothing qualified" is finished work, not a gap.
+    Stamping it stops the backfill route paying to ask the same question."""
+    out = showcase_fwd.fwd_from_ranker(_cand(fwd_profit={"found": False}))
+    assert out["fwd_multiple"] is None
+    assert out["fwd_processed_at"] is not None
+
+
+def test_fwd_from_ranker_still_applies_every_gate():
+    """compute_fwd_multiple is reused verbatim, so the gates that guard the
+    number did not move and are not re-implemented here."""
+    usd = showcase_fwd.fwd_from_ranker(_cand(fwd_profit=_fwd_profit(currency="USD")))
+    assert usd["fwd_multiple"] is None      # no FX, by design
+    half = showcase_fwd.fwd_from_ranker(_cand(fwd_profit=_fwd_profit(period_months=6)))
+    assert half["fwd_multiple"] is None     # H1 figure, not a full year
+    bank = showcase_fwd.fwd_from_ranker(
+        _cand(fwd_profit=_fwd_profit(), sector="Financial Services", industry="Banks")
+    )
+    assert bank["fwd_multiple"] is None     # EV is meaningless for a bank
+    tiny = showcase_fwd.fwd_from_ranker(
+        _cand(fwd_profit=_fwd_profit(value_low_m=0.5))
+    )
+    assert tiny["fwd_multiple"] is None     # 400x — outside the sanity band
+    # ...but the extraction itself is still stored on every one of those, so a
+    # blank column can always be explained against the quote.
+    assert usd["fwd_quote"] and usd["fwd_currency"] == "USD"
+
+
+@pytest.mark.parametrize("value_m, quote", [
+    # The three live derivations caught on 2026-08-14, each a stated growth
+    # rate multiplied into a stated base. Copying is the module's one hard rule
+    # and this is the only enforcement of it that does not need the model's
+    # cooperation — the prompt already forbade all three in as many words.
+    (3654.0, "Underlying EBIT Increase in the range of 10% to 12% £3,322m"),
+    (645.0, "Operating profit growth of c.42% ... consensus adjusted operating "
+            "profit for FY26 is £454m"),
+    (486.0, "a further c.7% upgrade to consensus ... consensus adjusted "
+            "operating profit for FY26 is £454m"),
+])
+def test_fwd_rejects_a_figure_its_quote_does_not_contain(value_m, quote):
+    out = showcase_fwd.fwd_from_ranker(_cand(
+        fwd_profit=_fwd_profit(metric="ebit", value_low_m=value_m, quote=quote),
+        market_cap=60_000_000_000,
+    ))
+    assert out["fwd_multiple"] is None
+    # The extraction is still stored — a blank column has to be explainable.
+    assert out["fwd_value"] == value_m * 1e6
+    assert out["fwd_quote"]
+
+
+def test_fwd_keeps_the_figure_the_same_quote_does_print():
+    """The other half of the DPLM case: the £454m consensus figure printed in
+    the footnote is a real stated number and must still pass, or the guard
+    would just be blanking the announcements it was meant to read."""
+    out = showcase_fwd.fwd_from_ranker(_cand(fwd_profit=_fwd_profit(
+        metric="ebit", value_low_m=454.0, source="consensus",
+        quote="Analyst consensus adjusted operating profit for FY26 is £454m, "
+              "as at 15 July 2026. Operating profit growth of c.42%",
+    ), market_cap=9_000_000_000))
+    assert out["fwd_multiple"] == 19.82
+
+
+def test_fwd_quote_check_matches_across_units():
+    """The quote's units and the extraction's routinely differ, and a range
+    carries its suffix only on the last member ("£4.7-4.9bn"). Rolls Royce is
+    the live case: value_low_m 4700 against a quote saying 4.7bn."""
+    assert showcase_fwd._quote_contains_value(
+        "we now expect £4.7bn-£4.9bn underlying operating profit", 4700.0)
+    assert showcase_fwd._quote_contains_value(
+        "Analyst consensus adjusted operating profit for FY26 is £454m", 454.0)
+    assert showcase_fwd._quote_contains_value("Underlying EBIT £3,322m", 3322.0)
+    assert showcase_fwd._quote_contains_value("EBITDA of £15.0 million", 15.0)
+    # ...and does not wave through a number that simply isn't there.
+    assert not showcase_fwd._quote_contains_value(
+        "Underlying EBIT up 10% to 12% on £3,322m", 3654.0)
+    assert not showcase_fwd._quote_contains_value("", 40.0)
+
+
+def test_fwd_quote_check_applies_to_the_legacy_extractor_too():
+    """Both callers reach compute_fwd_multiple, so a derived figure is caught
+    whichever call produced it."""
+    out = showcase_fwd.compute_fwd_multiple(
+        {"found": True, "metric": "ebitda", "value_low_m": 99.0, "currency": "GBP",
+         "period_months": 12, "source": "guidance", "relation": "eq",
+         "quote": "EBITDA margin of 20% on revenue of £495m"},
+        _cand(), "m",
+    )
+    assert out["fwd_multiple"] is None
+
+
+def test_fwd_from_ranker_marks_an_upper_bound():
+    out = showcase_fwd.fwd_from_ranker(
+        _cand(fwd_profit=_fwd_profit(relation="above", source="consensus"))
+    )
+    assert out["fwd_is_bound"] is True
+    assert out["fwd_basis"] == "consensus"
+
+
+def test_flag_computes_the_multiple_on_a_shadow_row():
+    """THE ARCHIVE BUG. Between 5d6f7f5 and migration 032 the multiple ran only
+    `if publish:`, so every row of /high-impact-rns/archive — which is nothing
+    but shadow rows — showed a blank. Free extraction, so no reason to skip."""
+    vet = {"verdict": "caution", "confidence": "medium", "rationale": "thin",
+           "score": 64, "model": "deepseek-v4-flash:thinking", "low_base": None}
+    cand = _cand(llm_score=65, fwd_profit=_fwd_profit())
+    with patch.object(showcase, "_q", return_value=[cand]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation"), \
+         patch.object(showcase, "_exec", return_value=1) as ex:
+        res = showcase.flag_high_impact_candidates()
+    assert res["shadowed"] == 1
+    params = ex.call_args[0][1]
+    assert params[-1] == "shadow"
+    assert params[23] == "ebitda"      # fwd_metric
+    assert params[31] == 10.0          # fwd_multiple — the column that was blank
+    assert params[33] is not None      # fwd_processed_at stamped
+
+
+def test_flag_never_pays_for_a_second_extraction_call():
+    """The reason the `if publish:` gate could be dropped. If this ever fails,
+    the morning batch has quietly gone back to two LLM calls per candidate."""
+    vet = {"verdict": "include", "confidence": "high", "rationale": "ok",
+           "score": 85, "model": "m", "low_base": None}
+    with patch.object(showcase, "_q", return_value=[_cand(fwd_profit=_fwd_profit())]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation"), \
+         patch.object(showcase, "_exec", return_value=1), \
+         patch("showcase_fwd.extract_fwd_fields") as extract:
+        showcase.flag_high_impact_candidates()
+    extract.assert_not_called()
+
+
+def test_flag_leaves_a_pre_032_row_eligible_for_backfill():
+    """No ranker extraction — the row must NOT be stamped, or the /extract-fwd
+    backfill will skip it forever."""
+    vet = {"verdict": "include", "confidence": "high", "rationale": "ok",
+           "score": 85, "model": "m", "low_base": None}
+    with patch.object(showcase, "_q", return_value=[_cand()]), \
+         patch.object(showcase, "_story_close", return_value=1.0), \
+         patch.object(showcase, "_vet_candidate", return_value=vet), \
+         patch.object(gates, "record_low_base_evaluation"), \
+         patch.object(showcase, "_exec", return_value=1) as ex:
+        showcase.flag_high_impact_candidates()
+    params = ex.call_args[0][1]
+    assert params[31] is None          # fwd_multiple
+    assert params[33] is None          # fwd_processed_at NULL -> still eligible
+
+
+def test_candidate_sql_selects_the_ranker_extraction():
+    with patch.object(showcase, "_q", return_value=[]) as q:
+        showcase.flag_high_impact_candidates()
+    sql = " ".join(q.call_args[0][0].split())
+    assert "r.fwd_profit" in sql
+    assert "r.llm_model" in sql
+
+
+# ── reported numbers on the archive (Tier 1) ─────────────────────────────────
+def test_reported_lines_passes_values_through_verbatim():
+    """Values span money, percentages, pence per share and prose, so they are
+    NOT normalised — a parser over that would be wrong often enough to mislead,
+    and the announcement's own wording is the audit trail."""
+    rows = [{"showcase_id": 7, "earnings_quality": [
+        {"period": "H1 2026", "item": "Revenue", "value": "£89.0m",
+         "prior_value": "£71.2m (implied from 25% growth)"},
+        {"period": "H1 2026", "item": "InnovaMatrix revenue", "value": "down >90%",
+         "prior_value": None},
+    ]}]
+    with patch.object(showcase, "_q", return_value=rows):
+        out = showcase._reported_lines([{"id": 7}])
+    assert out[7][0]["value"] == "£89.0m"
+    assert out[7][1]["value"] == "down >90%"
+
+
+def test_reported_lines_reads_jsonb_delivered_as_text():
+    rows = [{"showcase_id": 7,
+             "earnings_quality": json.dumps([{"item": "Revenue", "value": "£1m"}])}]
+    with patch.object(showcase, "_q", return_value=rows):
+        out = showcase._reported_lines([{"id": 7}])
+    assert out[7][0]["item"] == "Revenue"
+
+
+def test_reported_lines_skips_rows_with_nothing_extracted():
+    for eq in (None, [], "not json"):
+        with patch.object(showcase, "_q", return_value=[{"showcase_id": 7, "earnings_quality": eq}]):
+            assert showcase._reported_lines([{"id": 7}]) == {}
+
+
+def test_net_debt_series_computes_leverage_only_where_it_means_something():
+    rows = [
+        {"company_symbol": "A.L", "fiscal_year": 2024, "period_end_date": None,
+         "net_debt": 100.0, "ebitda": 50.0},
+        # Negative EBITDA makes the ratio meaningless rather than large — the
+        # same call rns_llm._build_messages makes for its own leverage line.
+        {"company_symbol": "A.L", "fiscal_year": 2025, "period_end_date": None,
+         "net_debt": 100.0, "ebitda": -50.0},
+        {"company_symbol": "A.L", "fiscal_year": 2026, "period_end_date": None,
+         "net_debt": None, "ebitda": 50.0},
+    ]
+    with patch.object(showcase, "_q", return_value=rows):
+        out = showcase._net_debt_series(["A.L"])
+    assert out["A.L"][0]["net_debt_to_ebitda"] == 2.0
+    assert out["A.L"][1]["net_debt_to_ebitda"] is None
+    assert out["A.L"][2]["net_debt"] is None
+
+
+def test_net_debt_series_keeps_net_cash_negative():
+    """Net cash must stay a negative net_debt in the payload — the UI is what
+    turns it into "net cash", exactly as _fmt_net_debt_m does server-side. A
+    sign lost here inverts a leverage read."""
+    rows = [{"company_symbol": "A.L", "fiscal_year": 2025, "period_end_date": None,
+             "net_debt": -198.6, "ebitda": 50.0}]
+    with patch.object(showcase, "_q", return_value=rows):
+        out = showcase._net_debt_series(["A.L"])
+    assert out["A.L"][0]["net_debt"] == -198.6
+
+
+def test_archive_endpoint_asks_for_the_detail(client):
+    with patch.object(showcase, "_q", return_value=[]), \
+         patch.object(showcase, "_enrich", return_value=[]) as enrich:
+        client.get("/api/showcase/shadow")
+    assert enrich.call_args.kwargs.get("detail") is True
+
+
+def test_public_showcase_pays_for_no_detail(client):
+    """The public list is the hot, cached path and must not pay for two extra
+    queries it never renders."""
+    with patch.object(showcase, "_q", return_value=[]), \
+         patch.object(showcase, "_enrich", return_value=[]) as enrich:
+        client.get("/api/showcase")
+    assert enrich.call_args.kwargs.get("detail") in (None, False)
+
+
+def test_pending_endpoint_pays_for_no_detail(client):
+    with patch.object(showcase, "_q", return_value=[]), \
+         patch.object(showcase, "_enrich", return_value=[]) as enrich:
+        client.get("/api/showcase/pending")
+    assert enrich.call_args.kwargs.get("detail") in (None, False)
 
 
 # ── price context (1m/6m) ─────────────────────────────────────────────────────

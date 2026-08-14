@@ -1,0 +1,57 @@
+-- Move the showcase forward-multiple extraction onto the ranker's existing
+-- call. See showcase_fwd.py's module docstring for what the multiple is.
+--
+-- Why: showcase_fwd.extract_fwd_fields was a SECOND DeepSeek call plus its own
+-- Investegate fetch, run per candidate. Commit 5d6f7f5 made the vet the
+-- publication decision, which created the shadow bucket, and the fwd call was
+-- gated behind `if publish:` to avoid paying for it on the ~80% of candidates
+-- that never publish. The consequence is that /high-impact-rns/archive — which
+-- is entirely shadow rows — shows a blank multiple on every row.
+--
+-- The ranker already reads the whole announcement and already extracts figures
+-- (guidance_checks, earnings_quality). Having it also copy out the one profit
+-- figure the multiple needs costs ~100 output tokens on a response that is
+-- being generated anyway, so the multiple becomes free and can run on every
+-- candidate, published or shadow.
+--
+-- It also reads BETTER text. showcase_fwd.fetch_announcement_text takes a
+-- head-only 15,000-char cut; rns_announcements.body is capped at 24k as head
+-- 16k + TAIL 8k (rns._truncate_body). The tail is where the consensus
+-- footnotes live — the thing showcase_fwd's docstring says only survives in
+-- full text — so the head-only cut was losing exactly the figures it was
+-- fetching for.
+--
+-- Shape: JSONB object, at most one per announcement, mirroring the field names
+-- showcase_fwd.compute_fwd_multiple already consumes so the Python arithmetic
+-- and every gate in it (GBP-only, ~12-month periods, banks/insurers/trusts
+-- dropped, 1-60x sanity band) are reused unchanged:
+--   {found, metric, value_low_m, value_high_m, currency, period_label,
+--    period_months, source, relation, quote}
+--   metric   ∈ ebitda | ebit | pbt
+--   source   ∈ guidance | consensus | actual
+--   relation ∈ eq | min | above
+--
+-- Deliberately NOT folded into guidance_checks, which gates.py and the
+-- showcase vet both read: this needs to carry a reported full-year ACTUAL
+-- (2 of the 14 multiples ever computed came from one, BA.L's FY2025 EBIT among
+-- them), and a forward-guidance array structurally cannot hold that. Keeping
+-- them apart also means no gate needs re-testing.
+--
+-- {"found": false} is a real answer and is stored — it records that the ranker
+-- read the text and no qualifying figure was stated. SQL NULL means the row
+-- was ranked before this field existed, which is what keeps it eligible for
+-- the POST /api/showcase/extract-fwd backfill (showcase.extract_fwd skips rows
+-- already stamped with fwd_processed_at).
+--
+-- Survives the 30-day body prune (rns._prune_old) for the same reason
+-- guidance_checks does: it is small, and it is the audit trail for a number
+-- shown on a public page.
+--
+-- Idempotent. Apply with:
+--   python backend/run_migration.py migrations/032_rns_fwd_profit.sql
+
+ALTER TABLE rns_announcements ADD COLUMN IF NOT EXISTS fwd_profit JSONB;
+
+-- Read one row at a time by id from the showcase candidate SQL, never scanned
+-- across issuers, so no index is warranted here — unlike guidance_checks,
+-- whose gate sweeps recent rows.
