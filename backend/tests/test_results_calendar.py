@@ -8,6 +8,7 @@ import pytest
 from results_calendar import (
     _diary_key,
     _resolve_symbol,
+    cross_check_events,
     current_week_start,
     parse_diary,
 )
@@ -159,3 +160,75 @@ def test_friday_and_saturday_differ_by_a_whole_week():
     friday = current_week_start(date(2026, 8, 7))
     saturday = current_week_start(date(2026, 8, 8))
     assert (saturday - friday).days == 7
+
+
+# ── FTSE 100 cross-check ──────────────────────────────────────────────────────
+#
+# The diary omits companies outright — it dropped Aviva's 14 Aug 2026 interims
+# from every week between 20 Jul and 31 Aug — and a missing row is
+# indistinguishable from a quiet day. These cover the merge rules; the network
+# call itself (fetch_index_earnings_dates) is not unit-tested.
+
+WEEK_10_AUG = date(2026, 8, 10)
+
+
+def _diary_row(symbol, day, event_type="interims"):
+    return {"event_date": date(2026, 8, day), "week_start": WEEK_10_AUG,
+            "event_type": event_type, "source_name": symbol, "source_id": "1",
+            "symbol": symbol, "company_name": None, "source": "diary"}
+
+
+def test_cross_check_adds_a_company_the_diary_omitted():
+    """The Aviva case, which is the whole reason this exists."""
+    extra = cross_check_events({"AV.L": date(2026, 8, 14)}, WEEK_10_AUG, [])
+    assert len(extra) == 1
+    assert extra[0]["symbol"] == "AV.L"
+    assert extra[0]["event_date"] == date(2026, 8, 14)
+    assert extra[0]["source"] == "yfinance"
+    # No interim/final distinction is available, so it must not invent one.
+    assert extra[0]["event_type"] == "results"
+
+
+def test_cross_check_defers_to_the_diary_on_the_same_day():
+    extra = cross_check_events({"IHG.L": date(2026, 8, 11)}, WEEK_10_AUG,
+                               [_diary_row("IHG.L", 11)])
+    assert extra == []
+
+
+def test_cross_check_defers_to_the_diary_on_a_DIFFERENT_day():
+    """The rule is per-WEEK, not per-day. get_week only dedups within a single
+    day, so a disagreeing yfinance date would put the same logo in two columns
+    and read as two separate announcements. The diary is the better date source,
+    so it wins outright."""
+    extra = cross_check_events({"IHG.L": date(2026, 8, 13)}, WEEK_10_AUG,
+                               [_diary_row("IHG.L", 11)])
+    assert extra == []
+
+
+def test_cross_check_ignores_dates_outside_the_week():
+    dates = {"BNZL.L": date(2026, 9, 1), "MNG.L": date(2026, 8, 3)}
+    assert cross_check_events(dates, WEEK_10_AUG, []) == []
+
+
+def test_cross_check_drops_weekend_dates():
+    """The grid has five columns; a Saturday date would be written and never
+    rendered."""
+    assert cross_check_events({"AV.L": date(2026, 8, 15)}, WEEK_10_AUG, []) == []
+
+
+def test_cross_check_does_not_defer_to_an_unresolved_diary_row():
+    """An unmatched diary row has symbol=None. It must not swallow the whole
+    cross-check by matching every symbol."""
+    unresolved = dict(_diary_row("AV.L", 14), symbol=None)
+    extra = cross_check_events({"AV.L": date(2026, 8, 14)}, WEEK_10_AUG, [unresolved])
+    assert [e["symbol"] for e in extra] == ["AV.L"]
+
+
+def test_cross_check_rows_carry_the_fields_the_insert_needs():
+    """refresh() feeds these straight into a named-parameter INSERT, so a missing
+    key is a KeyError mid-transaction rather than a caught failure."""
+    extra = cross_check_events({"AV.L": date(2026, 8, 14)}, WEEK_10_AUG, [])
+    assert set(extra[0]) == {"event_date", "week_start", "event_type",
+                             "source_name", "source_id", "symbol",
+                             "company_name", "source"}
+    assert extra[0]["week_start"] == WEEK_10_AUG

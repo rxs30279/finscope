@@ -9,6 +9,11 @@ export type CalendarCompany = {
   event_label: string;
   sector: string | null;
   ftse_index: string | null;
+  // "diary" (Digital Look, the primary source) or "yfinance" (FTSE 100
+  // cross-check, which fills the diary's outright omissions). Not rendered —
+  // carried so a wrong date can be traced to its source from the response alone.
+  // Optional because rows written before the cross-check shipped lack it.
+  source?: string;
 };
 
 export type CalendarDay = {

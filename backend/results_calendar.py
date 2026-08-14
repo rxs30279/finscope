@@ -27,10 +27,19 @@ an announcement did not happen.
 The diary exposes no ticker (companies link by an internal `csi=` id), so rows
 are matched to our universe by name. See `_resolve_symbol` for why that is worth
 ~70% and why the remainder is fine to lose.
+
+COVERAGE, as distinct from accuracy: the 96.8% above scores only diary events
+that EXIST. The diary also drops companies outright, including blue chips —
+Aviva's 14 Aug 2026 interims appeared in no diary week between 20 Jul and 31 Aug,
+though the same source carried Aviva for Aug 2025 interims and Mar 2026 finals.
+Nothing in the pipeline could flag that; a missing row looks like a quiet day.
+`fetch_index_earnings_dates` backfills the FTSE 100 from yfinance for exactly
+this failure mode. See that docstring for why it is a supplement, not a source.
 """
 
 import os
 import re
+import time
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -77,7 +86,23 @@ _EVENT_LABELS = {
     "q3": "Q3 results",
     "q4": "Q4 results",
     "trading_update": "Trading update",
+    # yfinance gives a date and nothing else — no interim/final distinction — so
+    # cross-check rows get a deliberately vague label rather than a guessed one.
+    "results": "Results",
 }
+
+# ── FTSE 100 cross-check ──────────────────────────────────────────────────────
+
+# Which index to backfill. Deliberately just the FTSE 100: yfinance's forward
+# coverage measured 84/100 there but ~20% for the FTSE 250 and 0% for plain AIM,
+# so widening it buys almost nothing and costs a request per symbol.
+YF_INDEX = os.getenv("RESULTS_CALENDAR_YF_INDEX", "FTSE 100")
+
+# Set to "0" to fall back to diary-only.
+YF_CROSS_CHECK = os.getenv("RESULTS_CALENDAR_YF_CROSSCHECK", "1") != "0"
+
+# Pause between symbol lookups. 100 symbols ≈ 40s added to a daily cron.
+YF_DELAY = float(os.getenv("RESULTS_CALENDAR_YF_DELAY", "0.3"))
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
 #
@@ -236,24 +261,146 @@ def _fetch_week(week_start: date, timeout: int = 30) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None) -> dict:
+def fetch_index_earnings_dates(index: str = YF_INDEX,
+                               today: Optional[date] = None) -> dict[str, date]:
+    """symbol -> next earnings date, for one index, from yfinance. Network-bound.
+
+    A SUPPLEMENT to the diary, never a replacement — it only covers large caps,
+    and it carries no event type. What it is good for is the diary's blind spot:
+    a company the diary never lists at all.
+
+    Measured over the FTSE 100 on 2026-08-14:
+      * 84/100 carry a date. Of the 59 already elapsed, 37 were judgeable against
+        our results RNS: 35 exact day, 2 within a day, 0 wrong by more than a day
+        (18 predate the RNS feed, 4 had no corroborating RNS — see the filtered-
+        feed trap in the module docstring, those are UNKNOWN and not misses).
+      * Where the diary also had a forward date, the two agreed 6 times out of 6.
+
+    GOTCHA that makes the `>= today` filter load-bearing: once a company reports,
+    Yahoo leaves the field pointing at the date it just REPORTED rather than
+    clearing it. 59 of those 84 dates were in the past. Publishing unfiltered
+    would put two thirds of the index on days that have already been and gone.
+
+    Failures are swallowed per symbol: this is a best-effort enrichment and must
+    never take the diary refresh down with it.
+    """
+    import yfinance as yf  # deferred — heaviest import, only this path needs it
+
+    today = today or datetime.now(timezone.utc).date()
+    symbols = [r["symbol"] for r in query(
+        "SELECT symbol FROM company_metadata WHERE is_active AND ftse_index = %s "
+        "ORDER BY symbol", (index,))]
+
+    out: dict[str, date] = {}
+    failures = 0
+    for symbol in symbols:
+        try:
+            raw = (yf.Ticker(symbol).calendar or {}).get("Earnings Date") or []
+            # Yahoo occasionally returns a two-element ESTIMATED range instead of
+            # a confirmed day. Taking the earliest future element keeps the
+            # behaviour defined; none of the FTSE 100 did this when measured.
+            future = sorted(d for d in raw if isinstance(d, date) and d >= today)
+            if future:
+                out[symbol] = future[0]
+        except Exception as exc:
+            failures += 1
+            print(f"[results_calendar] yfinance skip {symbol}: "
+                  f"{type(exc).__name__}: {exc}")
+        time.sleep(YF_DELAY)
+
+    print(f"[results_calendar] yfinance {index}: {len(out)} forward dates "
+          f"from {len(symbols)} symbols ({failures} errors)")
+    return out
+
+
+def cross_check_events(yf_dates: dict[str, date], week_start: date,
+                       diary_events: list[dict]) -> list[dict]:
+    """Rows to ADD to one week from the yfinance dates. Pure — no network, no DB.
+
+    THE DIARY WINS. If it placed a company anywhere in this week, its row is kept
+    and the yfinance date is dropped, even when the two disagree — the diary is
+    the more accurate source on dates and knows the event type. The rule is
+    per-week rather than per-day on purpose: `get_week` only dedups within a
+    single day (`DISTINCT ON (event_date, symbol)`), so a yfinance row landing on
+    a different day of the same week would render the same logo twice in one
+    grid, which reads as two separate results announcements.
+
+    Dates outside Monday-Friday of this week are dropped: the page has five
+    columns and nothing would render a Saturday.
+    """
+    placed = {e["symbol"] for e in diary_events if e.get("symbol")}
+    week_end = week_start + timedelta(days=4)
+    return [
+        {
+            "event_date": d,
+            "week_start": week_start,
+            "event_type": "results",
+            # yfinance is keyed by ticker, so the ticker IS the source's natural
+            # key here — the diary's equivalent of a printed company name.
+            "source_name": symbol,
+            "source_id": None,
+            "symbol": symbol,
+            "company_name": None,  # filled from company_metadata by the caller
+            "source": "yfinance",
+        }
+        for symbol, d in sorted(yf_dates.items())
+        if symbol not in placed and week_start <= d <= week_end
+    ]
+
+
+def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None,
+            yf_dates: Optional[dict[str, date]] = None) -> dict:
     """Scrape the current display week plus `weeks_ahead` more and upsert.
 
     Deleting a week's rows before re-inserting is what lets a MOVED date
     disappear: an upsert alone would leave the company sitting on its old day
     forever. Each week is replaced inside one transaction so the page never
     reads a half-written week.
+
+    The yfinance cross-check is fetched ONCE and reused for every week — its
+    dates are absolute, not per-week, and re-querying 100 tickers per week would
+    quadruple the cost for identical answers. Pass `yf_dates` to inject a fixture
+    or `{}` to skip the network entirely.
+
+    That the cross-check writes into the same DELETE/INSERT transaction is not
+    incidental: rows written outside it would be wiped by the next week rewrite.
     """
     start = current_week_start(today)
     weeks = [start + timedelta(weeks=i) for i in range(weeks_ahead + 1)]
     index = build_universe_index()
+    names = {row["symbol"]: row["name"] for row in
+             query("SELECT symbol, name FROM company_metadata WHERE is_active")}
 
-    total = matched = 0
+    if yf_dates is None:
+        if YF_CROSS_CHECK:
+            try:
+                yf_dates = fetch_index_earnings_dates(today=today)
+            except Exception as exc:
+                # An enrichment must never sink the primary source.
+                print(f"[results_calendar] yfinance cross-check unavailable — "
+                      f"{type(exc).__name__}: {exc}")
+                yf_dates = {}
+        else:
+            yf_dates = {}
+
+    total = matched = extra_total = 0
     per_week = []
     for week in weeks:
         events = parse_diary(_fetch_week(week), week)
         for e in events:
             e["symbol"], e["company_name"] = _resolve_symbol(e["source_name"], index)
+            e["source"] = "diary"
+
+        # Counted before the cross-check is mixed in, so `status` and the match
+        # rate still describe the DIARY. Otherwise a working cross-check would
+        # mask a total diary outage and the run would exit 0 on a broken scrape.
+        diary_count = len(events)
+        hit = sum(1 for e in events if e["symbol"])
+
+        extra = cross_check_events(yf_dates, week, events)
+        for e in extra:
+            e["company_name"] = names.get(e["symbol"])
+        events += extra
 
         with connection() as conn:
             # Pooled connections come back from db.query() with autocommit ON,
@@ -266,13 +413,14 @@ def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None) -> dic
                     cur.execute(
                         """INSERT INTO results_calendar
                              (event_date, week_start, event_type, source_name,
-                              source_id, symbol, company_name)
+                              source_id, symbol, company_name, source)
                            VALUES (%(event_date)s, %(week_start)s, %(event_type)s,
                                    %(source_name)s, %(source_id)s, %(symbol)s,
-                                   %(company_name)s)
+                                   %(company_name)s, %(source)s)
                            ON CONFLICT (event_date, event_type, source_name)
                            DO UPDATE SET symbol = EXCLUDED.symbol,
                                          company_name = EXCLUDED.company_name,
+                                         source = EXCLUDED.source,
                                          fetched_at = NOW()""",
                         e,
                     )
@@ -282,17 +430,20 @@ def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None) -> dic
             # back an aborted transaction, so a failure above is safe too.)
             conn.autocommit = True
 
-        hit = sum(1 for e in events if e["symbol"])
-        total += len(events)
+        total += diary_count
         matched += hit
+        extra_total += len(extra)
         per_week.append({"week_start": week.isoformat(),
-                         "events": len(events), "matched": hit})
+                         "events": diary_count, "matched": hit,
+                         "cross_check": len(extra)})
 
     return {
+        # Deliberately keyed off the DIARY count alone — see the note above.
         "status": "ok" if total else "empty",
         "weeks": per_week,
         "events": total,
         "matched": matched,
+        "cross_check": extra_total,
         "match_pct": round(100 * matched / total, 1) if total else 0.0,
     }
 
@@ -325,7 +476,7 @@ def get_week(week: Optional[str] = Query(None, description="Any date in the week
     # update. A company reporting on two DIFFERENT days keeps both rows.
     rows = query(
         """SELECT DISTINCT ON (r.event_date, r.symbol)
-                  r.event_date, r.event_type, r.symbol,
+                  r.event_date, r.event_type, r.symbol, r.source,
                   COALESCE(r.company_name, r.source_name) AS name,
                   cm.sector, cm.ftse_index
              FROM results_calendar r
@@ -337,7 +488,8 @@ def get_week(week: Optional[str] = Query(None, description="Any date in the week
                        WHEN 'interims' THEN 2
                        WHEN 'q1' THEN 3 WHEN 'q2' THEN 3
                        WHEN 'q3' THEN 3 WHEN 'q4' THEN 3
-                       ELSE 4
+                       WHEN 'results'  THEN 4
+                       ELSE 5
                      END""",
         (week_start,),
     )
@@ -362,6 +514,9 @@ def get_week(week: Optional[str] = Query(None, description="Any date in the week
                     "event_label": _EVENT_LABELS.get(r["event_type"], r["event_type"]),
                     "sector": r["sector"],
                     "ftse_index": r["ftse_index"],
+                    # Which source put this company on this day. Not rendered —
+                    # it is here so a wrong date can be traced without a DB query.
+                    "source": r["source"],
                 }
                 for r in rows if r["event_date"] == day
             ],

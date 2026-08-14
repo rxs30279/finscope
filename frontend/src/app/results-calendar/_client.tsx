@@ -20,6 +20,11 @@ const EVENT_COLOUR: Record<string, string> = {
   q2: colors.indigo,
   q3: colors.indigo,
   q4: colors.indigo,
+  // FTSE 100 cross-check rows, where the source gives a date but no event type.
+  // Grouped with the quarterlies rather than left to the fallback: the fallback
+  // is the "just an update" grey, and these ARE results — we just can't say
+  // which flavour.
+  results: colors.indigo,
   trading_update: colors.textFaint,
 };
 
@@ -44,11 +49,46 @@ function formatRange(startISO: string, endISO: string): string {
   return `${left} – ${end.toLocaleDateString("en-GB", opts)} ${end.getUTCFullYear()}`;
 }
 
+// Provenance stamp for a tile whose date came from Yahoo alone. These rows exist
+// because the company diary — the primary source, and the only one that knows
+// whether a result is an interim or a final — omitted the company outright. The
+// mark is what stops a date we are less sure of from passing itself off as a
+// diary-confirmed one.
+//
+// Drawn rather than fetched: Yahoo's compact mark is a purple plate with a white
+// "y!", which stays legible at 12px where a fetched wordmark would smear, and it
+// costs no request and no logo.dev token. No transform/text-shadow here — both
+// blur small text on Windows.
+function YahooMark() {
+  return (
+    <span
+      aria-label="Date from Yahoo Finance"
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        height: 12, padding: "0 3.5px", borderRadius: 3,
+        background: "#6001d2", color: "#fff",
+        fontSize: 8.5, fontWeight: 700, lineHeight: 1,
+        // It shares a line with an ellipsising name, so it must be the thing
+        // that never gives way — without this flex steals its width first and
+        // the plate collapses to a purple sliver.
+        flexShrink: 0,
+      }}
+    >
+      y!
+    </span>
+  );
+}
+
 function CompanyTile({ c, isToday }: { c: CalendarCompany; isToday: boolean }) {
+  const fromYahoo = c.source === "yfinance";
   return (
     <Link
       href={companyHref(c.symbol)}
-      title={`${c.name} — ${c.event_label}`}
+      title={
+        fromYahoo
+          ? `${c.name} — date from Yahoo Finance, not in the company diary`
+          : `${c.name} — ${c.event_label}`
+      }
       style={{
         display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
         borderRadius: 10, textDecoration: "none",
@@ -61,11 +101,17 @@ function CompanyTile({ c, isToday }: { c: CalendarCompany; isToday: boolean }) {
           backgrounds, and a dark tile swallows the dark-inked ones entirely. */}
       <LogoBadge symbol={c.symbol} size={34} fit="contain" background="#fff" />
       <span style={{ minWidth: 0 }}>
-        <span style={{
-          display: "block", color: colors.white, fontSize: 12, fontWeight: 600,
-          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-        }}>
-          {shortName(c.name)}
+        {/* The mark rides on the name's own line rather than a line of its own,
+            so a cross-check tile keeps the same height as every other tile. It
+            costs ~18px of a name field that already ellipsises. */}
+        <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+          {fromYahoo && <YahooMark />}
+          <span style={{
+            color: colors.white, fontSize: 12, fontWeight: 600,
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          }}>
+            {shortName(c.name)}
+          </span>
         </span>
         <span style={{ display: "block", color: colors.textFaint, fontSize: 10.5 }}>
           {c.symbol.replace(".L", "")} · {c.event_label}

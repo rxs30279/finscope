@@ -10,6 +10,11 @@ all shifted inside the five-week back-test -- and because each week is rewritten
 wholesale, a daily run is what lets a moved company leave its old day. A weekly
 scrape would strand logos on days nothing happens.
 
+Also backfills the FTSE 100 from yfinance, because the diary silently omits
+companies as well as moving them (it dropped Aviva's 14 Aug 2026 interims
+entirely). That adds ~40s of throttled requests. `status` still counts diary
+events only, so a working cross-check can never disguise a broken scrape.
+
 Usage:
     python run_results_calendar.py             # scrape and write
     python run_results_calendar.py --dry-run   # print what it found, write nothing
@@ -29,9 +34,12 @@ load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 from results_calendar import (
     WEEKS_AHEAD,
+    YF_CROSS_CHECK,
     _fetch_week,
     build_universe_index,
+    cross_check_events,
     current_week_start,
+    fetch_index_earnings_dates,
     parse_diary,
     refresh,
     _resolve_symbol,
@@ -43,20 +51,26 @@ def _dry_run() -> int:
 
     index = build_universe_index()
     start = current_week_start()
+    yf_dates = fetch_index_earnings_dates() if YF_CROSS_CHECK else {}
     for i in range(WEEKS_AHEAD + 1):
         week = start + timedelta(weeks=i)
         events = parse_diary(_fetch_week(week), week)
         matched = []
         for e in events:
-            sym, _ = _resolve_symbol(e["source_name"], index)
-            if sym:
-                matched.append((e["event_date"], sym, e["event_type"], e["source_name"]))
+            e["symbol"], _ = _resolve_symbol(e["source_name"], index)
+            if e["symbol"]:
+                matched.append((e["event_date"], e["symbol"], e["event_type"],
+                                e["source_name"]))
+        extra = cross_check_events(yf_dates, week, events)
         print(f"[results_calendar] week {week}: {len(events)} events, "
-              f"{len(matched)} in universe")
+              f"{len(matched)} in universe, +{len(extra)} cross-check")
         for d, sym, kind, name in sorted(matched)[:10]:
             print(f"    {d} {sym:9} {kind:14} {name}")
         if len(matched) > 10:
             print(f"    ... and {len(matched) - 10} more")
+        for e in extra:
+            print(f"    {e['event_date']} {e['symbol']:9} {'yfinance':14} "
+                  f"(diary silent)")
     return 0
 
 
@@ -74,12 +88,15 @@ def main() -> int:
 
     for w in result["weeks"]:
         print(f"[results_calendar]   {w['week_start']}: "
-              f"{w['events']} events, {w['matched']} matched")
-    print(f"[results_calendar] refresh done -- {result['events']} events, "
-          f"{result['matched']} matched ({result['match_pct']}%)")
+              f"{w['events']} events, {w['matched']} matched, "
+              f"+{w['cross_check']} from the FTSE 100 cross-check")
+    print(f"[results_calendar] refresh done -- {result['events']} diary events, "
+          f"{result['matched']} matched ({result['match_pct']}%), "
+          f"+{result['cross_check']} cross-check rows")
 
     # A totally empty scrape means the diary changed shape or started blocking
-    # us; the page would silently go blank, so fail loudly instead.
+    # us; the page would silently go blank, so fail loudly instead. `status`
+    # counts DIARY events only, so a healthy cross-check cannot mask this.
     if result["status"] == "empty":
         print("[results_calendar] NO EVENTS PARSED -- diary layout or access changed")
         return 1
