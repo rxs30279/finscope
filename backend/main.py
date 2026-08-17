@@ -810,6 +810,13 @@ def _annualised_vol(closes):
 
     Annualised std of winsorised daily log returns, or None if fewer than
     2 prices.
+
+    Reference implementation. Nothing calls this on the hot path any more —
+    _attach_risk_score computes the same number in Postgres so it can return one
+    row per symbol instead of 252 (see the query there) — but this is kept
+    deliberately: its unit tests are what pin the arithmetic that the SQL has to
+    reproduce, and reading the intent off six lines of Python is easier than off
+    a windowed aggregate. Change the two together or not at all.
     """
     if len(closes) < 2:
         return None
@@ -1093,36 +1100,66 @@ def _attach_risk_score(results):
     )
     fin_map = {r["company_symbol"]: r for r in fin_rows}
 
-    # 2. Fetch up to 252 most recent closes per symbol, oldest-first for log-return ordering
-    #    rn=1 is the latest date; ORDER BY rn DESC puts oldest (largest rn) first.
-    price_rows = query(
+    # 2. Annualised volatility over the last 252 closes per symbol, aggregated in
+    #    Postgres rather than in Python.
+    #
+    #    The closes themselves are never needed here — volatility is their only
+    #    consumer — so returning one row per symbol instead of ~252 is pure
+    #    saving. On the full-universe rebuild that is ~190,000 rows down to ~750,
+    #    which was the single largest source of Supabase egress (see
+    #    _annualised_vol for why the arithmetic below is what it is).
+    #
+    #    This MUST stay numerically identical to _annualised_vol(), which remains
+    #    the reference implementation its own unit tests pin: the same daily log
+    #    returns winsorised to ±_VOL_RETURN_CAP, the same *sample* stddev
+    #    (STDDEV_SAMP's n-1 denominator matches, and it skips the leading NULL
+    #    that LAG produces), and the same sqrt(252) annualisation. n_closes comes
+    #    back so the >= 63 minimum-history guard still applies to closes, not to
+    #    returns. The close > 0 test is a guard Python never had — it would have
+    #    raised on a zero or negative price rather than skipping it.
+    vol_rows = query(
         """
         WITH numbered AS (
             SELECT symbol, close,
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
             FROM price_history
             WHERE symbol = ANY(%s)
+        ),
+        windowed AS (
+            SELECT symbol, close, rn FROM numbered WHERE rn <= 252
+        ),
+        rets AS (
+            SELECT symbol,
+                   CASE
+                       WHEN close > 0
+                        AND LAG(close) OVER (PARTITION BY symbol ORDER BY rn DESC) > 0
+                       THEN GREATEST(-%s, LEAST(%s, LN(
+                                close / LAG(close) OVER (PARTITION BY symbol ORDER BY rn DESC)
+                            )))
+                   END AS r
+            FROM windowed
         )
-        SELECT symbol, close
-        FROM numbered
-        WHERE rn <= 252
-        ORDER BY symbol, rn DESC
+        SELECT symbol, COUNT(*) AS n_closes, STDDEV_SAMP(r) * SQRT(252) AS vol
+        FROM rets
+        GROUP BY symbol
     """,
-        (symbols,),
+        (symbols, _VOL_RETURN_CAP, _VOL_RETURN_CAP),
     )
 
-    # Group closes by symbol (list is already oldest-first within each symbol)
-    closes_map = {}
-    for r in price_rows:
-        closes_map.setdefault(r["symbol"], []).append(float(r["close"]))
+    # Too little history to characterise, or a flat/suspended series (NULL
+    # stddev) — both mean "no volatility signal", which _vol_to_score maps to None.
+    vol_map = {
+        r["symbol"]: float(r["vol"])
+        for r in vol_rows
+        if r["n_closes"] >= 63 and r["vol"] is not None
+    }
 
     # 3. Route each symbol to its model, compute and attach
     for r in results:
         sym = r["symbol"]
         f = fin_map.get(sym) or {}
 
-        closes = closes_map.get(sym, [])
-        vol = _annualised_vol(closes) if len(closes) >= 63 else None
+        vol = vol_map.get(sym)
         vol_c = _vol_to_score(vol)
 
         # No ttm row at all → no sector/industry to route on; "general" keeps
@@ -2145,8 +2182,14 @@ def help_doc(request: Request, slug: str = "user-manual"):
     (no 2 MB re-download); a re-uploaded manual changes the ETag and is fetched
     fresh immediately.
     """
+    # Deliberately two queries. The document is ~1.8 MB of BYTEA, which psycopg2
+    # reads back hex-encoded — ~3.6 MB off the database per fetch. Selecting it
+    # alongside the metadata meant every conditional request paid that in full
+    # and then answered 304 with the bytes already on the floor, and
+    # must-revalidate below means browsers send a conditional request on every
+    # single view. So: metadata first, bytes only once we know we're sending them.
     rows = query(
-        "SELECT filename, content_type, data, updated_at FROM app_documents WHERE slug = %s",
+        "SELECT filename, content_type, updated_at FROM app_documents WHERE slug = %s",
         (slug,),
     )
     if not rows:
@@ -2168,7 +2211,13 @@ def help_doc(request: Request, slug: str = "user-manual"):
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=cache_headers)
 
-    data = row["data"]
+    # Only now is the payload actually going out, so fetch it. Re-checking the
+    # row guards the (vanishingly rare) case of the document being deleted
+    # between the two queries.
+    data_rows = query("SELECT data FROM app_documents WHERE slug = %s", (slug,))
+    if not data_rows:
+        raise HTTPException(404, "Document not found")
+    data = data_rows[0]["data"]
     # psycopg2 hands BYTEA back as a memoryview; FastAPI's Response wants bytes.
     if isinstance(data, memoryview):
         data = data.tobytes()

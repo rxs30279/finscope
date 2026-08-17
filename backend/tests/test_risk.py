@@ -342,8 +342,15 @@ def _fin_row(symbol, **kwargs):
     return defaults
 
 
-def _prices(symbol, n=252, drift=0.05):
-    return [{'symbol': symbol, 'close': 100.0 + i * drift} for i in range(n)]
+def _vol(symbol, n_closes=252, vol=0.01):
+    """A row as returned by the attacher's volatility aggregate query.
+
+    _attach_risk_score no longer pulls raw closes: Postgres does the winsorised
+    log-return stddev and returns one row per symbol carrying the close count
+    (for the >= 63 minimum-history guard) and the annualised volatility. See
+    _annualised_vol, the reference implementation that SQL mirrors.
+    """
+    return [{'symbol': symbol, 'n_closes': n_closes, 'vol': vol}]
 
 
 def test_attach_risk_score_empty():
@@ -355,7 +362,7 @@ def test_attach_risk_score_attaches_fields():
     from main import _attach_risk_score
     results = [{'symbol': 'SHEL.L'}]
 
-    with patch('main.query', side_effect=[[_fin_row('SHEL.L')], _prices('SHEL.L')]):
+    with patch('main.query', side_effect=[[_fin_row('SHEL.L')], _vol('SHEL.L')]):
         _attach_risk_score(results)
 
     r = results[0]
@@ -373,7 +380,7 @@ def test_attach_risk_score_bank_skips_altman():
                    industry='Banks - Diversified', total_assets=1.5e12,
                    total_equity=75e9, price_to_book=1.0, roe=0.09, roe_median=0.09)
 
-    with patch('main.query', side_effect=[[fin], _prices('BARC.L')]):
+    with patch('main.query', side_effect=[[fin], _vol('BARC.L')]):
         _attach_risk_score(results)
 
     r = results[0]
@@ -388,7 +395,7 @@ def test_attach_risk_score_trust_is_vol_only():
     results = [{'symbol': 'ATT.L'}]
     fin = _fin_row('ATT.L', sector=None, industry=None)
 
-    with patch('main.query', side_effect=[[fin], _prices('ATT.L')]):
+    with patch('main.query', side_effect=[[fin], _vol('ATT.L')]):
         _attach_risk_score(results)
 
     r = results[0]
@@ -408,7 +415,7 @@ def test_attach_risk_score_asset_heavy_uses_zdd():
                    operating_income=21e6, revenue=129e6,
                    interest_coverage=65.5, net_debt=-194e6, ebitda=29e6)
 
-    with patch('main.query', side_effect=[[fin], _prices('BOKU.L', drift=0.15)]):
+    with patch('main.query', side_effect=[[fin], _vol('BOKU.L')]):
         _attach_risk_score(results)
 
     r = results[0]
@@ -437,7 +444,7 @@ def test_attach_risk_score_vol_none_when_insufficient_history():
     results = [{'symbol': 'SHEL.L'}]
 
     # Only 10 closes — below the 63-row threshold
-    with patch('main.query', side_effect=[[_fin_row('SHEL.L')], _prices('SHEL.L', n=10, drift=1.0)]):
+    with patch('main.query', side_effect=[[_fin_row('SHEL.L')], _vol('SHEL.L', n_closes=10)]):
         _attach_risk_score(results)
 
     r = results[0]
@@ -454,7 +461,7 @@ def test_attach_risk_score_clamps_extreme_z():
                    total_equity=10e6, retained_earnings=None,
                    working_capital=2e6, operating_income=1e6, revenue=20e6)
 
-    with patch('main.query', side_effect=[[fin], _prices('EEE.L')]):
+    with patch('main.query', side_effect=[[fin], _vol('EEE.L')]):
         _attach_risk_score(results)
 
     assert results[0]['altman_z'] == 30.0
@@ -541,7 +548,7 @@ def test_snapshot_includes_risk_fields(client):
     with patch('main.query', side_effect=[
         [snap_row],               # SELECT * FROM ttm_financials
         [_fin_row('SHEL.L')],     # _attach_risk_score fundamentals
-        _prices('SHEL.L'),        # _attach_risk_score price_history
+        _vol('SHEL.L'),           # _attach_risk_score volatility aggregate
         [mqvr_row],               # _MQVR_SQL for the header factor strip
     ]):
         r = client.get('/api/snapshot?symbol=SHEL.L')
