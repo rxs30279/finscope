@@ -281,3 +281,68 @@ def test_refresh_symbol_no_history_uses_3yr_start(client):
     assert r.status_code == 200
     called_start = mock_fetch.call_args[0][1]
     assert (_date.today() - called_start).days >= 3 * 365 - 1
+
+
+# ── _round_prices / _upsert_rows rounding ─────────────────────────────────────
+# Yahoo's float32 closes widen to float64 on the way in (182.8 arrives as
+# 182.800003051758), and Postgres returns every character of that on each read.
+# Rounding happens at the single write funnel so nothing can reintroduce it.
+
+def test_round_prices_strips_float32_widening_noise():
+    from prices import _round_prices
+    rows = [('BT-A.L', date(2026, 8, 14),
+             182.800003051758, 189.649993896484, 181.199996948242,
+             187.100006103516, 12345)]
+    out = _round_prices(rows)
+    assert out == [('BT-A.L', date(2026, 8, 14), 182.8, 189.65, 181.2, 187.1, 12345)]
+
+
+def test_round_prices_keeps_symbol_date_and_volume_untouched():
+    from prices import _round_prices
+    rows = [('AAL.L', date(2026, 8, 14), 1.0, 2.0, 3.0, 4.0, 987654321)]
+    sym, d, _o, _h, _l, _c, vol = _round_prices(rows)[0]
+    assert (sym, d, vol) == ('AAL.L', date(2026, 8, 14), 987654321)
+
+
+def test_round_prices_preserves_sub_penny_precision():
+    """The cheapest line in the universe trades at 0.055 — 4dp must keep it."""
+    from prices import _round_prices
+    rows = [('TINY.L', date(2026, 8, 14), 0.0551, 0.0559, 0.055, 0.0551, 1)]
+    _s, _d, o, h, lo, c, _v = _round_prices(rows)[0]
+    assert (o, h, lo, c) == (0.0551, 0.0559, 0.055, 0.0551)
+    assert c > 0  # never rounds a real price to zero
+
+
+def test_round_prices_passes_none_through():
+    from prices import _round_prices
+    rows = [('X.L', date(2026, 8, 14), None, None, None, None, 0)]
+    assert _round_prices(rows)[0][2:6] == (None, None, None, None)
+
+
+def test_round_prices_empty():
+    from prices import _round_prices
+    assert _round_prices([]) == []
+
+
+def test_upsert_rounds_before_writing():
+    """The rounding must be on the write path, not just a helper nobody calls."""
+    from unittest.mock import patch, MagicMock
+    import prices
+
+    captured = {}
+
+    def _capture(cur, sql, argslist, page_size=None):
+        captured['rows'] = list(argslist)
+
+    conn = MagicMock()
+    pool = MagicMock()
+    pool.getconn.return_value = conn
+    conn.cursor.return_value.rowcount = 1
+
+    with patch('prices._get_pool', return_value=pool), \
+         patch('psycopg2.extras.execute_values', side_effect=_capture):
+        prices._upsert_rows([('BT-A.L', date(2026, 8, 14),
+                              182.800003051758, 182.800003051758,
+                              182.800003051758, 182.800003051758, 5)])
+
+    assert captured['rows'][0][5] == 182.8

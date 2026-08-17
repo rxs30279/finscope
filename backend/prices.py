@@ -35,6 +35,42 @@ router = APIRouter()
 from db import query, get_pool as _get_pool
 
 
+# Decimal places kept on stored prices. Yahoo serves float32 values that widen
+# to float64 on the way in, so a 182.8 close arrives as 182.800003051758 and
+# Postgres hands back all 16 characters of it on every read — that string is the
+# shortest round-trip form of that exact float, so nothing but rounding the
+# stored value shortens it.
+#
+# Measured over the whole table: a close went 13.27 -> 6.70 characters and the
+# four OHLC fields together 59.99 -> 26.94, which is roughly 20% off a
+# (symbol, close) row and 30% off a full OHLCV chart row.
+#
+# Discards nothing real. No LSE tick is anywhere near 1e-4, the cheapest line in
+# the universe trades at 0.055, and the 2026-08-17 backfill moved no price by
+# more than 5e-4 and left the 252-day volatility of every sampled symbol
+# unchanged to 1dp. See _round_prices.
+_PRICE_DP = 4
+
+
+def _round_prices(rows):
+    """Round the OHLC members of (symbol, date, open, high, low, close, volume)
+    tuples to _PRICE_DP. Volume is an int and the key columns are untouched.
+
+    Applied here rather than at each fetch site because this is the only funnel
+    into price_history — anything that writes prices goes through _upsert_rows,
+    so there is no path that can reintroduce the float noise.
+    """
+    return [
+        (sym, d,
+         None if o is None else round(o, _PRICE_DP),
+         None if h is None else round(h, _PRICE_DP),
+         None if lo is None else round(lo, _PRICE_DP),
+         None if c is None else round(c, _PRICE_DP),
+         vol)
+        for sym, d, o, h, lo, c, vol in rows
+    ]
+
+
 def _upsert_rows(rows):
     """Insert (symbol, date, open, high, low, close, volume) tuples into price_history.
     Uses ON CONFLICT DO UPDATE so re-runs fill in any missing OHLCV columns.
@@ -42,6 +78,7 @@ def _upsert_rows(rows):
     """
     if not rows:
         return 0
+    rows = _round_prices(rows)
     pool = _get_pool()
     conn = pool.getconn()
     try:
