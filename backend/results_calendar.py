@@ -1,40 +1,58 @@
 """Forward results calendar — which UK companies report in a given week.
 
-SOURCE: the Digital Look UK Company Diary. Server-rendered HTML, no JS, and
-`start_date` accepts any Monday, past or future.
+SOURCE: the Sharecast UK Company Diary. Server-rendered HTML, no JS.
 
-Why this source (measured 2026-08-07, don't re-litigate):
-  * yfinance `Ticker.calendar` carries a FUTURE earnings date for only ~18% of
-    our universe — FTSE 100 36%, FTSE 250 20%, SmallCap 10%, plain AIM 0%.
-    Useless as a primary source for a page that is mostly small caps.
-  * The RNS `notice_of_results` category resolved just 27 in-universe symbols in
-    120 days, and the date sits in the announcement body, not the headline.
-  * lse.co.uk and sharecast both 403 a direct fetch; Hargreaves' diary is
-    JS-rendered with zero tables in the HTML.
+WHY NOT DIGITAL LOOK, the original source: it went dark on 2026-08-16. Every host
+on its estate (www / companyresearch / companyresearch2 .digitallook.com, all one
+IP) 302-redirects to static.digitallook.com/maintenance.html, with no date, no
+ETA and no stated reason. It is a deliberate maintenance mode, not a crash, and
+not us being blocked — a fetch from an unrelated network gets the same redirect.
+Do NOT go hunting for a param or User-Agent fix; that was ruled out by probing
+the root, a nonsense path, past weeks that had previously scraped fine, and both
+schemes. Note the redirect is invisible to `urllib`, which follows it silently:
+the "849-byte error page" that every URL appeared to return WAS the maintenance
+page all along.
 
-Accuracy: over 5 back-tested weeks, diary dates agreed with when the results RNS
-actually landed on 240 of 248 events (96.8%). The eight disagreements (CURY, QTX,
-CPI, GTLY, PHP, ITV, SHEL x2) are companies that moved their date — which is
-exactly why the cron re-scrapes daily instead of once a week.
+Why Sharecast (measured 2026-08-17 against the two weeks we still held Digital
+Look rows for, don't re-litigate):
+  * Coverage BEATS Digital Look: 70 vs 68 in-universe symbols for the week of
+    3 Aug, 33 vs 32 for 10 Aug. It adds MYI/OXB/SDG/SRAD/TRIG and drops
+    CABP/HWG/VTY (genuinely absent, not a name-match failure), so both sources
+    have holes and Sharecast's are fewer.
+  * Dates agree with Digital Look on 97 of 97 shared symbols, same day.
+  * Accuracy vs our own results RNS: 79 exact, 0 within a day, 0 wrong.
+  * It CARRIES AVIVA on 14 Aug as "Interims" — the FTSE 100 omission that forced
+    the yfinance cross-check into existence in the first place.
+  * Section labels are identical to Digital Look's, so `_EVENT_TYPES` transferred
+    unchanged. The two are the same underlying data product, re-skinned.
 
-MEASUREMENT TRAP, recorded because it nearly produced the wrong verdict: a naive
-back-test scores this source at 79%, because 52 diary events had no corroborating
-RNS. That is OUR gap, not theirs. `rns_announcements` is a FILTERED feed (~30
+MEASUREMENT TRAP, recorded because it nearly produced the wrong verdict on the
+original source evaluation: scoring a diary against `rns_announcements` naively
+understates it badly, because plenty of real events have no corroborating RNS.
+That is OUR gap, not the source's. `rns_announcements` is a FILTERED feed (~30
 rows/day, not the full 300-600 wire) — Focusrite has 3 rows in all of history,
 Pennon 2, Solid State 0. Absence from `rns_announcements` is never evidence that
-an announcement did not happen.
+an announcement did not happen. Only PRESENCE is evidence.
 
-The diary exposes no ticker (companies link by an internal `csi=` id), so rows
-are matched to our universe by name. See `_resolve_symbol` for why that is worth
-~70% and why the remainder is fine to lose.
+The diary exposes no ticker (companies link by a name slug), so rows are matched
+to our universe by name. See `_resolve_symbol` for why that is worth ~70% and why
+the remainder is fine to lose.
 
-COVERAGE, as distinct from accuracy: the 96.8% above scores only diary events
-that EXIST. The diary also drops companies outright, including blue chips —
-Aviva's 14 Aug 2026 interims appeared in no diary week between 20 Jul and 31 Aug,
-though the same source carried Aviva for Aug 2025 interims and Mar 2026 finals.
-Nothing in the pipeline could flag that; a missing row looks like a quiet day.
-`fetch_index_earnings_dates` backfills the FTSE 100 from yfinance for exactly
-this failure mode. See that docstring for why it is a supplement, not a source.
+COVERAGE, as distinct from accuracy: an accuracy score only ever grades events
+that EXIST. Both diaries drop companies outright, including blue chips, and
+nothing in the pipeline can flag that — a missing row looks exactly like a quiet
+day. `fetch_index_earnings_dates` backfills the FTSE 100 from yfinance for that
+failure mode; see its docstring for why it is a supplement, not a source. It is
+kept even though Sharecast covers Aviva, because the failure mode it guards has
+not gone away, only got rarer.
+
+OUTAGE BEHAVIOUR, learned the hard way when Digital Look vanished: `refresh`
+rewrites each week DELETE-then-INSERT, so a silently-empty scrape wiped four
+weeks of good rows and left the page blank. The cron did exit 1, but only after
+the delete — it alerted without protecting anything. Now a week is left ALONE
+unless the scrape actually returned something, and `_fetch_week` raises
+`DiaryUnavailable` when the page arrives without a diary table at all, which is
+the shape both outages took. See `refresh` and `source_status`.
 """
 
 import os
@@ -51,8 +69,17 @@ from shorts import _normalise_name
 
 router = APIRouter(prefix="/api/results-calendar", tags=["results-calendar"])
 
-_BASE_URL = ("https://companyresearch.digitallook.com/cgi-bin/dlmedia/"
-             "event_diary.cgi?action=market_diary&start_date=")
+_BASE_URL = "https://www.sharecast.com/company_diary"
+
+
+class DiaryUnavailable(RuntimeError):
+    """The page came back without a diary table at all.
+
+    Distinct from "the table was there and held no results", which is a real,
+    quiet week. This is the shape of every failure observed so far — an outage,
+    a week outside the serving window, or a layout change — and `refresh` treats
+    it as "know nothing, touch nothing" rather than as an empty week.
+    """
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -104,16 +131,41 @@ YF_CROSS_CHECK = os.getenv("RESULTS_CALENDAR_YF_CROSSCHECK", "1") != "0"
 # Pause between symbol lookups. 100 symbols ≈ 40s added to a daily cron.
 YF_DELAY = float(os.getenv("RESULTS_CALENDAR_YF_DELAY", "0.3"))
 
+# How close a yfinance date may sit to a results announcement the company has
+# ALREADY made before we treat it as an echo of that announcement rather than a
+# forecast of the next one. See drop_reported_dates for the measurements.
+REPORTED_WINDOW_DAYS = int(os.getenv("RESULTS_CALENDAR_REPORTED_WINDOW_DAYS", "30"))
+
+# RNS categories that mean "this company has reported". Trading updates are
+# deliberately excluded: a company can legitimately issue one a fortnight after
+# its finals, and treating that as a report would suppress real forward dates.
+_RESULTS_CATEGORIES = ("final_results", "interim_results", "quarterly")
+
+# How long the diary may go without writing a row before the page says so. The
+# cron runs daily, so this is two missed runs plus slack — long enough that a
+# single failed run does not cry wolf, short enough to catch a real outage on its
+# second day.
+STALE_HOURS = int(os.getenv("RESULTS_CALENDAR_STALE_HOURS", "36"))
+
 # ── Parsing ───────────────────────────────────────────────────────────────────
 #
-# The diary is one table: a section header row (<th id="nN">Finals</th>) followed
-# by a row of five day cells (<td headers="dN nN">) each holding a <ul> of
-# company links. Day index comes from the `dN` header reference, so an empty day
-# rendering as a bare <td>&nbsp;</td> simply contributes nothing.
+# One table, `class="eventdiaryBg"`, with a five-column Mon-Fri thead. Its body
+# alternates: a full-width section header row (<th colspan='5'>...<b>Finals</b>),
+# then one row of exactly five <td> day cells, each holding a <ul> of company
+# links (<a href=".../equity/Some_Slug">Name</a>).
+#
+# The day comes from CELL POSITION, not from an attribute — unlike Digital Look,
+# which labelled cells `headers="dN nN"`. That is safe here only because empty
+# days still render as <td><ul></ul></td> rather than being omitted, so the five
+# cells always line up with Monday-Friday. The `len(cells) != 5` guard below is
+# what keeps a layout change from silently shifting every company by a day, which
+# is a far worse failure than dropping the week.
 
-_SECTION_RE = re.compile(r'<th[^>]*id="(n\d+)"[^>]*>.*?<b>(.*?)</b>', re.S)
-_CELL_RE = re.compile(r'<td headers="(d[1-5]) (n\d+)"[^>]*>(.*?)</td>', re.S)
-_ITEM_RE = re.compile(r'security\.cgi\?csi=(\d+)[^>]*>(.*?)</a>', re.S)
+_TABLE_RE = re.compile(r'<table[^>]*class="[^"]*eventdiaryBg[^"]*"[^>]*>(.*?)</table>', re.S)
+_ROW_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
+_SECTION_RE = re.compile(r"<th[^>]*colspan=['\"]5['\"][^>]*>.*?<b>(.*?)</b>", re.S)
+_CELL_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
+_ITEM_RE = re.compile(r'href="[^"]*/equity/([^"]+)"[^>]*>(.*?)</a>', re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -126,25 +178,52 @@ def _text(raw: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def has_diary_table(html: str) -> bool:
+    """Whether the page carries a diary table at all.
+
+    The out-of-window and outage responses are both a normal-looking 200 page of
+    roughly 94KB with the surrounding furniture and no table, so this is the only
+    way to tell "nothing scheduled" from "nothing served".
+    """
+    return _TABLE_RE.search(html) is not None
+
+
 def parse_diary(html: str, week_start: date) -> list[dict]:
     """Parse one diary week into event dicts. Pure — no network, no DB."""
-    sections = {sid: _text(name) for sid, name in _SECTION_RE.findall(html)}
+    table = _TABLE_RE.search(html)
+    if not table:
+        return []
     events = []
-    for day, sid, cell in _CELL_RE.findall(html):
-        event_type = _EVENT_TYPES.get(sections.get(sid, ""))
-        if not event_type:
+    section = None
+    for row in _ROW_RE.findall(table.group(1)):
+        header = _SECTION_RE.search(row)
+        if header:
+            section = _text(header.group(1))
             continue
-        event_date = week_start + timedelta(days=int(day[1]) - 1)
-        for csi, raw_name in _ITEM_RE.findall(cell):
-            name = _text(raw_name)
-            if name:
-                events.append({
-                    "event_date": event_date,
-                    "week_start": week_start,
-                    "event_type": event_type,
-                    "source_name": name,
-                    "source_id": csi,
-                })
+        if section is None:
+            continue
+        cells = _CELL_RE.findall(row)
+        # Consume the section either way: a header always describes the next day
+        # row, so leaving it set would attribute the FOLLOWING section's
+        # companies to this one if anything unexpected sits between them.
+        event_type, section = _EVENT_TYPES.get(section), None
+        if len(cells) != 5 or not event_type:
+            continue
+        for offset, cell in enumerate(cells):
+            event_date = week_start + timedelta(days=offset)
+            for slug, raw_name in _ITEM_RE.findall(cell):
+                name = _text(raw_name)
+                if name:
+                    events.append({
+                        "event_date": event_date,
+                        "week_start": week_start,
+                        "event_type": event_type,
+                        "source_name": name,
+                        # The source's own key for the company. A name slug here
+                        # where Digital Look had a numeric csi id; the column is
+                        # free text and only ever used for tracing.
+                        "source_id": slug,
+                    })
     return events
 
 
@@ -253,12 +332,45 @@ def _monday(d: date) -> date:
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 
 
-def _fetch_week(week_start: date, timeout: int = 30) -> str:
-    req = urllib.request.Request(
-        _BASE_URL + week_start.isoformat(), headers={"User-Agent": _USER_AGENT}
-    )
+def week_url(week_start: date, today: Optional[date] = None) -> str:
+    """The diary URL for one week.
+
+    GOTCHA, and the reason this is not just an f-string: the week containing
+    today is served ONLY at the bare `/company_diary`. Asking for it by date —
+    `/company_diary/2026-08-17` on 17 Aug — returns the furniture-only page with
+    no table, exactly like an out-of-range week. Getting this wrong silently
+    empties the single most important week on the page.
+
+    Note this keys off the REAL calendar week, not `current_week_start()`. Those
+    differ every weekend: from Saturday the page displays the week ahead, which
+    the source still considers a future week and addresses by date.
+
+    Serving window, probed 2026-08-17: roughly the current week -2 to +8. Outside
+    it the page renders without a table. The cron only ever asks for the current
+    week plus `WEEKS_AHEAD`, so it stays well inside.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    live_week = today - timedelta(days=today.weekday())
+    return _BASE_URL if week_start == live_week else f"{_BASE_URL}/{week_start.isoformat()}"
+
+
+def _fetch_week(week_start: date, timeout: int = 30,
+                today: Optional[date] = None) -> str:
+    """Fetch one diary week, or raise DiaryUnavailable if it has no table.
+
+    Raising rather than returning a tableless page is what lets `refresh` tell a
+    dead source from a quiet week. Digital Look's outage was invisible precisely
+    because it looked like a successful fetch that happened to parse to nothing.
+    """
+    url = week_url(week_start, today)
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+        body = resp.read().decode("utf-8", errors="replace")
+    if not has_diary_table(body):
+        raise DiaryUnavailable(
+            f"no diary table at {url} ({len(body)} bytes) — source down, week "
+            f"outside its serving window, or the layout changed")
+    return body
 
 
 def fetch_index_earnings_dates(index: str = YF_INDEX,
@@ -313,6 +425,63 @@ def fetch_index_earnings_dates(index: str = YF_INDEX,
     return out
 
 
+def recent_results_dates(today: Optional[date] = None,
+                         window_days: int = REPORTED_WINDOW_DAYS) -> dict[str, date]:
+    """symbol -> the day of its most recent results RNS, within `window_days`.
+
+    Feeds `drop_reported_dates`. Looking back exactly `window_days` from today is
+    sufficient rather than arbitrary: the filter only ever compares against a
+    yfinance date that already passed the `>= today` test, so a report older than
+    that can never fall inside the window of any surviving date.
+
+    This reads PRESENCE in `rns_announcements`, which is sound even though the
+    feed is filtered (see the module docstring). A results RNS we did capture is
+    proof the company reported; one we missed just means no suppression, which
+    leaves the old behaviour. The failure mode is fail-open by construction.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    rows = query(
+        """SELECT symbol, max(published_at)::date AS reported
+             FROM rns_announcements
+            WHERE symbol IS NOT NULL
+              AND category = ANY(%s)
+              AND published_at >= %s
+            GROUP BY symbol""",
+        (list(_RESULTS_CATEGORIES), today - timedelta(days=window_days)),
+    )
+    return {r["symbol"]: r["reported"] for r in rows}
+
+
+def drop_reported_dates(yf_dates: dict[str, date], last_reported: dict[str, date],
+                        window_days: int = REPORTED_WINDOW_DAYS) -> dict[str, date]:
+    """Strip yfinance dates that are an echo of results already announced. Pure.
+
+    `fetch_index_earnings_dates` documents Yahoo leaving the field pointing at the
+    date a company just reported, which the `>= today` filter catches. What that
+    filter cannot catch is the same field drifting FORWARDS after the event, and
+    it does:
+      * AV.L reported interims on Fri 14 Aug 2026 at 06:00. Yahoo then moved its
+        Earnings Date to 17 Aug, so the Sunday cron planted Aviva on the Monday of
+        the following week — a second logo for a result that had already landed.
+      * IGG.L reported half-year results on 30 Jul 2026. Yahoo moved it to 19 Aug.
+    Both dates are in the future when read, so nothing upstream rejects them, and
+    the diary carries neither company, so `cross_check_events` has nothing to
+    defer to either.
+
+    The comparison is date-to-REPORT, not date-to-today, so the verdict does not
+    depend on which day the cron happens to run. A UK company does not publish two
+    sets of results inside a month — the tightest legitimate spacing is a
+    quarterly reporter at ~90 days — so a predicted date sitting within
+    `window_days` of one it already filed is the echo, not the next cycle.
+    """
+    return {
+        symbol: d
+        for symbol, d in yf_dates.items()
+        if not (symbol in last_reported
+                and 0 <= (d - last_reported[symbol]).days <= window_days)
+    }
+
+
 def cross_check_events(yf_dates: dict[str, date], week_start: date,
                        diary_events: list[dict]) -> list[dict]:
     """Rows to ADD to one week from the yfinance dates. Pure — no network, no DB.
@@ -349,7 +518,8 @@ def cross_check_events(yf_dates: dict[str, date], week_start: date,
 
 
 def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None,
-            yf_dates: Optional[dict[str, date]] = None) -> dict:
+            yf_dates: Optional[dict[str, date]] = None,
+            last_reported: Optional[dict[str, date]] = None) -> dict:
     """Scrape the current display week plus `weeks_ahead` more and upsert.
 
     Deleting a week's rows before re-inserting is what lets a MOVED date
@@ -357,10 +527,19 @@ def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None,
     forever. Each week is replaced inside one transaction so the page never
     reads a half-written week.
 
+    A week is only rewritten when the scrape actually returned something to write.
+    If the fetch raises, or parses to zero events while the stored week still
+    holds diary rows, the week is SKIPPED untouched and reported as such. Without
+    that, a source outage does not merely stall the page, it empties it — which is
+    what happened on 2026-08-16 (see the module docstring). A week with no stored
+    diary rows is still rewritten on an empty parse, because that is
+    indistinguishable from a genuinely quiet week and is how a new week enters.
+
     The yfinance cross-check is fetched ONCE and reused for every week — its
     dates are absolute, not per-week, and re-querying 100 tickers per week would
     quadruple the cost for identical answers. Pass `yf_dates` to inject a fixture
-    or `{}` to skip the network entirely.
+    or `{}` to skip the network entirely; `last_reported` is likewise injectable
+    and otherwise read from `recent_results_dates`.
 
     That the cross-check writes into the same DELETE/INSERT transaction is not
     incidental: rows written outside it would be wiped by the next week rewrite.
@@ -383,10 +562,49 @@ def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None,
         else:
             yf_dates = {}
 
+    if yf_dates:
+        if last_reported is None:
+            last_reported = recent_results_dates(today=today)
+        kept = drop_reported_dates(yf_dates, last_reported)
+        for symbol in sorted(set(yf_dates) - set(kept)):
+            print(f"[results_calendar] yfinance {symbol} {yf_dates[symbol]} dropped "
+                  f"— already reported {last_reported[symbol]}")
+        yf_dates = kept
+
+    # How many diary rows each week is currently holding. Read up front, in one
+    # query, because the guard below has to know what it would be destroying
+    # BEFORE the DELETE runs.
+    stored_diary = {r["week_start"]: r["c"] for r in query(
+        "SELECT week_start, count(*) AS c FROM results_calendar "
+        "WHERE source = 'diary' AND week_start = ANY(%s) GROUP BY week_start",
+        (weeks,))}
+
     total = matched = extra_total = 0
     per_week = []
+    skipped = []
     for week in weeks:
-        events = parse_diary(_fetch_week(week), week)
+        try:
+            html = _fetch_week(week, today=today)
+        except Exception as exc:
+            # A week we could not read is a week we know nothing about, so it
+            # must not be rewritten from an empty parse. DiaryUnavailable lands
+            # here too: a tableless page is no more informative than a timeout.
+            print(f"[results_calendar] {week}: fetch failed, week left untouched "
+                  f"— {type(exc).__name__}: {exc}")
+            skipped.append(week.isoformat())
+            per_week.append({"week_start": week.isoformat(), "events": 0,
+                             "matched": 0, "cross_check": 0, "skipped": "fetch_failed"})
+            continue
+
+        events = parse_diary(html, week)
+        if not events and stored_diary.get(week):
+            print(f"[results_calendar] {week}: diary parsed 0 events but "
+                  f"{stored_diary[week]} rows are stored — week left untouched")
+            skipped.append(week.isoformat())
+            per_week.append({"week_start": week.isoformat(), "events": 0,
+                             "matched": 0, "cross_check": 0, "skipped": "empty_parse"})
+            continue
+
         for e in events:
             e["symbol"], e["company_name"] = _resolve_symbol(e["source_name"], index)
             e["source"] = "diary"
@@ -438,13 +656,64 @@ def refresh(weeks_ahead: int = WEEKS_AHEAD, today: Optional[date] = None,
                          "cross_check": len(extra)})
 
     return {
-        # Deliberately keyed off the DIARY count alone — see the note above.
+        # Deliberately keyed off the DIARY count alone — see the note above. A
+        # week skipped to protect its stored rows still counts as zero here, so
+        # an outage that freezes the page is still reported as a failure.
         "status": "ok" if total else "empty",
         "weeks": per_week,
         "events": total,
         "matched": matched,
         "cross_check": extra_total,
+        "skipped": skipped,
         "match_pct": round(100 * matched / total, 1) if total else 0.0,
+    }
+
+
+# ── Source health ─────────────────────────────────────────────────────────────
+
+
+def diary_last_success() -> Optional[datetime]:
+    """When the diary last wrote a row, for any week. None if it never has.
+
+    This is the last SUCCESSFUL scrape, and no extra bookkeeping is needed to
+    know it: rows are only written when a week parsed to something, weeks are
+    never pruned once written, and the outage guard in `refresh` means a failed
+    run cannot touch `fetched_at` at all. A separate run marker would only
+    duplicate what the rows already say.
+
+    Reads diary rows alone on purpose. The yfinance cross-check keeps writing
+    happily through a diary outage — that is the whole point of it — so a max
+    over every row would report the calendar as fresh while its primary source
+    was down, which is exactly the lie this exists to stop.
+    """
+    rows = query("SELECT max(fetched_at) AS f FROM results_calendar "
+                 "WHERE source = 'diary'")
+    return rows[0]["f"] if rows else None
+
+
+def source_status(week_start: date, last_success: Optional[datetime],
+                  now: Optional[datetime] = None) -> dict:
+    """Whether the page can vouch for `week_start`. Pure — no DB, no network.
+
+    Only weeks the cron actually maintains can go stale. A past week is a
+    historical record that nothing refreshes by design, so flagging it would be
+    permanent noise on every archive view.
+
+    `stale` is the flag the banner needs, and it exists because a blank grid is
+    ambiguous in the worst possible direction: the module docstring's warning
+    that "a missing row looks like a quiet day" applies to the whole page at
+    once when the source is down. Silence has to be distinguishable from
+    "nothing scheduled" or the page states a confident falsehood.
+    """
+    now = now or datetime.now(timezone.utc)
+    maintained = week_start >= current_week_start(now.date())
+    age_hours = ((now - last_success).total_seconds() / 3600
+                 if last_success else None)
+    return {
+        "diary_last_success": last_success.isoformat() if last_success else None,
+        "stale": maintained and (age_hours is None or age_hours > STALE_HOURS),
+        "stale_after_hours": STALE_HOURS,
+        "age_hours": round(age_hours, 1) if age_hours is not None else None,
     }
 
 
@@ -536,5 +805,9 @@ def get_week(week: Optional[str] = Query(None, description="Any date in the week
         "total": len(rows),
         "unmatched": unmatched,
         "updated_at": freshness.isoformat() if freshness else None,
+        # Whether the primary source is still answering. `updated_at` cannot
+        # carry this: it is a max over the week's rows including the yfinance
+        # cross-check, which stays fresh right through a diary outage.
+        "source_status": source_status(week_start, diary_last_success()),
         "days": days,
     }

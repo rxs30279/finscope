@@ -8,7 +8,12 @@ import { companyHref } from "@/lib/company";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { API } from "@/lib/api";
 import { S, colors } from "@/lib/theme";
-import type { CalendarCompany, CalendarDay, ResultsCalendar } from "@/lib/resultsCalendar";
+import type {
+  CalendarCompany,
+  CalendarDay,
+  CalendarSourceStatus,
+  ResultsCalendar,
+} from "@/lib/resultsCalendar";
 
 // Event type -> accent. Deliberately only three colours: the distinction that
 // matters to a reader is "results" vs "just an update", not which flavour of
@@ -121,7 +126,52 @@ function CompanyTile({ c, isToday }: { c: CalendarCompany; isToday: boolean }) {
   );
 }
 
-function DayColumn({ day, todayISO, isMobile }: { day: CalendarDay; todayISO: string; isMobile: boolean }) {
+function formatStamp(iso: string): string {
+  return new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
+}
+
+// Shown when the company diary has stopped answering. The grid degrades to
+// "Nothing scheduled" in every column, which reads as a genuinely quiet week —
+// a confident falsehood, and the more damaging one, since a reader who trusts it
+// misses the results they came here to find. This says which it is.
+//
+// Two severities, because the two failures are not the same size. An emptied
+// week is unusable and gets the red treatment; a week that still has rows is
+// merely ageing, and its dates were right when they were written.
+function StaleBanner({ status, empty }: { status: CalendarSourceStatus; empty: boolean }) {
+  const since = status.diary_last_success ? formatStamp(status.diary_last_success) : null;
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex", gap: 10, alignItems: "flex-start",
+        padding: "10px 12px", marginBottom: 14, borderRadius: 10,
+        background: colors.bgCardAlt,
+        border: `1px solid ${empty ? colors.red : colors.amber}`,
+        borderLeft: `3px solid ${empty ? colors.red : colors.amber}`,
+      }}
+    >
+      <span aria-hidden style={{ color: empty ? colors.red : colors.amber, fontSize: 14, lineHeight: 1.4 }}>
+        ⚠
+      </span>
+      <div style={{ color: colors.text, fontSize: 12.5, lineHeight: 1.55, minWidth: 0 }}>
+        <strong style={{ color: colors.white }}>
+          {empty ? "This week's calendar is unavailable." : "These dates may be out of date."}
+        </strong>{" "}
+        {since
+          ? `The company diary we scrape has not responded since ${since}.`
+          : "The company diary we scrape is not responding."}{" "}
+        {empty
+          ? "An empty grid here does not mean a quiet week — we simply cannot say who reports."
+          : "Any company that has moved its date since then will still be shown on its old day."}
+      </div>
+    </div>
+  );
+}
+
+function DayColumn({ day, todayISO, isMobile, unknown }: {
+  day: CalendarDay; todayISO: string; isMobile: boolean; unknown: boolean;
+}) {
   const isToday = day.date === todayISO;
   const date = new Date(`${day.date}T00:00:00Z`);
   // An empty weekday keeps its column rather than being dropped — a Friday with
@@ -144,8 +194,10 @@ function DayColumn({ day, todayISO, isMobile }: { day: CalendarDay; todayISO: st
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 4px" }}>
         {day.companies.length === 0 ? (
+          // "Nothing scheduled" is a claim about the world; with the source down
+          // we have no basis for it, so the empty state states the gap instead.
           <div style={{ color: colors.textDim, fontSize: 11, padding: "12px 8px", textAlign: "center" }}>
-            Nothing scheduled
+            {unknown ? "No data" : "Nothing scheduled"}
           </div>
         ) : (
           day.companies.map((c) => (
@@ -193,6 +245,10 @@ export default function ResultsCalendarClient({
   }
 
   const todayISO = new Date().toISOString().slice(0, 10);
+  // Absent on responses from a backend older than the staleness field, which
+  // must keep rendering as before rather than assuming the worst.
+  const stale = data.source_status?.stale ?? false;
+  const unusable = stale && data.total === 0;
 
   return (
     <div style={{ padding: isMobile ? "12px 10px 40px" : "16px 20px 48px", maxWidth: 1500, margin: "0 auto" }}>
@@ -212,11 +268,24 @@ export default function ResultsCalendarClient({
         </div>
       </div>
 
+      {/* The count is a factual claim, and with no data behind it "0 companies
+          report" asserts a quiet week we cannot vouch for. Drop it rather than
+          print a zero the banner then has to walk back. */}
       <p style={{ color: colors.textMuted, fontSize: 13, margin: "0 0 14px", maxWidth: 760 }}>
-        {data.is_current_week ? "This week" : "The week"} {data.total} London-listed{" "}
-        {data.total === 1 ? "company reports" : "companies report"} — full-year and interim
-        results, quarterlies and trading updates.
+        {unusable ? (
+          <>Who reports each week — full-year and interim results, quarterlies and trading updates.</>
+        ) : (
+          <>
+            {data.is_current_week ? "This week" : "The week"} {data.total} London-listed{" "}
+            {data.total === 1 ? "company reports" : "companies report"} — full-year and interim
+            results, quarterlies and trading updates.
+          </>
+        )}
       </p>
+
+      {stale && data.source_status && (
+        <StaleBanner status={data.source_status} empty={unusable} />
+      )}
 
       <div style={{
         display: "flex", flexDirection: isMobile ? "column" : "row",
@@ -224,7 +293,7 @@ export default function ResultsCalendarClient({
         opacity: loading ? 0.55 : 1, transition: "opacity .15s",
       }}>
         {data.days.map((day) => (
-          <DayColumn key={day.date} day={day} todayISO={todayISO} isMobile={isMobile} />
+          <DayColumn key={day.date} day={day} todayISO={todayISO} isMobile={isMobile} unknown={unusable} />
         ))}
       </div>
 
