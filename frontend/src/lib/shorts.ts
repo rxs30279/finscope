@@ -24,11 +24,17 @@ export type ShortLeaderRow = {
 
 export type ShortLeaderboard = {
   as_of: string | null;
+  // Issuers disclosing on as_of, before the backend's top-N cap — the count the
+  // page quotes. rows.length is the capped list actually rendered. Optional so
+  // a frontend deploy that lands ahead of the backend's still type-checks.
+  total?: number;
+  limit?: number;
   rows: ShortLeaderRow[];
 };
 
-// ANSP files land once per working day (~12pm UK) and the backend edge-caches
-// for 6h, so an hourly revalidate keeps the SSR HTML fresh without hammering it.
+// ANSP files land once per working day (~12pm UK) and /api/shorts/top holds the
+// response in an in-process cache for 6h, so an hourly revalidate keeps the SSR
+// HTML fresh without hammering it.
 const REVALIDATE = 3600;
 
 // Server-side fetch of the /most-shorted leaderboard. Returns null on any

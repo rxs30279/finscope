@@ -299,9 +299,9 @@ export default function MostShortedPageClient({
           </span>
         </h1>
         <div style={{ fontSize: 12, color: colors.textMuted, lineHeight: 1.6 }}>
-          Every UK company with disclosed short interest, ranked by the FCA&apos;s daily
-          aggregate net short position. {rows.length} issuers · {heavilyShorted} at ≥5% ·
-          updated {fmtDate(data.as_of)}.
+          The most shorted UK companies, ranked by the FCA&apos;s daily aggregate net
+          short position. Top {rows.length} of {data.total ?? rows.length} issuers ·{" "}
+          {heavilyShorted} at ≥5% · updated {fmtDate(data.as_of)}.
         </div>
         <div style={{ fontSize: 11, color: colors.textFaint, marginTop: 4 }}>
           Short sellers stopped being named on 13 Jul 2026 —{" "}

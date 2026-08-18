@@ -298,3 +298,94 @@ def test_parse_empty_file_returns_no_rows():
         ]
     )
     assert _parse_ansp_df(df) == []
+
+
+# ── /api/shorts/top: the top-N cap and the in-process cache ──────────────────
+#
+# Both exist to keep the endpoint off the database: it was pulling ~1.7 MB per
+# call (a 92-day sparkline for all ~420 disclosing issuers) on a page whose
+# Cache-Control header does nothing, because Vercel's edge never caches /api.
+
+
+def _top_query_stub(window_rows, seen):
+    """A shorts.query replacement that answers each of shorts_top's queries and
+    records the symbols the enrichment queries were asked for."""
+    def _q(sql, params=None):
+        if "MAX(disclosure_date)" in sql:
+            return [{"d": AS_OF}]
+        if "FROM short_positions_agg" in sql:
+            return window_rows
+        if "FROM price_history" in sql:
+            seen["price"] = list(params[0])
+            return []
+        seen["scores"] = list(params[0])   # showcase._MQVR_SQL
+        return []
+    return _q
+
+
+def _many_issuers(n):
+    """n issuers on AS_OF, descending ANSP so issuer i ranks i-th."""
+    return [
+        _row(f"GB{i:04d}", AS_OF, round(n - i, 2),
+             name=f"CO{i:04d} PLC", symbol=f"C{i:04d}.L")
+        for i in range(n)
+    ]
+
+
+def test_shorts_top_caps_rows_but_reports_the_full_total(monkeypatch):
+    shorts._top_cache.clear()
+    seen = {}
+    monkeypatch.setattr(shorts, "query",
+                        _top_query_stub(_many_issuers(150), seen))
+    out = shorts.shorts_top()
+    assert out["total"] == 150          # what the page quotes
+    assert out["limit"] == shorts._TOP_N
+    assert len(out["rows"]) == shorts._TOP_N
+    # capped by rank, not arbitrarily — the 100 heaviest shorts survive
+    assert out["rows"][0]["name"] == "CO0000 PLC"
+    assert out["rows"][-1]["name"] == f"CO{shorts._TOP_N - 1:04d} PLC"
+
+
+def test_shorts_top_truncates_before_the_per_symbol_queries(monkeypatch):
+    # The whole point of the cap: the dropped issuers must never reach the
+    # enrichment queries, which are what actually cost rows.
+    shorts._top_cache.clear()
+    seen = {}
+    monkeypatch.setattr(shorts, "query",
+                        _top_query_stub(_many_issuers(150), seen))
+    shorts.shorts_top()
+    assert len(seen["scores"]) == shorts._TOP_N
+    assert len(seen["price"]) == shorts._TOP_N
+
+
+def test_shorts_top_second_call_is_served_from_cache(monkeypatch):
+    shorts._top_cache.clear()
+    seen = {}
+    monkeypatch.setattr(shorts, "query",
+                        _top_query_stub(_many_issuers(5), seen))
+    first = shorts.shorts_top()
+
+    def _boom(*a, **k):
+        raise AssertionError("cached response must not re-query")
+    monkeypatch.setattr(shorts, "query", _boom)
+    assert shorts.shorts_top() is first
+
+
+def test_shorts_top_cache_expires(monkeypatch):
+    shorts._top_cache.clear()
+    seen = {}
+    monkeypatch.setattr(shorts, "query", _top_query_stub(_many_issuers(5), seen))
+    shorts.shorts_top()
+    payload, stamped = shorts._top_cache["top"]
+    shorts._top_cache["top"] = (payload, stamped - shorts._TOP_TTL - 1)
+    assert shorts.shorts_top() is not payload
+
+
+def test_shorts_top_empty_table_is_not_cached(monkeypatch):
+    # An empty table is a broken pipeline, not a daily answer — caching it would
+    # hide the data for six hours after it lands.
+    shorts._top_cache.clear()
+    monkeypatch.setattr(shorts, "query", lambda sql, params=None: [{"d": None}])
+    out = shorts.shorts_top()
+    assert out == {"as_of": None, "total": 0, "limit": shorts._TOP_N, "rows": []}
+    assert "top" not in shorts._top_cache

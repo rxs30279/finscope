@@ -685,20 +685,45 @@ def _attach_price_history(rows, as_of):
             r["price_history"] = by_symbol[r["symbol"]]
 
 
+# Leaderboard rows returned by /api/shorts/top. ~420 issuers disclose on a
+# typical day, but the tail is thin — the 100th is around 3% — and every row
+# past the cap costs a 92-day sparkline row-set in _attach_price_history for a
+# company nobody scrolls to. All 58 issuers at >=5% sit well inside 100, so the
+# page's "at >=5%" headline is unaffected. `total` in the response keeps the
+# true issuer count available to the UI.
+_TOP_N = 100
+
+# The ANSP file lands once per working day (~12pm UK, our cron at 12:30 UTC),
+# so this response changes at most daily. The Cache-Control header below is a
+# no-op in production — Vercel's edge never caches /api, since the route is an
+# external rewrite — which left every page view paying for the full read. This
+# in-process cache is what actually stops that. Per worker (uvicorn runs 2), so
+# expect up to one miss per worker per TTL.
+_TOP_TTL = 21600  # 6h, matching the s-maxage we advertise
+_top_cache: dict = {}
+
+
 @router.get("/api/shorts/top")
 def shorts_top(response: Response = None):
-    """Most-shorted leaderboard: every issuer in the latest ANSP snapshot,
-    ranked by aggregate net short %, each with a ~3-month history for trend
-    sparklines. Feeds the public /most-shorted page."""
+    """Most-shorted leaderboard: the top _TOP_N issuers in the latest ANSP
+    snapshot, ranked by aggregate net short %, each with a ~3-month history for
+    trend sparklines. Feeds the public /most-shorted page."""
     if response is not None:
         response.headers["Cache-Control"] = (
             "public, s-maxage=21600, stale-while-revalidate=86400"
         )
 
+    now = time.time()
+    cached = _top_cache.get("top")
+    if cached and now - cached[1] < _TOP_TTL:
+        return cached[0]
+
     latest = query("SELECT MAX(disclosure_date) AS d FROM short_positions_agg")
     as_of = latest[0]["d"] if latest else None
     if as_of is None:
-        return {"as_of": None, "rows": []}
+        # Not cached: an empty table is a broken state, not a daily answer, so
+        # it must not stick around for six hours after the data arrives.
+        return {"as_of": None, "total": 0, "limit": _TOP_N, "rows": []}
 
     # 92-day cap bounds the per-row sparkline payload as the daily series
     # accumulates; the full history stays available per-company via /api/shorts.
@@ -709,9 +734,15 @@ def shorts_top(response: Response = None):
         (as_of - timedelta(days=92),),
     )
     rows = _build_leaderboard(window_rows, as_of)
+    total = len(rows)
+    # Truncate BEFORE enrichment — both attach helpers query per resolved
+    # symbol, so the cap only pays off if the dropped rows never reach them.
+    rows = rows[:_TOP_N]
     _attach_scores(rows)
     _attach_price_history(rows, as_of)
-    return {"as_of": str(as_of), "rows": rows}
+    payload = {"as_of": str(as_of), "total": total, "limit": _TOP_N, "rows": rows}
+    _top_cache["top"] = (payload, now)
+    return payload
 
 
 @router.get("/api/shorts")
