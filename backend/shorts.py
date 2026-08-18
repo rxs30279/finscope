@@ -693,13 +693,23 @@ def _attach_price_history(rows, as_of):
 # true issuer count available to the UI.
 _TOP_N = 100
 
-# The ANSP file lands once per working day (~12pm UK, our cron at 12:30 UTC),
-# so this response changes at most daily. The Cache-Control header below is a
+# In-process cache for /api/shorts/top. The Cache-Control header below is a
 # no-op in production — Vercel's edge never caches /api, since the route is an
-# external rewrite — which left every page view paying for the full read. This
-# in-process cache is what actually stops that. Per worker (uvicorn runs 2), so
-# expect up to one miss per worker per TTL.
-_TOP_TTL = 21600  # 6h, matching the s-maxage we advertise
+# external rewrite — so without this every page view paid for the full read.
+#
+# Keyed on the data's own stamps rather than a clock: the ANSP file lands once
+# per working day (~12pm UK, our cron at 12:30 UTC) and screener_scores is
+# rebuilt once per working day by the prices cron, and those are the two inputs
+# that move. A wall-clock TTL would either serve a stale leaderboard for hours
+# after the new file landed or rebuild three times a day for byte-identical
+# output; keying on (as_of, scored_at) rebuilds exactly when something changed.
+# The quality/value legs also read ttm_financials, which moves on its own slower
+# cadence and is not part of the key — it rides along to the next rebuild, which
+# is at most a day away on any weekday.
+#
+# Single-slot: an older key can never be served again, so it is dropped rather
+# than left to accumulate. Per worker (uvicorn runs 2), so expect one rebuild
+# per worker per change.
 _top_cache: dict = {}
 
 
@@ -713,16 +723,22 @@ def shorts_top(response: Response = None):
             "public, s-maxage=21600, stale-while-revalidate=86400"
         )
 
-    now = time.time()
-    cached = _top_cache.get("top")
-    if cached and now - cached[1] < _TOP_TTL:
-        return cached[0]
+    # Two scalars in one round trip — the cache key, and cheap enough to pay on
+    # every request (the reads it guards are ~1.1 MB).
+    stamp = query(
+        "SELECT (SELECT MAX(disclosure_date) FROM short_positions_agg) AS as_of,"
+        " (SELECT MAX(computed_at) FROM screener_scores) AS scored_at"
+    )
+    as_of = stamp[0]["as_of"] if stamp else None
+    key = (as_of, stamp[0]["scored_at"] if stamp else None)
 
-    latest = query("SELECT MAX(disclosure_date) AS d FROM short_positions_agg")
-    as_of = latest[0]["d"] if latest else None
+    cached = _top_cache.get(key)
+    if cached is not None:
+        return cached
+
     if as_of is None:
-        # Not cached: an empty table is a broken state, not a daily answer, so
-        # it must not stick around for six hours after the data arrives.
+        # Not cached: an empty table is a broken pipeline, not a daily answer,
+        # and caching it would outlive the data actually arriving.
         return {"as_of": None, "total": 0, "limit": _TOP_N, "rows": []}
 
     # 92-day cap bounds the per-row sparkline payload as the daily series
@@ -741,7 +757,8 @@ def shorts_top(response: Response = None):
     _attach_scores(rows)
     _attach_price_history(rows, as_of)
     payload = {"as_of": str(as_of), "total": total, "limit": _TOP_N, "rows": rows}
-    _top_cache["top"] = (payload, now)
+    _top_cache.clear()
+    _top_cache[key] = payload
     return payload
 
 

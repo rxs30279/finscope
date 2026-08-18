@@ -1,7 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -306,13 +306,15 @@ def test_parse_empty_file_returns_no_rows():
 # call (a 92-day sparkline for all ~420 disclosing issuers) on a page whose
 # Cache-Control header does nothing, because Vercel's edge never caches /api.
 
+SCORED_AT = datetime(2026, 7, 17, 15, 39)
 
-def _top_query_stub(window_rows, seen):
+
+def _top_query_stub(window_rows, seen, as_of=AS_OF, scored_at=SCORED_AT):
     """A shorts.query replacement that answers each of shorts_top's queries and
     records the symbols the enrichment queries were asked for."""
     def _q(sql, params=None):
         if "MAX(disclosure_date)" in sql:
-            return [{"d": AS_OF}]
+            return [{"as_of": as_of, "scored_at": scored_at}]
         if "FROM short_positions_agg" in sql:
             return window_rows
         if "FROM price_history" in sql:
@@ -323,10 +325,10 @@ def _top_query_stub(window_rows, seen):
     return _q
 
 
-def _many_issuers(n):
-    """n issuers on AS_OF, descending ANSP so issuer i ranks i-th."""
+def _many_issuers(n, as_of=AS_OF):
+    """n issuers on as_of, descending ANSP so issuer i ranks i-th."""
     return [
-        _row(f"GB{i:04d}", AS_OF, round(n - i, 2),
+        _row(f"GB{i:04d}", as_of, round(n - i, 2),
              name=f"CO{i:04d} PLC", symbol=f"C{i:04d}.L")
         for i in range(n)
     ]
@@ -358,34 +360,77 @@ def test_shorts_top_truncates_before_the_per_symbol_queries(monkeypatch):
     assert len(seen["price"]) == shorts._TOP_N
 
 
-def test_shorts_top_second_call_is_served_from_cache(monkeypatch):
+def test_shorts_top_second_call_pays_only_for_the_stamp_query(monkeypatch):
+    # A cache hit still reads the two stamps — that is what makes it safe to
+    # skip the ~1.1 MB of leaderboard, score and sparkline reads behind it.
     shorts._top_cache.clear()
-    seen = {}
-    monkeypatch.setattr(shorts, "query",
-                        _top_query_stub(_many_issuers(5), seen))
+    inner = _top_query_stub(_many_issuers(5), {})
+    seen_sql = []
+
+    def _counting(sql, params=None):
+        seen_sql.append(sql)
+        return inner(sql, params)
+
+    monkeypatch.setattr(shorts, "query", _counting)
+    first = shorts.shorts_top()
+    assert len(seen_sql) > 1                       # full build
+
+    seen_sql.clear()
+    assert shorts.shorts_top() is first
+    assert len(seen_sql) == 1 and "MAX(computed_at)" in seen_sql[0]
+
+
+def test_shorts_top_rebuilds_when_a_new_ansp_file_lands(monkeypatch):
+    shorts._top_cache.clear()
+    monkeypatch.setattr(shorts, "query", _top_query_stub(_many_issuers(5), {}))
     first = shorts.shorts_top()
 
-    def _boom(*a, **k):
-        raise AssertionError("cached response must not re-query")
-    monkeypatch.setattr(shorts, "query", _boom)
-    assert shorts.shorts_top() is first
+    later = date(2026, 7, 18)
+    monkeypatch.setattr(shorts, "query",
+                        _top_query_stub(_many_issuers(5, as_of=later), {},
+                                        as_of=later))
+    second = shorts.shorts_top()
+    assert second is not first
+    assert second["as_of"] == "2026-07-18"
 
 
-def test_shorts_top_cache_expires(monkeypatch):
+def test_shorts_top_rebuilds_when_screener_scores_are_recomputed(monkeypatch):
+    # The scores ride on the same payload, so a rebuild of screener_scores has
+    # to invalidate it even though the ANSP file has not moved.
     shorts._top_cache.clear()
-    seen = {}
-    monkeypatch.setattr(shorts, "query", _top_query_stub(_many_issuers(5), seen))
+    monkeypatch.setattr(shorts, "query", _top_query_stub(_many_issuers(5), {}))
+    first = shorts.shorts_top()
+
+    monkeypatch.setattr(
+        shorts, "query",
+        _top_query_stub(_many_issuers(5), {},
+                        scored_at=datetime(2026, 7, 18, 15, 39)),
+    )
+    assert shorts.shorts_top() is not first
+
+
+def test_shorts_top_cache_keeps_only_the_current_key(monkeypatch):
+    # A superseded key can never be served again — it must not accumulate.
+    shorts._top_cache.clear()
+    monkeypatch.setattr(shorts, "query", _top_query_stub(_many_issuers(5), {}))
     shorts.shorts_top()
-    payload, stamped = shorts._top_cache["top"]
-    shorts._top_cache["top"] = (payload, stamped - shorts._TOP_TTL - 1)
-    assert shorts.shorts_top() is not payload
+    monkeypatch.setattr(
+        shorts, "query",
+        _top_query_stub(_many_issuers(5), {},
+                        scored_at=datetime(2026, 7, 18, 15, 39)),
+    )
+    shorts.shorts_top()
+    assert len(shorts._top_cache) == 1
 
 
 def test_shorts_top_empty_table_is_not_cached(monkeypatch):
     # An empty table is a broken pipeline, not a daily answer — caching it would
-    # hide the data for six hours after it lands.
+    # outlive the data actually arriving.
     shorts._top_cache.clear()
-    monkeypatch.setattr(shorts, "query", lambda sql, params=None: [{"d": None}])
+    monkeypatch.setattr(
+        shorts, "query",
+        lambda sql, params=None: [{"as_of": None, "scored_at": None}],
+    )
     out = shorts.shorts_top()
     assert out == {"as_of": None, "total": 0, "limit": shorts._TOP_N, "rows": []}
-    assert "top" not in shorts._top_cache
+    assert shorts._top_cache == {}
