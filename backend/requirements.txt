@@ -19,3 +19,8 @@ openai==1.82.0
 psutil==5.9.5
 holidays==0.97
 boto3==1.43.52
+# Results filed as a link, not as text: rns._body_from_pdf follows the
+# LSE-hosted PDF a pointer announcement links to. Chosen over pdfplumber for
+# speed — 0.2-0.4s vs 11-30s per results PDF, and the body backfill runs
+# ahead of ranking inside the 07:00 batch. Note PyMuPDF is AGPL-3.0.
+PyMuPDF==1.27.2.3

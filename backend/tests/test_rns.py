@@ -1,4 +1,5 @@
 import sys, os
+import urllib.error
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,6 +18,10 @@ from rns import (
     _BODY_HEAD,
     _BODY_TAIL,
     _BODY_STUB_CHARS,
+    _lse_pdf_urls,
+    _looks_like_prose,
+    _body_from_pdf,
+    _BODY_PDF_MAX_BODY,
 )
 
 
@@ -807,3 +812,202 @@ def test_prune_old_nulls_body_on_tier_ab_after_body_days():
     assert "SET body = NULL" in second_sql
     assert "tier IN ('A', 'B')" in second_sql
     assert calls[1][0][1] == ("30",)
+
+
+# ── PDF-follow (_lse_pdf_urls / _looks_like_prose / _body_from_pdf) ────────────
+#
+# Fixtures are trimmed from the real bodies these gates were measured against;
+# see the block comment above _LSE_PDF_RE in rns.py for the readings.
+
+from datetime import datetime, date, timezone
+
+_PUB = datetime(2026, 7, 29, 7, 0, tzinfo=timezone.utc)
+
+# Reckitt's half-year: dividend, buyback, dial-in — and a link. Filed 28 Jul for
+# a 29 Jul release, which is why the date window is a lookback and not equality.
+RKT_BODY = (
+    "29 July 2026 Results for SIX MONTHS ENDED 30 JUNE 2026 Reckitt Benckiser "
+    "Group plc today announces its Half Year Results statement is available at "
+    "http://www.rns-pdf.londonstockexchange.com/rns/2626O_1-2026-7-28.pdf "
+    "The Board have resolved to pay an interim 2026 dividend of 88.6 pence."
+)
+
+
+def test_lse_pdf_urls_finds_link_filed_the_day_before():
+    urls = _lse_pdf_urls(RKT_BODY, _PUB)
+    assert urls == [
+        "http://www.rns-pdf.londonstockexchange.com/rns/2626O_1-2026-7-28.pdf"
+    ]
+
+
+def test_lse_pdf_urls_accepts_a_plain_date():
+    """published_at may arrive as a date rather than a timestamptz."""
+    assert len(_lse_pdf_urls(RKT_BODY, date(2026, 7, 29))) == 1
+
+
+def test_lse_pdf_urls_rejects_back_references_to_older_filings():
+    """Heathrow's half-year cited six PDFs, all from prior months. Following one
+    would ingest a document from another announcement entirely."""
+    body = (
+        "Half-Year Results are available on the Heathrow website. "
+        "http://www.rns-pdf.londonstockexchange.com/rns/9939U_1-2026-3-2.pdf "
+        "http://www.rns-pdf.londonstockexchange.com/rns/3249M_1-2025-12-19.pdf"
+    )
+    assert _lse_pdf_urls(body, _PUB) == []
+
+
+def test_lse_pdf_urls_rejects_a_pdf_filed_after_publication():
+    body = "see http://www.rns-pdf.londonstockexchange.com/rns/2626O_1-2026-8-4.pdf"
+    assert _lse_pdf_urls(body, _PUB) == []
+
+
+def test_lse_pdf_urls_orders_by_suffix_not_by_document_order():
+    """Aviva files _1 (the News Release, with the outlook commentary) alongside
+    _2 (a financial data pack). _1 must win however they appear in the text."""
+    body = (
+        "Results pack http://www.rns-pdf.londonstockexchange.com/rns/6437Q_2-2026-7-28.pdf "
+        "and news release http://www.rns-pdf.londonstockexchange.com/rns/6437Q_1-2026-7-28.pdf"
+    )
+    assert _lse_pdf_urls(body, _PUB) == [
+        "http://www.rns-pdf.londonstockexchange.com/rns/6437Q_1-2026-7-28.pdf",
+        "http://www.rns-pdf.londonstockexchange.com/rns/6437Q_2-2026-7-28.pdf",
+    ]
+
+
+def test_lse_pdf_urls_dedupes_a_link_printed_twice():
+    body = RKT_BODY + " again: " + RKT_BODY
+    assert len(_lse_pdf_urls(body, _PUB)) == 1
+
+
+def test_lse_pdf_urls_ignores_other_hosts():
+    body = (
+        "available on the company website www.reckitt.com/investors/results.pdf "
+        "and at https://data.fca.org.uk/#/nsm/nationalstoragemechanism"
+    )
+    assert _lse_pdf_urls(body, _PUB) == []
+
+
+def test_lse_pdf_urls_empty_body_or_missing_date():
+    assert _lse_pdf_urls("", _PUB) == []
+    assert _lse_pdf_urls(RKT_BODY, None) == []
+
+
+def test_looks_like_prose_accepts_real_extraction():
+    text = (
+        "Results for the six months ended 30 June 2026. Revenue for the year "
+        "grew and the profit outlook for the group was reiterated in full."
+    )
+    assert _looks_like_prose(text) is True
+
+
+def test_looks_like_prose_rejects_font_encoding_mojibake():
+    """Diageo's prelims PDF has no ToUnicode map; PyMuPDF and pdfplumber both
+    return this. Storing it would be worse than keeping the pointer body."""
+    garbage = "#   +0,=09/0/  @90  @2@>?  \"0?>,70>   8   #=2,94.90?>,70>8:A0809?" * 40
+    assert _looks_like_prose(garbage) is False
+
+
+def test_looks_like_prose_rejects_empty():
+    assert _looks_like_prose("") is False
+    assert _looks_like_prose(None) is False
+
+
+def _prose(n_chars: int) -> str:
+    """Extraction-shaped filler that clears the stop-word density floor."""
+    unit = "the results of the year show revenue and profit for the group. "
+    return (unit * (n_chars // len(unit) + 1))[:n_chars]
+
+
+def test_body_from_pdf_swaps_in_the_linked_document():
+    full = _prose(120_000)
+    with patch("rns._pdf_text", return_value=full) as pdf:
+        assert _body_from_pdf(RKT_BODY, _PUB) == full
+    pdf.assert_called_once_with(
+        "http://www.rns-pdf.londonstockexchange.com/rns/2626O_1-2026-7-28.pdf"
+    )
+
+
+def test_body_from_pdf_skips_a_body_that_already_has_the_results():
+    """AZN's 131k body gains x1.2 from its attached PDF — the same document.
+    Above the threshold the fetch is waste, and risks swapping a results
+    statement for a slide deck."""
+    long_body = _prose(_BODY_PDF_MAX_BODY) + " " + RKT_BODY
+    with patch("rns._pdf_text") as pdf:
+        assert _body_from_pdf(long_body, _PUB) is None
+    pdf.assert_not_called()
+
+
+def test_body_from_pdf_keeps_body_when_extraction_is_mojibake():
+    garbage = "#   +0,=09/0/  @90  @2@>?" * 4000
+    with patch("rns._pdf_text", return_value=garbage):
+        assert _body_from_pdf(RKT_BODY, _PUB) is None
+
+
+def test_body_from_pdf_keeps_body_when_pdf_is_not_longer():
+    with patch("rns._pdf_text", return_value=_prose(len(RKT_BODY))):
+        assert _body_from_pdf(RKT_BODY, _PUB) is None
+
+
+def test_body_from_pdf_is_non_fatal_on_fetch_failure():
+    """A pointer body is a valid capture; a dead link must never cost the ingest."""
+    with patch("rns._pdf_text", side_effect=urllib.error.URLError("boom")):
+        assert _body_from_pdf(RKT_BODY, _PUB) is None
+
+
+def test_body_from_pdf_falls_through_to_the_next_link():
+    """When _1 is unextractable, _2 is still worth trying before giving up."""
+    body = (
+        "Results at http://www.rns-pdf.londonstockexchange.com/rns/6437Q_1-2026-7-28.pdf "
+        "and http://www.rns-pdf.londonstockexchange.com/rns/6437Q_2-2026-7-28.pdf"
+    )
+    full = _prose(90_000)
+    with patch("rns._pdf_text", side_effect=[None, full]) as pdf:
+        assert _body_from_pdf(body, _PUB) == full
+    assert pdf.call_count == 2
+
+
+def test_body_from_pdf_no_link_is_a_noop():
+    with patch("rns._pdf_text") as pdf:
+        assert _body_from_pdf("Trading update. Revenue grew 8%.", _PUB) is None
+    pdf.assert_not_called()
+
+
+def test_pdf_download_retries_a_transient_5xx():
+    """L&G's PDF 500'd once between two clean 200s; the row would otherwise keep
+    its pointer body forever, since body_fetched_at is stamped either way."""
+    from rns import _pdf_download
+
+    ok = MagicMock()
+    ok.read.return_value = b"%PDF-1.4 ..."
+    ok.__enter__ = lambda s: s
+    ok.__exit__ = lambda s, *a: False
+    boom = urllib.error.HTTPError("u", 500, "Internal Server Error", {}, None)
+    with patch("rns.urllib.request.urlopen", side_effect=[boom, ok]) as get, \
+         patch("rns.time.sleep") as slept:
+        assert _pdf_download("http://x/y.pdf", 30) == b"%PDF-1.4 ..."
+    assert get.call_count == 2
+    slept.assert_called_once()
+
+
+def test_pdf_download_does_not_retry_a_404():
+    """A missing document is final — retrying just burns the batch's clock."""
+    from rns import _pdf_download
+
+    boom = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+    with patch("rns.urllib.request.urlopen", side_effect=boom) as get, \
+         patch("rns.time.sleep") as slept:
+        with pytest.raises(urllib.error.HTTPError):
+            _pdf_download("http://x/y.pdf", 30)
+    assert get.call_count == 1
+    slept.assert_not_called()
+
+
+def test_pdf_download_gives_up_after_the_last_backoff():
+    from rns import _pdf_download, _PDF_RETRY_BACKOFF_S
+
+    boom = urllib.error.HTTPError("u", 503, "Unavailable", {}, None)
+    with patch("rns.urllib.request.urlopen", side_effect=boom) as get, \
+         patch("rns.time.sleep"):
+        with pytest.raises(urllib.error.HTTPError):
+            _pdf_download("http://x/y.pdf", 30)
+    assert get.call_count == len(_PDF_RETRY_BACKOFF_S) + 1

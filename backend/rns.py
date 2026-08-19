@@ -18,7 +18,7 @@ import re
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone, time as _dt_time
+from datetime import datetime, timezone, date, timedelta, time as _dt_time
 from typing import Optional
 
 from zoneinfo import ZoneInfo
@@ -1486,6 +1486,165 @@ def _truncate_body(text: str) -> tuple[str, int, bool]:
     return stored, n, is_stub
 
 
+# ── PDF-follow: results published as a link rather than as text ───────────────
+#
+# A material minority of issuers file results as a one-page RNS carrying only the
+# dividend, the webcast dial-in and a link — the numbers live in a PDF on the
+# LSE's own host. Measured over 2026-06-29..2026-08-19: 13% of in-universe
+# results announcements arrive with no full text anywhere within +/-2 days, and
+# the tradeable half of those (RKT, CNA, SDR, AV, HLN, TCAP, OCDO) all point at
+# rns-pdf.londonstockexchange.com. Reckitt's half-year scored 30 with the
+# ranker's own thesis reading "full financials not disclosed in this RNS", while
+# page 1 of the linked PDF opens "FY OUTLOOK REITERATED" — precisely the
+# guidance_checks signal the showcase gate exists to catch.
+#
+# These are NOT caught by body_is_stub: at 1.1k-3.3k chars they sit well above
+# _BODY_STUB_CHARS, so without this path the pipeline treats the pointer as the
+# document and the ranker scores the furniture.
+
+# Both scheme and the www. host prefix vary in the wild; the `_N` suffix and the
+# filing date in the stem are what the gates below key on.
+_LSE_PDF_RE = re.compile(
+    r"https?://(?:www\.)?rns-pdf\.londonstockexchange\.com/rns/"
+    r"[A-Za-z0-9]+_(\d+)-(\d{4})-(\d{1,2})-(\d{1,2})\.pdf",
+    re.I,
+)
+
+# Only follow the link when the announcement does not already carry its own
+# results. Measured gain (PDF chars / body chars): AZN 131k body x1.2 — the same
+# document re-attached, pure waste — against SDR 1.7k x49, HLN 3.3k x37, LGEN
+# 4.7k x67. Above this threshold the fetch buys nothing, and can actively harm:
+# Burford's linked PDF is a shareholder slide deck, not the results statement.
+_BODY_PDF_MAX_BODY = 12_000
+
+# The filename is stamped with the day the release was FILED, typically the
+# evening before it publishes (a 29 Jul release links ..._1-2026-7-28.pdf).
+# Heathrow's half-year body cited SIX PDFs, all from prior months — one from the
+# previous December — so an unwindowed match would ingest a stale document.
+_PDF_DATE_LOOKBACK_DAYS = 2
+
+# Refuse to store text that did not really extract. Diageo's prelims PDF uses a
+# custom font encoding with no ToUnicode map and comes out as mush
+# ("#   +0,=09/0/  @90  @2@>?"). PyMuPDF and pdfplumber return the same mush, so
+# this is a property of the file, not of the library — there is no parser swap
+# that rescues it. Stop-word density per 1k chars, measured: garbage 0.0, every
+# good extraction in the sample 23-26. The threshold sits far from both.
+_PDF_PROSE_WORDS = re.compile(
+    r"\b(?:the|and|of|for|to|in|results|revenue|profit|year)\b", re.I
+)
+_PDF_PROSE_MIN_PER_1K = 5.0
+
+# Observed results PDFs run 254KB-4.4MB; the cap is headroom, not a target.
+_PDF_MAX_BYTES = 32 * 1024 * 1024
+_PDF_TIMEOUT_S = 30
+
+# The LSE PDF host sits behind Cloudflare and blips. L&G's half-year PDF returned
+# a clean 200 (1.35MB), then HTTP 500 on the same URL twenty minutes later, then
+# 200 again on every one of six retries. Because the backfill stamps
+# body_fetched_at either way, a row that meets the blip keeps its pointer body
+# forever — so a transient failure is worth a couple of seconds to retry in-run.
+# Retried only on 5xx and network errors; a 404 or a malformed PDF is final.
+_PDF_RETRY_BACKOFF_S = (2.0, 6.0)
+
+
+def _lse_pdf_urls(body: str, published_at) -> list[str]:
+    """LSE-hosted PDF links in `body` that belong to THIS announcement.
+
+    Ordered by the filename's `_N` suffix rather than by length or document
+    order: Aviva files `_1` (a 53k News Release carrying the CEO commentary and
+    outlook) alongside `_2` (a 361k financial data pack). Longest-wins would
+    take the tables and drop the narrative the ranker actually reads.
+    """
+    if not body or published_at is None:
+        return []
+    published = published_at.date() if hasattr(published_at, "date") else published_at
+    found: dict[str, int] = {}
+    for m in _LSE_PDF_RE.finditer(body):
+        suffix, y, mo, d = m.groups()
+        try:
+            filed = date(int(y), int(mo), int(d))
+        except ValueError:
+            continue
+        # A PDF filed after publication belongs to a later announcement; one
+        # filed well before it is a back-reference, not this release.
+        if not (published - timedelta(days=_PDF_DATE_LOOKBACK_DAYS) <= filed <= published):
+            continue
+        found.setdefault(m.group(0), int(suffix))
+    return sorted(found, key=lambda u: (found[u], u))
+
+
+def _looks_like_prose(text: str) -> bool:
+    """True when extracted PDF text is readable English rather than mojibake."""
+    if not text:
+        return False
+    hits = len(_PDF_PROSE_WORDS.findall(text))
+    return 1000.0 * hits / len(text) >= _PDF_PROSE_MIN_PER_1K
+
+
+def _pdf_download(url: str, timeout: int) -> bytes:
+    """GET a PDF, retrying transient 5xx/network failures. See _PDF_RETRY_BACKOFF_S."""
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    attempts = len(_PDF_RETRY_BACKOFF_S)
+    for attempt in range(attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read(_PDF_MAX_BYTES + 1)
+        except urllib.error.HTTPError as e:
+            # 404/403 mean the document is not there for us; only server-side
+            # faults are worth a second look.
+            if e.code < 500 or attempt == attempts:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == attempts:
+                raise
+        wait = _PDF_RETRY_BACKOFF_S[attempt]
+        print(f"[rns] PDF fetch blipped, retrying in {wait:.0f}s ({attempt + 1}/{attempts}) — {url}")
+        time.sleep(wait)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _pdf_text(url: str, timeout: int = _PDF_TIMEOUT_S) -> Optional[str]:
+    """Download one PDF and return its whitespace-collapsed text, or None."""
+    raw = _pdf_download(url, timeout)
+    if len(raw) > _PDF_MAX_BYTES:
+        print(f"[rns] PDF exceeds {_PDF_MAX_BYTES} byte cap, skipping — {url}")
+        return None
+    import fitz  # deferred — only the ingest/scrape path needs PyMuPDF
+
+    with fitz.open(stream=raw, filetype="pdf") as doc:
+        text = "".join(page.get_text() for page in doc)
+    return re.sub(r"\s+", " ", text).strip() or None
+
+
+def _body_from_pdf(body: str, published_at) -> Optional[str]:
+    """Announcement text recovered from the PDF a pointer body links to.
+
+    Returns None whenever the body we already have should be kept: no link, a
+    link belonging to another announcement, a body that already carries the
+    results, an unextractable PDF, a PDF no longer than the body, or a failed
+    fetch. Non-fatal throughout by design — a pointer body is a valid capture,
+    so nothing on this path may cost a row its ingest.
+    """
+    if not body or len(body) >= _BODY_PDF_MAX_BODY:
+        return None
+    for url in _lse_pdf_urls(body, published_at):
+        try:
+            text = _pdf_text(url)
+        except Exception as e:  # network, HTTP, malformed PDF — all non-fatal
+            print(f"[rns] PDF fetch failed (non-fatal) {url} — {e}")
+            continue
+        if not text:
+            continue
+        if not _looks_like_prose(text):
+            print(f"[rns] PDF text failed the prose check, keeping body — {url}")
+            continue
+        if len(text) <= len(body):
+            continue
+        print(f"[rns] followed PDF {url} — body {len(body)} -> {len(text)} chars")
+        return text
+    return None
+
+
 def _fetch_summary_and_body(url: str, timeout: int = 15) -> tuple[Optional[str], Optional[str]]:
     """Fetch one announcement page once and extract both the AI summary and
     the full announcement body text.
@@ -1544,7 +1703,7 @@ def _backfill_summaries(
     """
     rows = _query(
         """
-        SELECT id, url
+        SELECT id, url, published_at
         FROM rns_announcements
         WHERE body_fetched_at IS NULL
           AND tier = ANY(%s)
@@ -1555,7 +1714,7 @@ def _backfill_summaries(
     )
 
     fetched = with_summary = missing = errors = 0
-    with_body = stub = 0
+    with_body = stub = from_pdf = 0
     rate_limited = False
     for r in rows:
         try:
@@ -1563,6 +1722,16 @@ def _backfill_summaries(
             body_stored = body_chars = None
             body_is_stub = None
             if body_raw:
+                # Pointer bodies carry the dividend and the dial-in but not the
+                # numbers; when they link the LSE-hosted PDF, that is the real
+                # announcement. Swapped in BEFORE _truncate_body so the PDF text
+                # flows through the same head+tail cap and every consumer
+                # downstream — prompt, vet, body_is_stub, the 30-day prune — is
+                # unchanged.
+                pdf_body = _body_from_pdf(body_raw, r["published_at"])
+                if pdf_body:
+                    body_raw = pdf_body
+                    from_pdf += 1
                 body_stored, body_chars, body_is_stub = _truncate_body(body_raw)
                 with_body += 1
                 if body_is_stub:
@@ -1593,6 +1762,7 @@ def _backfill_summaries(
         "missing": missing,
         "with_body": with_body,
         "body_stub": stub,
+        "body_from_pdf": from_pdf,
         "errors": errors,
         "rate_limited": rate_limited,
     }
