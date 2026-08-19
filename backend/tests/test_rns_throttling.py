@@ -241,4 +241,12 @@ def test_backfill_stops_on_throttle(monkeypatch):
 
     result = rns._backfill_summaries(limit=10, sleep_s=0, tiers=("A", "B"))
     assert result["rate_limited"] is True
-    assert len(seen) == 1  # stopped after the first, did not try all 10
+    # Was 1. A single refusal is no longer proof of a block: one URL can 403
+    # while the host serves everything else, and aborting on it left that row at
+    # the head of a published_at DESC queue forever (see _RL_ABORT_STREAK). The
+    # property this test exists for is unchanged — a blocked host must not burn
+    # the remaining `limit` — it just costs one probe row to establish now.
+    assert len(seen) == rns._RL_ABORT_STREAK
+    assert len(seen) < len(rows)
+    # A genuine block must never retire rows; they stay pending for the retry.
+    assert result["retired"] == 0

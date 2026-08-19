@@ -1687,6 +1687,61 @@ def _update_summary_and_body(
         pool.putconn(conn)
 
 
+# Consecutive throttled rows before we accept the host is blocking us wholesale
+# and abort the run. 1 was too eager: a single URL that 403s while the host is
+# otherwise healthy would abort every run forever, and because the queue is
+# ordered published_at DESC and a failed row keeps body_fetched_at NULL, that
+# row sits at the head of it permanently. Announcement 9713425 did exactly this
+# from 2026-08-11 to 08-19 — eight days in which no row older than it could ever
+# be backfilled. Costs one extra probe row against a genuine block: ~10s inside
+# the urgent window (_URGENT_BACKOFF_CAP_S), ~50s outside it.
+_RL_ABORT_STREAK = 2
+
+
+def _mark_body_unavailable(ann_id: int) -> None:
+    """Stamp body_fetched_at so a row that cannot be fetched leaves the queue.
+
+    Deliberately touches ONLY body_fetched_at. The obvious alternative — reusing
+    _update_summary_and_body with empty values — also nulls `summary` and
+    restamps summary_fetched_at, and rows predating body capture already carry a
+    perfectly good summary that the ranker still uses. Retiring a row must not
+    cost us the text we do have.
+
+    The row lands in the same state as any other extraction miss (fetched, no
+    body), which rns.body_capture already counts and reports.
+    """
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE rns_announcements SET body_fetched_at = NOW() WHERE id = %s",
+            (ann_id,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
+
+
+def _host_responds(timeout: int = 15) -> bool:
+    """Is investegate serving us at all right now?
+
+    The tie-breaker for a run whose only throttled row was also its only row:
+    with no successful fetch to compare against, a 403 is ambiguous between "this
+    URL is refused" and "we are blocked". One request to the feed index settles
+    it. Only called when the run has no in-run evidence either way, so it costs
+    nothing on a normal run.
+    """
+    try:
+        _urlopen_polite(_BASE_URL, timeout)
+        return True
+    except Exception:
+        return False
+
+
 def _backfill_summaries(
     limit: int = 50, sleep_s: float = 1.5, tiers: tuple = ("A", "B")
 ) -> dict:
@@ -1714,8 +1769,10 @@ def _backfill_summaries(
     )
 
     fetched = with_summary = missing = errors = 0
-    with_body = stub = from_pdf = 0
+    with_body = stub = from_pdf = retired = 0
     rate_limited = False
+    consecutive_rl = 0
+    suspects: list[int] = []
     for r in rows:
         try:
             summary, body_raw = _fetch_summary_and_body(r["url"])
@@ -1738,23 +1795,58 @@ def _backfill_summaries(
                     stub += 1
             _update_summary_and_body(r["id"], summary, body_stored, body_chars, body_is_stub)
             fetched += 1
+            # A success proves the host is serving us, so anything that was
+            # refused earlier in this run was refused on its own merits.
+            if suspects:
+                for sid in suspects:
+                    _mark_body_unavailable(sid)
+                print(f"[rns] host is healthy — retired {len(suspects)} refused "
+                      f"row(s) so they stop blocking the queue: {suspects}")
+                retired += len(suspects)
+                suspects = []
+            consecutive_rl = 0
             if summary:
                 with_summary += 1
             else:
                 missing += 1
         except _RateLimited as e:
-            # Stop the whole backfill, not just this row — continuing would
-            # spend the remaining `limit` fetches hammering a host that has
-            # just told us to back off. The rows keep body_fetched_at NULL, so
-            # the next cron run picks them up unchanged.
-            print(f"[rns] RATE LIMITED on {r['id']} — aborting summary backfill ({e})")
-            rate_limited = True
+            # One refused row is NOT evidence the host is blocking us — see
+            # _RL_ABORT_STREAK. Hold it as a suspect and try the next row: if
+            # that one succeeds the suspect is retired, and if the whole streak
+            # is refused we accept the block and stop. Only a run that ends with
+            # suspects and no verdict leaves them pending, adjudicated below.
             errors += 1
-            break
+            consecutive_rl += 1
+            suspects.append(r["id"])
+            if consecutive_rl >= _RL_ABORT_STREAK:
+                print(f"[rns] RATE LIMITED {consecutive_rl}x consecutively — "
+                      f"aborting summary backfill ({e})")
+                rate_limited = True
+                # Never retire during a block: these rows are almost certainly
+                # fine and would lose their body permanently.
+                suspects = []
+                break
+            print(f"[rns] throttled on {r['id']} — probing the next row before "
+                  f"deciding whether the host is blocking us ({e})")
         except (urllib.error.URLError, TimeoutError) as e:
             print(f"[rns] summary fetch failed for {r['id']}: {e}")
             errors += 1
         time.sleep(sleep_s)
+
+    # No row succeeded, so the loop never learned whether the host was the
+    # problem. One request to the feed index decides it rather than leaving a
+    # dead URL to block every future run.
+    if suspects and not rate_limited:
+        if _host_responds():
+            for sid in suspects:
+                _mark_body_unavailable(sid)
+            print(f"[rns] feed index responds — retired {len(suspects)} refused "
+                  f"row(s): {suspects}")
+            retired += len(suspects)
+        else:
+            rate_limited = True
+            print(f"[rns] feed index also refused — host is blocking us, "
+                  f"leaving {len(suspects)} row(s) pending for the next run")
     result = {
         "candidates": len(rows),
         "fetched": fetched,
@@ -1764,6 +1856,7 @@ def _backfill_summaries(
         "body_stub": stub,
         "body_from_pdf": from_pdf,
         "errors": errors,
+        "retired": retired,
         "rate_limited": rate_limited,
     }
     print(f"[rns] summary backfill done — {result}")

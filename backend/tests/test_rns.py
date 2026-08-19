@@ -1011,3 +1011,105 @@ def test_pdf_download_gives_up_after_the_last_backoff():
         with pytest.raises(urllib.error.HTTPError):
             _pdf_download("http://x/y.pdf", 30)
     assert get.call_count == len(_PDF_RETRY_BACKOFF_S) + 1
+
+
+# ── _backfill_summaries head-of-line block ────────────────────────────────────
+#
+# Announcement 9713425 returned 403 while every other investegate URL served
+# 200, and because a throttled row keeps body_fetched_at NULL and the queue is
+# ordered published_at DESC, it sat at the head of the queue from 2026-08-11 to
+# 08-19 — eight days in which nothing older than it could be backfilled.
+
+from rns import _backfill_summaries, _RateLimited, _RL_ABORT_STREAK
+
+
+def _rows(*ids):
+    from datetime import datetime, timezone
+    return [
+        {"id": i, "url": f"http://x/{i}", "published_at": datetime(2026, 8, 11, tzinfo=timezone.utc)}
+        for i in ids
+    ]
+
+
+def test_backfill_retires_a_poison_row_once_another_row_succeeds():
+    """The refused row must leave the queue; the healthy rows must still land."""
+    with patch("rns._query", return_value=_rows(1, 2)), \
+         patch("rns._fetch_summary_and_body",
+               side_effect=[_RateLimited(403, "http://x/1"), ("sum", "body text")]), \
+         patch("rns._update_summary_and_body") as upd, \
+         patch("rns._mark_body_unavailable") as retire, \
+         patch("rns._host_responds") as host, \
+         patch("rns.time.sleep"):
+        res = _backfill_summaries(limit=10, sleep_s=0)
+
+    retire.assert_called_once_with(1)
+    assert upd.call_count == 1 and upd.call_args[0][0] == 2
+    assert res["retired"] == 1 and res["fetched"] == 1
+    assert res["rate_limited"] is False
+    host.assert_not_called()  # in-run evidence was enough
+
+
+def test_backfill_aborts_without_retiring_when_the_host_blocks_everything():
+    """A real block must not cost good rows their body — they stay pending."""
+    with patch("rns._query", return_value=_rows(1, 2, 3)), \
+         patch("rns._fetch_summary_and_body",
+               side_effect=[_RateLimited(429, "http://x/1"), _RateLimited(429, "http://x/2"),
+                            ("sum", "body")]), \
+         patch("rns._update_summary_and_body") as upd, \
+         patch("rns._mark_body_unavailable") as retire, \
+         patch("rns.time.sleep"):
+        res = _backfill_summaries(limit=10, sleep_s=0)
+
+    retire.assert_not_called()
+    upd.assert_not_called()
+    assert res["rate_limited"] is True
+    assert res["retired"] == 0
+
+
+def test_backfill_probes_the_feed_index_when_the_only_row_is_refused():
+    """The observed case: a queue of one poison row has no sibling to compare
+    against, so without the index probe it would block forever."""
+    with patch("rns._query", return_value=_rows(9713425)), \
+         patch("rns._fetch_summary_and_body", side_effect=_RateLimited(403, "http://x/1")), \
+         patch("rns._mark_body_unavailable") as retire, \
+         patch("rns._host_responds", return_value=True) as host, \
+         patch("rns.time.sleep"):
+        res = _backfill_summaries(limit=10, sleep_s=0)
+
+    host.assert_called_once()
+    retire.assert_called_once_with(9713425)
+    assert res["retired"] == 1 and res["rate_limited"] is False
+
+
+def test_backfill_leaves_the_row_pending_when_the_index_is_refused_too():
+    with patch("rns._query", return_value=_rows(9713425)), \
+         patch("rns._fetch_summary_and_body", side_effect=_RateLimited(403, "http://x/1")), \
+         patch("rns._mark_body_unavailable") as retire, \
+         patch("rns._host_responds", return_value=False), \
+         patch("rns.time.sleep"):
+        res = _backfill_summaries(limit=10, sleep_s=0)
+
+    retire.assert_not_called()
+    assert res["rate_limited"] is True and res["retired"] == 0
+
+
+def test_backfill_streak_resets_after_a_success():
+    """Two refusals separated by a success are not a block — a naive counter
+    would abort the run on the second one."""
+    with patch("rns._query", return_value=_rows(1, 2, 3, 4)), \
+         patch("rns._fetch_summary_and_body",
+               side_effect=[_RateLimited(403, "u"), ("s", "b"),
+                            _RateLimited(403, "u"), ("s", "b")]), \
+         patch("rns._update_summary_and_body"), \
+         patch("rns._mark_body_unavailable") as retire, \
+         patch("rns.time.sleep"):
+        res = _backfill_summaries(limit=10, sleep_s=0)
+
+    assert res["rate_limited"] is False
+    assert res["fetched"] == 2
+    assert [c[0][0] for c in retire.call_args_list] == [1, 3]
+
+
+def test_rl_abort_streak_is_above_one():
+    """Guards the regression directly: a streak of 1 is the old behaviour."""
+    assert _RL_ABORT_STREAK >= 2
