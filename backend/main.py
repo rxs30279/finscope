@@ -1239,6 +1239,20 @@ def _attach_risk_score(results):
     return results
 
 
+# Mega-caps that trade every session — used only to probe the latest trading
+# date without a sequential scan (price_history has no date-only index, see
+# migration 004's (symbol, date DESC) index).
+_TRADING_DATE_PROBE = ["SHEL.L", "HSBA.L", "AZN.L", "ULVR.L", "BP.L"]
+
+
+def _latest_trading_date():
+    rows = query(
+        "SELECT max(date) AS d FROM price_history WHERE symbol = ANY(%s)",
+        (_TRADING_DATE_PROBE,),
+    )
+    return rows[0]["d"] if rows else None
+
+
 def compute_and_store_scores():
     """Recompute the heavy per-symbol scores for the whole universe and upsert
     them into screener_scores.
@@ -1896,6 +1910,74 @@ def screener(
         r["sector"] = to_icb(r["sector"])
     _screener_cache[cache_key] = (results, now)
     return results
+
+
+def snapshot_scores():
+    """Record today's four screener scores into screener_score_history.
+
+    Must be called from a cron process (run_scores.py / run_prices.py), not from
+    inside the API server — those are separate processes so _screener_cache
+    starts empty here; called in-process it would need to clear that cache first
+    or it would snapshot up to 6h-stale data (see _screener_cache / _SCREENER_TTL
+    above). Calls screener() itself rather than re-querying and re-scoring, so
+    this always records what the site actually served — quality_score and
+    value_score in particular only exist inline in that function's output.
+    """
+    as_of = _latest_trading_date()
+    if as_of is None:
+        return {"as_of": None, "stored": 0}
+
+    rows = screener(response=Response(), limit=5000)  # no filters: whole universe
+
+    values = [
+        (
+            r["symbol"], as_of,
+            r.get("value_score"), r.get("quality_score"),
+            r.get("momentum_score"), r.get("risk_score"),
+            r.get("piotroski_score"), r.get("risk_model"),
+            r.get("altman_z"), r.get("volatility_annualised"),
+            r.get("market_cap"), r.get("sector"), r.get("ftse_index"),
+            r.get("current_price"),
+        )
+        for r in rows
+    ]
+
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        conn.autocommit = False
+        cur = conn.cursor()
+        psycopg2.extras.execute_values(
+            cur,
+            "INSERT INTO screener_score_history"
+            " (symbol, as_of, value_score, quality_score, momentum_score, risk_score,"
+            "  piotroski_score, risk_model, altman_z, volatility_annualised,"
+            "  market_cap, sector, ftse_index, close)"
+            " VALUES %s"
+            " ON CONFLICT (symbol, as_of) DO UPDATE SET"
+            "   value_score           = EXCLUDED.value_score,"
+            "   quality_score         = EXCLUDED.quality_score,"
+            "   momentum_score        = EXCLUDED.momentum_score,"
+            "   risk_score            = EXCLUDED.risk_score,"
+            "   piotroski_score       = EXCLUDED.piotroski_score,"
+            "   risk_model            = EXCLUDED.risk_model,"
+            "   altman_z              = EXCLUDED.altman_z,"
+            "   volatility_annualised = EXCLUDED.volatility_annualised,"
+            "   market_cap            = EXCLUDED.market_cap,"
+            "   sector                = EXCLUDED.sector,"
+            "   ftse_index            = EXCLUDED.ftse_index,"
+            "   close                 = EXCLUDED.close,"
+            "   snapshotted_at        = now()",
+            values,
+            page_size=1000,
+        )
+        conn.commit()
+        return {"as_of": str(as_of), "stored": len(values)}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
 
 
 _quote_cache: dict = {}

@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
 from prices import refresh_prices
-from main import compute_and_store_scores, compute_and_store_valuations
+from main import compute_and_store_scores, compute_and_store_valuations, snapshot_scores
 from market import _lse_open, _rebuild_fear_greed_history, warm_price_snapshots
 
 
@@ -57,6 +57,15 @@ def main() -> int:
         print(f"[prices] screener score rebuild FAILED — {type(e).__name__}: {e}")
         traceback.print_exc()
         return 1
+
+    # Dated snapshot for the forward-test history table. Non-fatal: scores above
+    # are already committed and this self-heals on the next run.
+    try:
+        snap = snapshot_scores()
+        print(f"[prices] score history snapshot recorded — {snap}")
+    except Exception as e:
+        print(f"[prices] score history snapshot FAILED (non-fatal) — {type(e).__name__}: {e}")
+        traceback.print_exc()
 
     # Peer-relative fair values (Valuation tab). Reads peers' fresh multiples, so
     # rebuild after prices land. Non-fatal: a failure is reported but the prices

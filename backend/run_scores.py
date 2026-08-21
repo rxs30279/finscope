@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
 
-from main import compute_and_store_scores, compute_and_store_valuations
+from main import compute_and_store_scores, compute_and_store_valuations, snapshot_scores
 
 
 def main() -> int:
@@ -31,6 +31,15 @@ def main() -> int:
         print(f"[scores] rebuild FAILED — {type(e).__name__}: {e}")
         traceback.print_exc()
         return 1
+
+    # Dated snapshot for the forward-test history table. Non-fatal: scores above
+    # are already committed and this self-heals on the next run.
+    try:
+        snap = snapshot_scores()
+        print(f"[scores] history snapshot recorded — {snap}")
+    except Exception as e:
+        print(f"[scores] history snapshot FAILED (non-fatal) — {type(e).__name__}: {e}")
+        traceback.print_exc()
 
     try:
         vals = compute_and_store_valuations()
