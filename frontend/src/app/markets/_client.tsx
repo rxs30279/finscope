@@ -13,6 +13,7 @@ import FearGreedTab from "@/components/FearGreedTab";
 const BreadthTab = dynamic(() => import("@/components/BreadthTab"), { ssr: false });
 const RotationTab = dynamic(() => import("@/components/RotationTab"), { ssr: false });
 const CrossAssetTab = dynamic(() => import("@/components/CrossAssetTab"), { ssr: false });
+const ConsumerTab = dynamic(() => import("@/components/ConsumerTab"), { ssr: false });
 
 export default function MarketsPageClient() {
   const { refreshKey } = useRefresh();
@@ -21,7 +22,7 @@ export default function MarketsPageClient() {
     <div style={{ display: "flex", flexDirection: "column", gap: 40 }}>
       <PageHeader
         title="Market Signals"
-        subtitle="The UK Fear & Greed index, market breadth, sector rotation and cross-asset signals for the London market."
+        subtitle="The UK Fear & Greed index, market breadth, sector rotation, cross-asset and consumer signals for the London market."
         marginBottom={0}
       />
       <FearGreedTab refreshKey={refreshKey} />
@@ -33,6 +34,9 @@ export default function MarketsPageClient() {
       </LazySection>
       <LazySection minHeight={420}>
         <CrossAssetTab refreshKey={refreshKey} />
+      </LazySection>
+      <LazySection minHeight={420}>
+        <ConsumerTab refreshKey={refreshKey} />
       </LazySection>
     </div>
   );
