@@ -717,7 +717,7 @@ const COLS = [
   { key: "run", label: "Run", align: "right", width: "7%", minWidth: 55 },
   // No sort: the sparkline has no single number to order by — 52W Range next to
   // it covers "where is this trading".
-  { key: "trend", label: "Trend", align: "left", width: "11%", noSort: true, minWidth: 90 },
+  { key: "trend", label: "Trend 3M", align: "left", width: "11%", noSort: true, minWidth: 90 },
   // Bar + percentage label need room of their own — below this the label was
   // overflowing the column and overlapping Target buy's "set £" input.
   { key: "range", label: "52W Range", align: "left", width: "11%", minWidth: 110 },
