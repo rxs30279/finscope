@@ -236,6 +236,7 @@ SECTOR_TICKERS = {
     "Consumer Discretionary": [
         "CPG.L",
         "NXT.L",
+        "BRBY.L",  # added 2026-08-30 in Flutter's place (see below)
         "IHG.L",
         "GAW.L",
         "KGF.L",
@@ -244,7 +245,8 @@ SECTOR_TICKERS = {
         "WTB.L",
         "EZJ.L",
         "ENT.L",
-        "FLTR.L",
+        # FLTR.L (Flutter) removed 2026-08-30: its LSE secondary listing was
+        # cancelled effective 2026-08-03 (last LSE trade 07-31), NYSE-only now.
         "PSN.L",
         "TW.L",
         "WPP.L",
@@ -751,9 +753,10 @@ def _compute_rs_score(prices, sector_tickers, benchmark_ticker, window=63):
 
     Constituents that can't cover the window are DROPPED rather than fatal. The
     check used to run on the basket MINIMUM, so one dead listing nulled the entire
-    sector — FLTR.L stopped printing daily bars after Flutter's move off the LSE,
-    which alone blanked Consumer Discretionary. We still want a real basket behind
-    the number, so bail unless at least half the names (and at least two) survive."""
+    sector — FLTR.L stopped printing daily bars when Flutter left the LSE, and alone
+    blanked Consumer Discretionary. That name is gone from the basket now, but the
+    next delisting shouldn't need a code change to survive: keep dropping short
+    constituents, and bail only if fewer than half the names (or fewer than two) do."""
     basket_prices = [
         prices[t].dropna() for t in sector_tickers if t in prices.columns
     ]
