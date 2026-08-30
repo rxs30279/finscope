@@ -192,6 +192,17 @@ BENCHMARK_TICKERS = {
     "All-Share": "^FTAS",
 }
 
+# Benchmark chain for the sector RS calculation, best first. The All-Share is the
+# right yardstick, but Yahoo's ^FTAS DAILY-BAR feed is unreliable — it still serves
+# a live quote while returning a single bar of history (no lookback at all), which
+# silently nulls every sector's RS score and blanks the whole rotation tab. FTSE 350
+# is ~96% of the All-Share by market cap and sits within ~1% of its level, so it
+# stands in whenever ^FTAS can't cover the lookback window.
+RS_BENCHMARKS = [
+    ("FTSE All-Share", "^FTAS"),
+    ("FTSE 350", "^FTLC"),
+]
+
 # Representative constituents per ICB sector — basket average used as sector proxy
 SECTOR_TICKERS = {
     "Energy": ["SHEL.L", "BP.L", "HBR.L"],
@@ -324,6 +335,7 @@ ONS_GDP_QOQ_URL_FALLBACK = "https://www.ons.gov.uk/economy/grossdomesticproductg
 ALL_PROXY_TICKERS = list(
     dict.fromkeys(
         list(BENCHMARK_TICKERS.values())
+        + [t for _, t in RS_BENCHMARKS]
         + [t for tickers in SECTOR_TICKERS.values() for t in tickers]
         + BREADTH_TICKERS
         + list(CROSS_ASSET_TICKERS.values())
@@ -678,13 +690,31 @@ def _basket_pct_change(prices, tickers):
     return float(np.mean(valid)) if valid else None
 
 
+def _rs_benchmark(prices, window):
+    """Pick the RS benchmark: the first entry in RS_BENCHMARKS whose column actually
+    carries `window` + 1 sessions of history. Returns (label, ticker), or (None, None)
+    if no benchmark has enough data — in which case RS is genuinely uncomputable."""
+    for label, ticker in RS_BENCHMARKS:
+        if ticker not in prices.columns:
+            continue
+        if len(prices[ticker].dropna()) >= window + 1:
+            return label, ticker
+    return None, None
+
+
 def _compute_rs_score(prices, sector_tickers, benchmark_ticker, window=63):
-    """RS score = basket 63-day return / benchmark 63-day return."""
-    basket_prices = [prices[t].dropna() for t in sector_tickers if t in prices.columns]
-    if not basket_prices:
-        return None
-    min_len = min(len(p) for p in basket_prices)
-    if min_len < window + 1:
+    """RS score = basket `window`-day return / benchmark `window`-day return.
+
+    Constituents that can't cover the window are DROPPED rather than fatal. The
+    check used to run on the basket MINIMUM, so one dead listing nulled the entire
+    sector — FLTR.L stopped printing daily bars after Flutter's move off the LSE,
+    which alone blanked Consumer Discretionary. We still want a real basket behind
+    the number, so bail unless at least half the names (and at least two) survive."""
+    basket_prices = [
+        prices[t].dropna() for t in sector_tickers if t in prices.columns
+    ]
+    basket_prices = [p for p in basket_prices if len(p) >= window + 1]
+    if len(basket_prices) < max(2, len(sector_tickers) // 2):
         return None
     basket_ret = float(
         np.mean([(p.iloc[-1] / p.iloc[-(window + 1)]) - 1 for p in basket_prices])
@@ -703,12 +733,20 @@ def _compute_rs_score(prices, sector_tickers, benchmark_ticker, window=63):
 def _compute_rotation():
     """Compute RS scores + signals for all sectors. Returns list of dicts."""
     prices = _get_prices()
-    bm_ticker = BENCHMARK_TICKERS["All-Share"]
+    # Both legs (now and 10 sessions back) must use the SAME benchmark, so pick it
+    # against the longer of the two windows rather than per call.
+    bm_label, bm_ticker = _rs_benchmark(prices, window=73)
     results = []
     for sector, tickers in SECTOR_TICKERS.items():
-        rs_now = _compute_rs_score(prices, tickers, bm_ticker, window=63)
-        rs_prior = _compute_rs_score(
-            prices, tickers, bm_ticker, window=73
+        rs_now = (
+            _compute_rs_score(prices, tickers, bm_ticker, window=63)
+            if bm_ticker
+            else None
+        )
+        rs_prior = (
+            _compute_rs_score(prices, tickers, bm_ticker, window=73)
+            if bm_ticker
+            else None
         )  # 10 days ago
         if rs_now is None or rs_prior is None:
             trend = "unknown"
@@ -745,6 +783,9 @@ def _compute_rotation():
                 "breadth": breadth,
                 "signal": signal,
                 "pct_change": _basket_pct_change(prices, tickers),
+                # Which index the RS ratio is measured against — the frontend labels
+                # the tab with it, since the fallback isn't always the All-Share.
+                "benchmark": bm_label,
             }
         )
 

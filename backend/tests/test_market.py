@@ -122,6 +122,46 @@ def test_rotation_signals_are_valid_values(client):
         assert s["trend"] in ("rising", "falling", "unknown")
 
 
+def test_rotation_falls_back_when_all_share_history_is_a_stub(client):
+    """Yahoo keeps quoting ^FTAS live while serving a single daily bar. That used to
+    null every sector's RS (and blank the whole tab), so the RS calc must fall back
+    to the next benchmark in the chain and say which one it used."""
+    import market
+    from market import ALL_PROXY_TICKERS, BENCHMARK_TICKERS
+
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    ftas = BENCHMARK_TICKERS["All-Share"]
+    fake[ftas] = np.nan
+    fake.loc[fake.index[-1], ftas] = 5842.0  # one lonely bar, as Yahoo serves it
+
+    market._cache.clear()
+    with _patch_prices(fake):
+        r = client.get("/api/market/rotation")
+    market._cache.clear()
+    data = r.json()
+    assert all(s["rs_score"] is not None for s in data), "RS blanked by the ^FTAS stub"
+    assert {s["benchmark"] for s in data} == {"FTSE 350"}
+
+
+def test_rotation_survives_a_dead_constituent(client):
+    """One delisted name in a basket (FLTR.L stopped printing bars mid-2026) must not
+    take its whole sector's RS down with it — short constituents are dropped."""
+    import market
+    from market import ALL_PROXY_TICKERS, SECTOR_TICKERS
+
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    dead = SECTOR_TICKERS["Consumer Discretionary"][0]
+    fake[dead] = np.nan
+    fake.iloc[:11, fake.columns.get_loc(dead)] = 100.0  # only stale early bars
+
+    market._cache.clear()
+    with _patch_prices(fake):
+        r = client.get("/api/market/rotation")
+    market._cache.clear()
+    cd = next(s for s in r.json() if s["sector"] == "Consumer Discretionary")
+    assert cd["rs_score"] is not None
+
+
 # ── breadth tests ─────────────────────────────────────────────────────────────
 def test_breadth_returns_expected_keys(client):
     from market import ALL_PROXY_TICKERS

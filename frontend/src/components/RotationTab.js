@@ -168,6 +168,11 @@ export default function RotationTab({ refreshKey }) {
     return () => { cancelled = true; };
   }, [refreshKey]);
 
+  // The RS yardstick the backend actually used. It normally reads FTSE All-Share,
+  // but falls back to the FTSE 350 when Yahoo's All-Share history is unusable, and
+  // the tooltips have to name whichever one the numbers were measured against.
+  const benchmark = rotation.find(r => r.benchmark)?.benchmark || 'FTSE All-Share';
+
   const card = { background:'#111', border:'1px solid #1e1e1e', borderRadius:3, padding:16 };
   const title = { color:'#9aa7b5', fontSize:9, textTransform:'uppercase', letterSpacing:'1.5px', marginBottom:12 };
 
@@ -183,7 +188,7 @@ export default function RotationTab({ refreshKey }) {
         <div style={card}>
           <div style={{ ...title, display:'flex', alignItems:'center', gap:6 }}>
             Sector Heatmap — RS Rank
-            <InfoDot text="Sectors ranked by relative strength (RS) — each basket's 3-month return versus the FTSE All-Share, ordered strongest first. Greener tiles outperform the market (RS above 1); redder tiles lag it. ↑/↓ marks whether RS is rising or falling." />
+            <InfoDot text={`Sectors ranked by relative strength (RS) — each basket's 3-month return versus the ${benchmark}, ordered strongest first. Greener tiles outperform the market (RS above 1); redder tiles lag it. ↑/↓ marks whether RS is rising or falling.`} />
           </div>
           <SectorHeatmap sectors={rotation} isMobile={isMobile} />
         </div>
@@ -207,7 +212,7 @@ export default function RotationTab({ refreshKey }) {
             <span style={{ color:'#64748b' }}>{showTable ? '▾' : '▸'}</span>
             RS Ranking Table
           </span>
-          <InfoDot text={"RS Score — the sector basket's return over the past 3 months (63 trading days) relative to the All-Share; above 1 means it outperformed.\nTrend — whether RS is rising or falling versus 10 trading days ago.\nBreadth — % of the sector's basket trading above its 50-day MA (curated baskets, not the full FTSE 100).\nSignal — BUY (RS >1.05 & rising), AVOID (RS <0.95 & falling), or NEUTRAL."} />
+          <InfoDot text={`RS Score — the sector basket's return over the past 3 months (63 trading days) relative to the ${benchmark}; above 1 means it outperformed.\nTrend — whether RS is rising or falling versus 10 trading days ago.\nBreadth — % of the sector's basket trading above its 50-day MA (curated baskets, not the full FTSE 100).\nSignal — BUY (RS >1.05 & rising), AVOID (RS <0.95 & falling), or NEUTRAL.`} />
         </div>
         {showTable && (
           <div style={{ overflowX:'auto' }}>
