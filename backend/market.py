@@ -683,9 +683,53 @@ def _quote_pct_change(ticker):
     return None
 
 
+def _fetch_quote_pct_changes():
+    """Quote-metadata day change for every sidebar proxy ticker, in one threaded
+    batch. Returns {ticker: pct} (None if nothing came back, so a total Yahoo
+    failure doesn't get cached over a good map)."""
+    out = {}
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {executor.submit(_quote_pct_change, t): t for t in SIDEBAR_LIVE_TICKERS}
+        for future in as_completed(futures):
+            pct = future.result()
+            if pct is not None:
+                out[futures[future]] = pct
+    return out or None
+
+
+def _quote_pct_changes():
+    """Cached day-change map used as the fallback when daily bars are unusable.
+
+    Deliberately NEVER blocks the request: a cold cache serves an empty map (the
+    caller then renders the same blank it renders today) and fetches behind it, so
+    a sidebar request never waits on ~85 quote round-trips.
+
+    Refreshed on the live TTL but never faster than every 5 minutes: this is a
+    degraded path that only runs while a feed is broken, and at the open-market TTL
+    of 2 min it would put ~2,500 extra quote calls an hour on Yahoo on top of the
+    history fetch behind the price frame. Sector percentages moving on a 5-minute
+    cadence during an outage is the right trade."""
+    ttl = max(_live_ttl(), 300)
+    entry = _cache.get("quote_changes")
+    if entry is not None and time.time() - entry[1] < ttl:
+        return entry[0]
+    _maybe_refresh_async("quote_changes", _fetch_quote_pct_changes)
+    return entry[0] if entry is not None else {}
+
+
 def _basket_pct_change(prices, tickers):
-    """Average % change across a basket of tickers (ignores missing)."""
+    """Average % change across a basket of tickers (ignores missing).
+
+    Constituents whose daily bars can't be trusted fall back to the live quote —
+    the same escape hatch the 3 benchmarks have had since the July ^FTAS outage.
+    Without it one lagging feed blanks the whole sector, and on 2026-08-30 EVERY
+    `.L` bar trailed the index bars by a session, so all 11 sectors read blank."""
     changes = [_pct_change_today(prices, t) for t in tickers]
+    if any(c is None for c in changes):
+        quotes = _quote_pct_changes()
+        changes = [
+            c if c is not None else quotes.get(t) for t, c in zip(tickers, changes)
+        ]
     valid = [c for c in changes if c is not None]
     return float(np.mean(valid)) if valid else None
 

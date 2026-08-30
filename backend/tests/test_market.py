@@ -1,3 +1,4 @@
+import time
 import pytest
 import pandas as pd
 import numpy as np
@@ -14,6 +15,25 @@ def _fake_prices(tickers, rows=280):
         prices = 100 * np.cumprod(1 + np.random.normal(0.0002, 0.01, rows))
         data[t] = prices
     return pd.DataFrame(data, index=dates)
+
+def _reset_market_cache():
+    """Clear the market caches, then re-prime the quote-fallback map as EMPTY-but-fresh.
+
+    `_basket_pct_change` reaches for `_quote_pct_changes()` the moment a constituent's
+    bars look stale, and a cold entry there spawns a background thread that really
+    fetches ~85 tickers from Yahoo. Priming keeps the suite hermetic; a test that
+    wants the fallback to return something overwrites this map itself."""
+    import market
+    market._cache.clear()
+    market._cache["quote_changes"] = ({}, time.time())
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_quote_fallback():
+    """Every test starts with the quote map primed — see _reset_market_cache()."""
+    _reset_market_cache()
+    yield
+
 
 def _patch_prices(fake_df):
     """Context manager: patch the price feeds — the shared 1-year _get_prices, the
@@ -85,10 +105,10 @@ def test_sidebar_benchmarks_use_live_current_bar(client):
     # A clean +2% on the live current-day bar.
     fake.loc[last_date, ftse] = float(fake[ftse].iloc[-2]) * 1.02
 
-    market._cache.clear()
+    _reset_market_cache()
     with _patch_prices(fake):
         r = client.get("/api/market/sidebar")
-    market._cache.clear()
+    _reset_market_cache()
     bm = {b["name"]: b["pct_change"] for b in r.json()["benchmarks"]}
     assert bm["FTSE 100"] == pytest.approx(0.02, abs=1e-9)
 
@@ -134,10 +154,10 @@ def test_rotation_falls_back_when_all_share_history_is_a_stub(client):
     fake[ftas] = np.nan
     fake.loc[fake.index[-1], ftas] = 5842.0  # one lonely bar, as Yahoo serves it
 
-    market._cache.clear()
+    _reset_market_cache()
     with _patch_prices(fake):
         r = client.get("/api/market/rotation")
-    market._cache.clear()
+    _reset_market_cache()
     data = r.json()
     assert all(s["rs_score"] is not None for s in data), "RS blanked by the ^FTAS stub"
     assert {s["benchmark"] for s in data} == {"FTSE 350"}
@@ -154,12 +174,53 @@ def test_rotation_survives_a_dead_constituent(client):
     fake[dead] = np.nan
     fake.iloc[:11, fake.columns.get_loc(dead)] = 100.0  # only stale early bars
 
-    market._cache.clear()
+    _reset_market_cache()
     with _patch_prices(fake):
         r = client.get("/api/market/rotation")
-    market._cache.clear()
+    _reset_market_cache()
     cd = next(s for s in r.json() if s["sector"] == "Consumer Discretionary")
     assert cd["rs_score"] is not None
+
+
+def test_sector_pct_change_falls_back_to_quotes_when_bars_lag(client):
+    """When a sector's daily bars trail the index bars by a session (every .L name
+    did on 2026-08-30), the bar-pair guard rightly refuses them — but the basket
+    must then read the live quote instead of rendering blank."""
+    import market
+    from market import ALL_PROXY_TICKERS, SECTOR_TICKERS
+
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    energy = SECTOR_TICKERS["Energy"]
+    # Blank the final session for the sector names only — the index tickers keep it,
+    # so the frame's last session is one the basket can't match.
+    fake.loc[fake.index[-1], energy] = np.nan
+
+    _reset_market_cache()
+    # Overwrite the primed (empty) map: the real one is fetched off the request path,
+    # so a cold cache deliberately returns {} rather than blocking.
+    market._cache["quote_changes"] = ({t: 0.01 for t in energy}, time.time())
+    with _patch_prices(fake):
+        r = client.get("/api/market/sidebar")
+    _reset_market_cache()
+    sectors = {s["name"]: s["pct_change"] for s in r.json()["sectors"]}
+    assert sectors["Energy"] == pytest.approx(0.01)
+
+
+def test_basket_pct_change_skips_quotes_when_bars_are_fresh(client):
+    """The quote fallback is ~85 network round-trips, so it must stay off the happy
+    path entirely — fresh bars should never reach for it."""
+    import market
+    from market import ALL_PROXY_TICKERS
+
+    fake = _fake_prices(ALL_PROXY_TICKERS)
+    _reset_market_cache()
+    with _patch_prices(fake), patch.object(
+        market, "_quote_pct_changes", side_effect=AssertionError("quotes fetched")
+    ):
+        r = client.get("/api/market/sidebar")
+    _reset_market_cache()
+    assert r.status_code == 200
+    assert all(s["pct_change"] is not None for s in r.json()["sectors"])
 
 
 # ── breadth tests ─────────────────────────────────────────────────────────────
