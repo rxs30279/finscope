@@ -1971,14 +1971,66 @@ _MC_CACHE_TTL = 900  # 15 minutes
 _MC_FAIL_CACHE: dict[str, float] = {}  # symbol -> timestamp
 _MC_FAIL_TTL = 30 * 86400  # 30 days
 
+# Wall-clock ceiling for one batch. yfinance's `.info` takes no timeout, so
+# without this the only limit is the kernel's TCP retransmit budget
+# (tcp_retries2=15 ≈ 15m24s) — which is exactly what stalled the 2026-09-01
+# digest for 16 minutes: the hang happens under the send's advisory lock and
+# before its first log line, so it presents as total silence, not an error.
+# 20s matches the timeout the rest of the backend uses for third-party HTTP.
+_MC_BATCH_TIMEOUT_S = float(os.environ.get("RNS_MC_BATCH_TIMEOUT_S", "20"))
+
+
+def _is_missing_ticker(exc: BaseException) -> bool:
+    """Did Yahoo say "no such ticker", or did it just refuse to answer?
+
+    Only the first deserves _MC_FAIL_CACHE's 30-day TTL. Getting this wrong in
+    the permissive direction is expensive and silent: a transient
+    YFRateLimitError would blacklist a real company, its RNS rows would fall
+    below _MIN_MARKET_CAP for having no cap, and it would vanish from the
+    digest for a month with nothing logged.
+
+    An invalid ticker surfaces as a 404 — verified against prod, where
+    ZZQQXX.L raises curl_cffi.requests.exceptions.HTTPError. The status lives
+    in a different place per client, so the probes are ordered most- to
+    least-specific.
+
+    `.code` MUST be probed last. curl_cffi inherits it from CurlError, where it
+    is the *curl* error code and reads 0 on an HTTP error — checking it first
+    silently shadows the real `.response.status_code` and classifies every 404
+    as transient. Hence the `>= 100` guard: 0 is not an HTTP status.
+    """
+    try:
+        from yfinance.exceptions import YFRateLimitError, YFTickerMissingError
+        if isinstance(exc, YFRateLimitError):
+            return False          # explicitly transient — the case that bit us
+        if isinstance(exc, YFTickerMissingError):
+            return True
+    except ImportError:
+        pass
+
+    for code in (getattr(getattr(exc, "response", None), "status_code", None),
+                 getattr(exc, "status_code", None),
+                 getattr(exc, "code", None)):
+        if isinstance(code, int) and code >= 100:
+            return code == 404
+
+    return "404" in str(exc)
+
 
 def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
     """Fetch market caps from Yahoo Finance for a batch of symbols.
 
     Uses ThreadPoolExecutor for concurrency. Returns {symbol: market_cap}.
+
+    Best-effort and time-boxed: the batch gives up after _MC_BATCH_TIMEOUT_S
+    and returns whatever resolved, so a symbol may be absent from the result
+    simply because Yahoo was slow. Callers already treat a missing key as
+    "no market cap" — for the digest that means the row is dropped from that
+    send, which is the deliberate trade against hanging the whole email.
     """
     import yfinance as yf
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import (ThreadPoolExecutor, as_completed,
+                                    TimeoutError as _FuturesTimeout)
 
     now = time.time()
     result: dict[str, float] = {}
@@ -1996,24 +2048,59 @@ def _fetch_market_caps_batch(symbols: list[str]) -> dict[str, float]:
     if not uncached:
         return result
 
-    def _fetch_one(sym: str) -> tuple[str, float | None]:
+    def _fetch_one(sym: str) -> tuple[str, float | None, bool]:
+        """-> (symbol, market_cap, permanent).
+
+        `permanent` says whether a miss is worth the 30-day negative cache.
+        Yahoo answering "no such ticker" is permanent; Yahoo refusing to answer
+        (rate limit, network, 5xx) is not, and must not evict a real company
+        from the digest for a month.
+        """
         try:
             ticker = yf.Ticker(sym)
             info = ticker.info if ticker else {}
             mc = info.get("marketCap") if info else None
-            return sym, mc
-        except Exception:
-            return sym, None
+            # Answered, but carries no cap (ETCs, bonds, some CDIs) — a real
+            # and stable "no", so it earns the long TTL.
+            return sym, mc, True
+        except Exception as e:
+            return sym, None, _is_missing_ticker(e)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    # Deliberately NOT a `with` block: ThreadPoolExecutor.__exit__ calls
+    # shutdown(wait=True), which re-joins every worker and would give back the
+    # unbounded hang this timeout exists to prevent. Stragglers are abandoned
+    # instead — they hold a socket until the kernel drops it, but they can no
+    # longer block the caller, and they touch neither `result` nor the caches
+    # (only this loop writes those), so abandoning them is race-free.
+    executor = ThreadPoolExecutor(max_workers=8)
+    try:
         futures = {executor.submit(_fetch_one, sym): sym for sym in uncached}
-        for future in as_completed(futures):
-            sym, mc = future.result()
-            if mc is not None:
-                result[sym] = mc
-                _MC_CACHE[sym] = (mc, now)
-            else:
-                _MC_FAIL_CACHE[sym] = now
+        transient = 0
+        try:
+            for future in as_completed(futures, timeout=_MC_BATCH_TIMEOUT_S):
+                sym, mc, permanent = future.result()
+                if mc is not None:
+                    result[sym] = mc
+                    _MC_CACHE[sym] = (mc, now)
+                elif permanent:
+                    _MC_FAIL_CACHE[sym] = now
+                else:
+                    # Left uncached on purpose, so the next call retries it.
+                    transient += 1
+            if transient:
+                print(f"[rns] market-cap: {transient}/{len(uncached)} symbols failed "
+                      f"transiently (not negative-cached, will retry)")
+        except _FuturesTimeout:
+            # Timed-out symbols are pointedly NOT written to _MC_FAIL_CACHE: a
+            # transient network stall must not blacklist a real company for 30
+            # days. They stay uncached and are retried on the next call.
+            done = {futures[f] for f in futures if f.done()}
+            print(f"[rns] market-cap batch timed out after {_MC_BATCH_TIMEOUT_S:.0f}s — "
+                  f"{len(done)}/{len(uncached)} symbols resolved, abandoning the rest")
+    finally:
+        # cancel_futures drops the not-yet-started ones; wait=False means the
+        # in-flight ones are left to die on their own time.
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return result
 
